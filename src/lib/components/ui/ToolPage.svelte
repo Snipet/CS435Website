@@ -105,6 +105,11 @@
 		padding: 0;
 		list-style: none;
 	}
+	/* A citation longer than the line shrinks (its text ends in an ellipsis). */
+	.cites li {
+		min-width: 0;
+		max-width: 100%;
+	}
 	.actions {
 		display: flex;
 		flex-wrap: wrap;
