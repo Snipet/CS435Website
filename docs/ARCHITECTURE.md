@@ -677,8 +677,8 @@ startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
 `Button`, `IconButton`, `Toggle`, `SegmentedControl`, `Tabs`, `Panel`,
 `Callout`, `Badge`, `Kbd`, `Select`, `NumberField`, `TextField`,
 `CodeEditor` (monospace textarea with line numbers and diagnostic markers),
-`RegexField` (single-line RE input with ε/ɸ/Σ/|/*/+ palette and inline
-diagnostics), `StepControls` + `Stepper` class (`stepper.svelte.ts`),
+`RegexField` (single-line RE input with ε/ɸ/Σ/|/*/+ palette, inline
+diagnostics, and an optional `highlight` range), `StepControls` + `Stepper` class (`stepper.svelte.ts`),
 `PresetMenu` (grouped presets with citations), `CitationTag`, `CharStream`
 (input characters with visible whitespace and highlight ranges), `StringSetView`,
 `TokenPairs` (token output in either lecture format), `CopyLinkButton`,
