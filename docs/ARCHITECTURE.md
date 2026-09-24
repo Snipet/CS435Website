@@ -618,6 +618,14 @@ and `flushHash()` (called by Copy link) makes `location.href` carry the current
 state. One `syncToHash` per page. Link to a tool with `toolHref(slug)` from
 `$lib/site`.
 
+### 5.1a Cross-tool links
+
+`$lib/tools/links.ts` lists the state each tool accepts in its URL hash
+(`LinkStates`). Build a link with `toolLink('thompson', { re, defs })`; it
+returns `null` when the target tool is not registered, so hide the link in that
+case (prerendering fails on links to pages that do not exist). A tool's own
+saved state must accept its `LinkStates` shape (extra fields are allowed).
+
 ### 5.2 Graph components (`$lib/components/graph/`)
 
 - `AutomatonView.svelte` — SVG renderer following §3.5. Props: `automaton`,

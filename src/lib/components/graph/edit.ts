@@ -12,19 +12,11 @@ import type {
 	StateId,
 	Transition
 } from '$lib/theory/automata/types';
+import { letterName } from '$lib/theory/automata/core';
 import { edgeKey } from './layout';
 import type { ParsedLabel } from './label-text';
 
-/** A, B, …, Z, AA, AB, … */
-export function letterName(i: number): string {
-	let n = i;
-	let s = '';
-	do {
-		s = String.fromCharCode(65 + (n % 26)) + s;
-		n = Math.floor(n / 26) - 1;
-	} while (n >= 0);
-	return s;
-}
+export { letterName } from '$lib/theory/automata/core';
 
 /** First letter name not used by any state. */
 export function nextStateName(a: Automaton): string {
