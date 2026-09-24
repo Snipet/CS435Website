@@ -3,14 +3,13 @@
 	import favicon from '$lib/assets/favicon.svg';
 	import SiteHeader from '$lib/components/layout/SiteHeader.svelte';
 	import SiteFooter from '$lib/components/layout/SiteFooter.svelte';
-	import { site } from '$lib/site';
 
+	// Each page sets its own <title> and description.
 	let { children } = $props();
 </script>
 
 <svelte:head>
 	<link rel="icon" href={favicon} />
-	<meta name="description" content={site.description} />
 </svelte:head>
 
 <a class="skip" href="#main">Skip to content</a>

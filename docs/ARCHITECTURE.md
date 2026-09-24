@@ -45,7 +45,8 @@ src/
       types.ts                ToolMeta
       registry.ts             glob-imports catalog/*.ts
       catalog/<slug>.ts       one file per tool: `export const tool: ToolMeta`
-    url-state.ts              share-link state in the URL hash
+    url-state.ts              share-link state in the URL hash (re-exports url-state.svelte.ts,
+                              which holds the code because syncToHash uses runes)
   routes/
     +page.svelte              home: tools grouped by compiler stage
     notation/+page.svelte     notation reference
@@ -179,6 +180,9 @@ Presets cite the deck and slide with `formatCitation({ deck: '06', slide: 8 })`
 - Scanning: maximal munch (longest prefix, length ≥ 1), ties to the earliest
   rule. The optional Error rule matches exactly one character and is listed
   last. Skipped rules (e.g. Whitespace) are matched and then dropped.
+  Lexical Analysis II, slide 7 scans `"f+3  +g"` (two spaces) but lists
+  `(Whitespace, " ")`; presets and examples use the slide's input and the
+  maximal-munch lexeme `"  "`.
 - flex: longest match, ties to the earliest rule, unmatched characters are
   ECHOed.
 
@@ -600,7 +604,19 @@ function driveScanner(
 
 Every tool page renders inside `ToolPage` (`$lib/components/ui/ToolPage.svelte`)
 with its `ToolMeta`, and keeps its user-editable state in the URL hash through
-`$lib/url-state.ts` so the "Copy link" button reproduces the exact view.
+`$lib/url-state.ts` so the "Copy link" button reproduces the exact view:
+
+```ts
+let state = $state({ regex: '(1 | 0)*1', input: '' }); // JSON-serializable
+syncToHash(() => state, { onLoad: (v) => Object.assign(state, v), validate });
+```
+
+The hash is read on mount and on `hashchange`, and written (debounced, hash
+only) when the state changes; an untouched page keeps a clean URL. When an
+in-page anchor (e.g. the skip link) replaces the hash, the state is put back,
+and `flushHash()` (called by Copy link) makes `location.href` carry the current
+state. One `syncToHash` per page. Link to a tool with `toolHref(slug)` from
+`$lib/site`.
 
 ### 5.2 Graph components (`$lib/components/graph/`)
 
