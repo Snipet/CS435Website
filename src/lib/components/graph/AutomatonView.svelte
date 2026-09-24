@@ -76,6 +76,12 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		 * so a stepper can swap machines without losing the user's zoom.
 		 */
 		viewKey?: unknown;
+		/**
+		 * An area (user units) that "fit" always includes, e.g. the finished
+		 * machine's bounds while a construction is drawn one step at a time, so the
+		 * drawing keeps its scale and place as states are added.
+		 */
+		extent?: Box;
 	}
 
 	let {
@@ -92,7 +98,8 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		height = 320,
 		ariaLabel,
 		startLabel,
-		viewKey
+		viewKey,
+		extent
 	}: Props = $props();
 
 	const PAD = 18;
@@ -122,7 +129,9 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 
 	const layout = $derived(layoutAutomaton(current, { positions: pinned, names, startLabel }));
 	const shapes = $derived(groups && groups.length > 0 ? groupShapes(layout, groups) : []);
-	const content = $derived(unionBox([layout.bounds, ...shapes.map((s) => s.bounds)]));
+	const content = $derived(
+		unionBox([layout.bounds, ...shapes.map((s) => s.bounds), ...(extent ? [extent] : [])])
+	);
 
 	// ------------------------------------------------------------------
 	// Camera
@@ -1013,7 +1022,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 			{#if shapes.length > 0}
 				<g class="groups" aria-hidden="true">
 					{#each shapes as g (g.id)}
-						<g class="group t{g.tone} {g.kind}">
+						<g class="group t{g.tone} {g.kind}" class:faint={g.faint}>
 							<path d={g.d} />
 							{#if g.label}
 								<text
@@ -1353,6 +1362,15 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 	}
 	.group.halo path {
 		fill: color-mix(in srgb, var(--g) 16%, transparent);
+	}
+	.group.faint path {
+		fill: color-mix(in srgb, var(--g) 3%, transparent);
+		stroke: color-mix(in srgb, var(--g) 30%, transparent);
+		stroke-dasharray: 4 3;
+	}
+	.group.faint .group-label {
+		font-weight: 500;
+		fill: color-mix(in srgb, var(--g) 45%, var(--text-3));
 	}
 	.group-label {
 		font-family: var(--font-mono);
