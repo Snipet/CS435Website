@@ -299,6 +299,7 @@ function parseAutomatonText(text: string): {
 };
 function formatAutomatonText(a): string;
 // Text format:  "start: A" / "accept: B C" / "A 0,1 B" / "A ε B" / "A 'x' B" / "A [a-z] B"; "#" comments.
+// Also "A -0,1-> B", "states: A B C" (fixes id order), "alphabet: 0,1", and "double-quoted" state names.
 
 // thompson.ts
 interface ThompsonFragment {
@@ -328,6 +329,8 @@ interface ThompsonResult {
 }
 function thompson(r: Regex, opts?: { alphabet?: CharSet }): ThompsonResult;
 // Golden: (1 | 0)*1 → A–J with exactly the slide's 11 edges; states are named by layout.
+// State ids follow the names (A = 0); transition ids follow creation order. States created
+// through step i: thompsonStatesThrough(result, i).
 
 // closure.ts
 interface ClosureEvent {
@@ -377,15 +380,22 @@ function subsetConstruction(
 // minimize.ts
 interface MinimizeRound {
 	blocks: StateId[][];
-	splits: { block: StateId[]; parts: StateId[][]; symbol: CharSet; witness: string }[];
+	splits: {
+		block: StateId[];
+		parts: StateId[][];
+		symbol: CharSet;
+		witness: string /* separates parts[0] and parts[1] */;
+		witnesses: { part: number; symbol: CharSet; witness: string }[] /* parts[0] vs each part */;
+	}[];
 }
 interface MinimizeResult {
 	dfa: Automaton;
 	rounds: MinimizeRound[];
 	blockOf: Map<StateId, number>;
-	input: Automaton /* total, trimmed machine that was partitioned */;
+	input: Automaton /* total, trimmed machine that was partitioned; ids above refer to it */;
 	trap: StateId | null;
 	removed: StateId[];
+	map: Map<StateId, StateId> /* original id → input id */;
 }
 function minimize(dfa, opts?: { splitByToken?: boolean }): MinimizeResult;
 function distinguish(
@@ -484,7 +494,11 @@ interface ScanResult {
 	stuck: number | null;
 }
 function scan(rules: TokenRule[], input: string, opts?: { errorRule?: boolean }): ScanResult;
-function scannerNfa(rules: TokenRule[]): { nfa: Automaton; starts: StateId[] };
+function scannerNfa(rules: TokenRule[]): {
+	nfa: Automaton;
+	starts: StateId[];
+	positions: Positions /* rules' Thompson layouts stacked */;
+};
 function scannerDfa(rules: TokenRule[], opts?: { minimal?: boolean }): Automaton; // accept tags carry the token
 interface DriverStep {
 	pos: number;
