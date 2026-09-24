@@ -606,15 +606,47 @@ with its `ToolMeta`, and keeps its user-editable state in the URL hash through
 
 - `AutomatonView.svelte` — SVG renderer following §3.5. Props: `automaton`,
   `positions?` (pinned; otherwise automatic left-to-right layout),
-  `highlight?: { active?, taken?, dim?, dimTransitions?, tone? }`,
-  `groups?: { id, label, states, tone? }[]` (fragment outlines, partition
-  blocks), `names?: NamedSet[]` for labels, `editable?`, `selected?` (bindable),
-  callbacks `onchange`, `onstateclick`, `ontransitionclick`, plus `height`,
-  `ariaLabel`. Supports pan/zoom and "fit".
-- `TransitionTable.svelte` — table per §3.7 with row/cell highlight and click
-  callbacks.
-- `layout.ts` — pure layout (`layoutAutomaton`) returning node positions and
-  edge geometry; unit-tested.
+  `highlight?: { active?, taken?, dim?, dimTransitions?, tone? }` (`taken` and
+  `dimTransitions` hold transition ids; `tone` maps a state to `'accept'`,
+  `'reject'` or `'info'`), `groups?: { id, label?, states, tone? }[]`
+  (fragment outlines, partition blocks; `tone` is a palette index 0–5),
+  `names?: NamedSet[]` for labels, `editable?`, `selected?` (bindable:
+  `{ kind: 'state', id } | { kind: 'edge', key } | null`), callbacks
+  `onchange(automaton, positions)`, `onstateclick(id)`,
+  `ontransitionclick(transitionIds, edgeKey)`, plus `height` (px or `'auto'`),
+  `ariaLabel`, `startLabel` (text on the start arrow, e.g. `start`) and
+  `viewKey?`. Supports pan/zoom (arrow keys pan from the drawing or the zoom
+  buttons) and "fit"; `fit()` is also a component export (`bind:this`).
+  Passing a machine the view did not just report through `onchange` (compared
+  by object, then by `layoutKey`) refits the view, clears the selection and
+  drops a drag or label edit in progress; an echo of its own edit, with or
+  without the positions, keeps the view. With `viewKey` set, only a change of
+  `viewKey` refits (a stepper passes a constant key to keep the user's zoom).
+  Types are in `graph/types.ts`.
+- `TransitionTable.svelte` — table per §3.7: `automaton`, `classes?` (used as
+  given), `names?`, `highlight?: { state?, cell?: { state, column } }` (the ε
+  column comes last), `onCellClick?(state, column, symbols)` (`symbols` is null
+  for ε), `compact?`, `caption?` (visually hidden). Default columns come from
+  `tableColumns` in `table.ts`: classes of Σ and every label, one per symbol
+  when there are at most 16 symbols, and a class only reached through
+  `display` labels headed by that text (`other`) and listed last.
+- `layout.ts` — pure layout (`layoutAutomaton(a, { positions?, names?,
+startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
+  `edgeKey`, the start arrow, and bounds; unit-tested. The start state ranks
+  first even when other states have no way in, and the start arrow comes in
+  from the left or the first side clear of states, edges and labels. Results
+  are cached by `layoutKey(a, opts)` (structure only) and shared, so treat
+  them as read-only; rebuilding the same machine as a new object is cheap.
+  Machines up to 10 states try several dagre alignments; larger ones take
+  one pass. To keep states in place while a construction grows (and to skip
+  dagre while stepping), lay out the final machine once and pass its node
+  centers as `positions`.
+- `label-text.ts` — `parseLabelText` / `labelText`: the editable text form of a
+  transition label (`0,1`, `a-z`, `ε`, `' '`, `[^\n]`, named sets). A spaced
+  range (`a - z`) is an error; symbols spelled like a name are quoted.
+- `edit.ts` — immutable editing operations used by the editor (add or remove
+  states with renumbering, set edge labels, …). New symbols on an edge never
+  merge into a transition with a `display` override.
 
 ### 5.3 UI kit (`$lib/components/ui/`)
 
