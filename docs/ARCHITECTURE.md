@@ -96,6 +96,8 @@ hand-roll quoting.
   is a range. `[a-z]`-style classes are also accepted.
 - Regular definitions: one per line, `name = RE`. Lines starting with `//` are
   comments. Definitions may appear in any order; cycles are errors.
+- Extensions so every AST prints and reads back: `A^{n,m}` / `A^{n,}` (bounded
+  repetition), `\u{H…}` escapes, `A^*` / `A^+` as spellings of `A*` / `A+`.
 
 ### 3.3 Flex dialect (Scanning with Flex)
 
@@ -104,7 +106,9 @@ Full flex pattern syntax: `x`, `\.`, `"string"`, `.` (any char but `\n`), `^`,
 `r1r2`, `r1|r2`, `(r)`, `r1/r2` (trailing context), `{NAME}`. Definitions are
 `NAME pattern` lines in the definitions section. The slide prints trailing
 context as `r1 \ r2`; the site uses real flex syntax `r1/r2` and the notation
-page notes the difference.
+page notes the difference. As in flex, `^` / `$` anywhere but the very start /
+end are ordinary characters, and `""` is ε. `\u{H…}` is accepted as an escape
+(flex itself has none) so every code point can be printed.
 
 ### 3.4 Automata formalism
 
@@ -211,7 +215,12 @@ type ParseResult =
 	{ ok: true; regex: Regex; diagnostics: Diagnostic[] } | { ok: false; diagnostics: Diagnostic[] };
 function parseRegex(
 	text: string,
-	opts?: { defs?: ReadonlyMap<string, Regex>; source?: string | null }
+	// invalid: names of definitions that failed; a use is an error, not symbols
+	opts?: {
+		defs?: ReadonlyMap<string, Regex>;
+		source?: string | null;
+		invalid?: ReadonlySet<string>;
+	}
 ): ParseResult;
 interface DefinitionEntry {
 	name: string;
@@ -240,17 +249,25 @@ type FlexParseResult =
 	| { ok: false; diagnostics: Diagnostic[] };
 function parseFlexPattern(
 	text: string,
-	opts?: { defs?: ReadonlyMap<string, Regex> }
+	opts?: { defs?: ReadonlyMap<string, Regex>; invalid?: ReadonlySet<string> }
 ): FlexParseResult;
+// Spans are relative to each `text`, or absolute when textStart/nameStart are given.
 function parseFlexDefinitions(
-	lines: { name: string; text: string; line: number }[]
+	lines: { name: string; text: string; line: number; textStart?: number; nameStart?: number }[]
 ): DefinitionsResult;
+const FLEX_DOT: CharSet; // `.` = every character except \n
 
 // print.ts
 function printRegex(
 	r: Regex,
-	opts?: { dialect?: 'lecture' | 'flex'; expandRefs?: boolean; parens?: 'minimal' | 'full' }
+	opts?: {
+		dialect?: 'lecture' | 'flex';
+		expandRefs?: boolean;
+		parens?: 'minimal' | 'full';
+		symbols?: 'quoted' | 'bare'; // lecture: 0 instead of '0'
+	}
 ): string;
+function printFlexPattern(p: FlexPattern, opts?): string; // ^, regex, /trailing, $
 
 // analyze.ts
 function nullable(r: Regex): boolean;
@@ -260,6 +277,8 @@ function resolveAny(r: Regex, alphabet: CharSet): Regex;
 function refsIn(r: Regex): string[];
 function walk(r: Regex, visit: (node: Regex, path: number[], depth: number) => void): void;
 function nodeAtPath(r: Regex, path: number[]): Regex | undefined;
+function expandRefs(r: Regex): Regex;
+function regexEquals(a: Regex, b: Regex): boolean; // structure only (no spans/text)
 ```
 
 ### 4.3 Automata (`theory/automata/`)
