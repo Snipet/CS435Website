@@ -4,23 +4,33 @@ Transition table (docs/ARCHITECTURE.md §3.7): rows are states, columns are
 symbol classes in ascending order (plus ε when the machine has ε-moves), cells
 are next states. DFA cells show a state name; NFA cells show sets such as
 {A, B}. The start row is marked →, accepting rows ◎, trap rows are muted.
+
+Default columns cover the declared alphabet and every label, one column per
+symbol when there are at most 16 of them (as on the slides). A class reached
+only through labels shown as `other` (a display override) is headed `other`
+and comes last.
 -->
 <script lang="ts">
-	import { partitionCharSets, type CharSet } from '$lib/theory/charset';
-	import { formatLabel, type NamedSet } from '$lib/theory/chars';
+	import type { CharSet } from '$lib/theory/charset';
+	import type { NamedSet } from '$lib/theory/chars';
 	import type { Automaton, State, StateId } from '$lib/theory/automata/types';
+	import { tableColumns } from './table';
 
 	interface Props {
 		automaton: Automaton;
-		/** Column classes; default: the partition of all transition labels. */
+		/**
+		 * Column classes, used as given. Default: classes of Σ and all labels
+		 * (see above).
+		 */
 		classes?: readonly CharSet[];
 		names?: readonly NamedSet[];
 		/**
-		 * Row and/or cell to emphasize. Columns count the classes from 0; the ε
-		 * column, when shown, is `classes.length`.
+		 * Row and/or cell to emphasize. Columns count from 0 as shown; the ε
+		 * column, when shown, comes last.
 		 */
 		highlight?: { state?: StateId; cell?: { state: StateId; column: number } };
-		onCellClick?: (state: StateId, column: number) => void;
+		/** `symbols` is the column's class, or null for the ε column. */
+		onCellClick?: (state: StateId, column: number, symbols: CharSet | null) => void;
 		compact?: boolean;
 		/** Accessible caption (visually hidden). */
 		caption?: string;
@@ -36,9 +46,7 @@ are next states. DFA cells show a state name; NFA cells show sets such as
 		caption = 'Transition table'
 	}: Props = $props();
 
-	const columns = $derived(
-		classes ?? partitionCharSets(automaton.transitions.flatMap((t) => (t.label ? [t.label] : [])))
-	);
+	const columns = $derived(tableColumns(automaton, { classes, names }));
 	const hasEpsilon = $derived(automaton.transitions.some((t) => t.label === null));
 	const hasTokens = $derived(automaton.states.some((s) => s.accept));
 
@@ -54,7 +62,7 @@ are next states. DFA cells show a state name; NFA cells show sets such as
 				continue;
 			}
 			columns.forEach((c, i) => {
-				if (t.label!.overlaps(c)) row[i].add(t.to);
+				if (t.label!.overlaps(c.set)) row[i].add(t.to);
 			});
 		}
 		return out.map((row) => row.map((s) => [...s].sort((a, b) => a - b)));
@@ -72,8 +80,6 @@ are next states. DFA cells show a state name; NFA cells show sets such as
 		return deterministic ? list[0] : `{${list.join(', ')}}`;
 	}
 
-	const header = (c: CharSet) => formatLabel(c, { names });
-
 	const isCell = (state: StateId, column: number) =>
 		highlight?.cell?.state === state && highlight.cell.column === column;
 </script>
@@ -85,7 +91,7 @@ are next states. DFA cells show a state name; NFA cells show sets such as
 			<tr>
 				<th scope="col" class="corner"><span class="visually-hidden">State</span></th>
 				{#each columns as c, i (i)}
-					<th scope="col">{header(c)}</th>
+					<th scope="col">{c.header}</th>
 				{/each}
 				{#if hasEpsilon}
 					<th scope="col" class="eps">ε</th>
@@ -130,10 +136,10 @@ are next states. DFA cells show a state name; NFA cells show sets such as
 							{#if onCellClick}
 								<button
 									type="button"
-									onclick={() => onCellClick(s.id, col)}
-									aria-label="{nameOf(s)} on {col === columns.length
-										? 'ε'
-										: header(columns[col])}: {ids.length === 0 ? 'none' : text}">{text}</button
+									onclick={() => onCellClick(s.id, col, columns[col]?.set ?? null)}
+									aria-label="{nameOf(s)} on {columns[col]?.header ?? 'ε'}: {ids.length === 0
+										? 'none'
+										: text}">{text}</button
 								>
 							{:else}
 								{text}

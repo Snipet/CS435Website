@@ -6,6 +6,7 @@ import {
 	edgeLabel,
 	labelBox,
 	layoutAutomaton,
+	layoutKey,
 	mergeTransitions,
 	nodeAt,
 	stateShape,
@@ -250,6 +251,113 @@ describe('layoutAutomaton', () => {
 		const ca = edge(l, 2, 0);
 		expect(maxY(ca.points)).toBeGreaterThan(maxY(ba.points) + 5);
 		expect(minY(ca.points)).toBeGreaterThan(-1);
+	});
+
+	it('keeps the start state in the first column when other states have no way in', () => {
+		const a: Automaton = {
+			states: ['S', 'P', 'Q', 'R', 'X'].map((name, id) => ({ id, name, accepting: false })),
+			transitions: [
+				{ id: 0, from: 0, to: 4, label: CharSet.of('a') },
+				{ id: 1, from: 1, to: 2, label: CharSet.of('a') },
+				{ id: 2, from: 2, to: 3, label: CharSet.of('a') },
+				{ id: 3, from: 3, to: 4, label: CharSet.of('a') },
+				// An unreachable cycle, too.
+				{ id: 4, from: 2, to: 1, label: CharSet.of('b') }
+			],
+			start: 0
+		};
+		for (const m of [a, { ...a, start: 2 }, { ...a, start: 4 }]) {
+			const l = layoutAutomaton(m);
+			const s = l.nodes.get(m.start)!;
+			for (const n of l.nodes.values()) if (n.id !== m.start) expect(n.x).toBeGreaterThan(s.x + 1);
+			expect(numbersIn(l.edges).every(Number.isFinite)).toBe(true);
+		}
+		// A start that names no state draws no start arrow and adds nothing.
+		const lost = layoutAutomaton({ ...a, start: 9 });
+		expect(lost.start).toBeNull();
+		expect(lost.nodes.size).toBe(5);
+	});
+
+	it('brings the start arrow in from a clear side in pinned layouts', () => {
+		const a: Automaton = {
+			states: [
+				{ id: 0, name: 'A', accepting: false },
+				{ id: 1, name: 'B', accepting: false }
+			],
+			transitions: [{ id: 0, from: 0, to: 1, label: CharSet.of('a') }],
+			start: 1
+		};
+		const l = layoutAutomaton(a, {
+			positions: new Map([
+				[0, { x: 0, y: 0 }],
+				[1, { x: 70, y: 0 }]
+			]),
+			startLabel: 'start'
+		});
+		const s = l.start!;
+		const A = l.nodes.get(0)!;
+		// The tail is outside A, and the arrow keeps clear of A → B.
+		expect(Math.hypot(s.tail.x - A.x, s.tail.y - A.y)).toBeGreaterThan(A.outerRx + 4);
+		for (let k = 0; k <= 10; k++) {
+			const p = {
+				x: s.tail.x + ((s.arrowTip.x - s.tail.x) * k) / 10,
+				y: s.tail.y + ((s.arrowTip.y - s.tail.y) * k) / 10
+			};
+			for (const q of edge(l, 0, 1).points)
+				expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(3);
+		}
+		const lb = s.label!;
+		expect(inside(l, lb.x, lb.y)).toBe(true);
+
+		// Thompson with B as the start: the arrow does not run along A → B.
+		const tb = layoutAutomaton({ ...thompsonNfa, start: 1 }, { positions: thompsonPositions });
+		expect(Math.abs(tb.start!.tail.y - tb.nodes.get(1)!.y)).toBeGreaterThan(10);
+		// Left stays the default when it is clear.
+		const t = layoutAutomaton(thompsonNfa, { positions: thompsonPositions });
+		expect(t.start!.arrowAngle).toBe(0);
+		expect(t.start!.tail.y).toBe(0);
+	});
+
+	it('returns the cached layout for a machine that draws the same', () => {
+		const copy: Automaton = {
+			...dfaEndsIn00,
+			states: dfaEndsIn00.states.map((s) => ({ ...s })),
+			transitions: dfaEndsIn00.transitions.map((t) => ({ ...t }))
+		};
+		expect(layoutAutomaton(copy)).toBe(layoutAutomaton(dfaEndsIn00));
+		expect(layoutKey(copy)).toBe(layoutKey(dfaEndsIn00));
+		const accepting = { ...copy, states: copy.states.map((s) => ({ ...s, accepting: true })) };
+		expect(layoutKey(accepting)).not.toBe(layoutKey(dfaEndsIn00));
+		expect(layoutKey(dfaEndsIn00, { startLabel: 'start' })).not.toBe(layoutKey(dfaEndsIn00));
+		const row = fixtures[6][2]!;
+		expect(layoutKey(dfaEndsIn00, { positions: row })).not.toBe(layoutKey(dfaEndsIn00));
+		const moved = new Map(row);
+		moved.set(1, { x: 111, y: 0 });
+		expect(layoutKey(dfaEndsIn00, { positions: moved })).not.toBe(
+			layoutKey(dfaEndsIn00, { positions: row })
+		);
+	});
+
+	it('lays out larger machines', () => {
+		const n = 40;
+		const big: Automaton = {
+			states: Array.from({ length: n }, (_, id) => ({
+				id,
+				name: `q${id}`,
+				accepting: id % 7 === 3
+			})),
+			transitions: Array.from({ length: n }, (_, i) => [
+				{ id: 2 * i, from: i, to: (i + 1) % n, label: CharSet.of('a') },
+				{ id: 2 * i + 1, from: i, to: (7 * i + 3) % n, label: CharSet.of('b') }
+			]).flat(),
+			start: 0
+		};
+		const l = layoutAutomaton(big, { startLabel: 'start' });
+		expect(l.nodes.size).toBe(n);
+		expect(numbersIn({ ...l, nodes: [...l.nodes.values()] }).every(Number.isFinite)).toBe(true);
+		for (const e of l.edges) for (const p of e.points) expect(inside(l, p.x, p.y)).toBe(true);
+		const s = l.nodes.get(0)!;
+		for (const m of l.nodes.values()) if (m.id !== 0) expect(m.x).toBeGreaterThan(s.x);
 	});
 
 	it('handles empty machines and missing positions', () => {

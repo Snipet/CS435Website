@@ -105,8 +105,11 @@ export function removeEdge(a: Automaton, key: string): Automaton {
 /**
  * Sets the label of the edge from → to. `replace` names the edge being edited
  * (its ε-ness); its transitions are replaced by one transition for the symbols
- * and/or one ε-move. Symbols merge into an existing symbol edge between the same
- * states. An empty label removes the edited edge.
+ * and/or one ε-move. Otherwise new symbols join an existing symbol edge between
+ * the same states: symbols it already covers are skipped, and the rest merge
+ * into a plain transition, never into one with a display override such as
+ * `other` (they get a transition of their own, drawn `x,other`). An edit that
+ * adds nothing returns the input unchanged.
  */
 export function setEdgeLabel(
 	a: Automaton,
@@ -126,20 +129,28 @@ export function setEdgeLabel(
 		}
 		out.push(t);
 	}
+	let changed = out.length !== a.transitions.length;
 	const insert = (t: Transition) => {
+		changed = true;
 		if (slot >= 0) out.splice(slot++, 0, t);
 		else out.push(t);
 	};
+	const between = (t: Transition) => t.from === from && t.to === to;
 	if (!label.symbols.isEmpty) {
-		const i = out.findIndex((t) => t.from === from && t.to === to && t.label !== null);
-		if (i >= 0) {
-			const t = out[i];
-			out[i] = { id: t.id, from, to, label: t.label!.union(label.symbols) };
-		} else insert({ id: -1, from, to, label: label.symbols });
+		let covered = CharSet.EMPTY;
+		for (const t of out) if (between(t) && t.label) covered = covered.union(t.label);
+		const extra = label.symbols.subtract(covered);
+		if (!extra.isEmpty) {
+			const i = out.findIndex((t) => between(t) && t.label !== null && !t.display);
+			if (i >= 0) {
+				out[i] = { ...out[i], label: out[i].label!.union(extra) };
+				changed = true;
+			} else insert({ id: -1, from, to, label: extra });
+		}
 	}
-	if (label.epsilon && !out.some((t) => t.from === from && t.to === to && t.label === null))
+	if (label.epsilon && !out.some((t) => between(t) && t.label === null))
 		insert({ id: -1, from, to, label: null });
-	return { ...a, transitions: renumber(out) };
+	return changed ? { ...a, transitions: renumber(out) } : a;
 }
 
 /** Positions carried through a state renumbering. */

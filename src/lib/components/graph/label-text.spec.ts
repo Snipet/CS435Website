@@ -56,6 +56,23 @@ describe('parseLabelText', () => {
 		);
 	});
 
+	it('rejects a range typed with spaces, and reads the dash as a symbol otherwise', () => {
+		const spaced = parseLabelText('0, a - z');
+		expect(spaced.ok).toBe(false);
+		if (!spaced.ok) {
+			expect(spaced.diagnostic.span).toEqual({ start: 3, end: 8, source: null });
+			expect(spaced.diagnostic.message).toContain('a-z');
+		}
+		expect(parseLabelText('a – z').ok).toBe(false);
+		expect(sym('a, -, z').equals(CharSet.of('a-z'))).toBe(true);
+		expect(sym("a '-' z").equals(CharSet.of('a-z'))).toBe(true);
+		expect(sym('a -, z').equals(CharSet.of('a-z'))).toBe(true);
+		// Only between two single symbols.
+		const digit = { name: 'digit', set: CharSet.range('0', '9') };
+		expect(parse('digit - x', [digit]).symbols.has('-')).toBe(true);
+		expect(parse('ε - x').epsilon).toBe(true);
+	});
+
 	it('reports problems with a span', () => {
 		const word = parseLabelText('0, other');
 		expect(word.ok).toBe(false);
@@ -95,6 +112,26 @@ describe('labelText', () => {
 				expect(back.symbols.equals(s), `${text} → ${back.symbols}`).toBe(true);
 			}
 		}
+	});
+
+	it('quotes symbols spelled like a name, so they read back as symbols', () => {
+		const names = [
+			{ name: 'e', set: CharSet.of('xyz') },
+			{ name: 'L', set: CharSet.range('a', 'z') },
+			{ name: 'a-c', set: CharSet.of('q') }
+		];
+		for (const s of [
+			CharSet.of('e'),
+			CharSet.of('LM'),
+			CharSet.of('eL'),
+			CharSet.range('a', 'c'),
+			CharSet.range('K', 'M')
+		]) {
+			const text = labelText(s, { names });
+			expect(parse(text, names).symbols.equals(s), `${text}`).toBe(true);
+		}
+		expect(labelText(CharSet.of('e'), { names })).toBe("'e'");
+		expect(labelText(CharSet.of('xyz'), { names })).toBe('e');
 	});
 
 	it('reads like an edge label', () => {

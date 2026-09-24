@@ -7,7 +7,7 @@
  *   - ε (also ϵ, \e, eps, epsilon) for an ε-move;
  *   - one symbol: a bare character, a quoted one ('x', "x", ‘x’), an escape
  *     (\t \n \r \v \f \0 \s \\ \' \" \, \xHH \u{H…}), or ␣ for a space;
- *   - a range of symbols: a-z or a–z;
+ *   - a range of symbols: a-z or a–z, without spaces (`a - z` is an error);
  *   - a class: [abc], [a-z0-9], [^\n];
  *   - the name of a named set, when names are given.
  */
@@ -169,12 +169,50 @@ function splitItems(s: string): { start: number; end: number }[] {
 	return items;
 }
 
+const isDash = (item: string) => item === '-' || item === '–';
+
+/**
+ * Rejects `a - z`: a lone dash between two single symbols, separated by spaces
+ * only, is most likely a range typed with spaces rather than three symbols.
+ */
+function checkSpacedRange(
+	text: string,
+	items: readonly { start: number; end: number }[],
+	opts: LabelTextOptions
+): void {
+	const single = ({ start, end }: { start: number; end: number }) => {
+		const item = text.slice(start, end);
+		if (EPSILON_WORDS.has(item) || opts.names?.some((n) => n.name === item)) return false;
+		try {
+			return readSymbol(text, start)[1] === end;
+		} catch {
+			return false;
+		}
+	};
+	const spaced = (from: number, to: number) => !text.slice(from, to).includes(',');
+	for (let i = 1; i + 1 < items.length; i++) {
+		const [l, m, r] = [items[i - 1], items[i], items[i + 1]];
+		const dash = text.slice(m.start, m.end);
+		if (!isDash(dash) || !spaced(l.end, m.start) || !spaced(m.end, r.start)) continue;
+		if (!single(l) || !single(r)) continue;
+		const lo = text.slice(l.start, l.end);
+		const hi = text.slice(r.start, r.end);
+		throw new LabelError(
+			`Ranges have no spaces: ${lo}${dash}${hi}. For the symbol ${dash}, write ${lo}, ${dash}, ${hi} or '${dash}'.`,
+			l.start,
+			r.end
+		);
+	}
+}
+
 /** Parses label text. Empty text parses to no symbols and no ε. */
 export function parseLabelText(text: string, opts: LabelTextOptions = {}): LabelParseResult {
 	let symbols = CharSet.EMPTY;
 	let epsilon = false;
 	try {
-		for (const { start, end } of splitItems(text)) {
+		const items = splitItems(text);
+		checkSpacedRange(text, items, opts);
+		for (const { start, end } of items) {
 			const item = text.slice(start, end);
 			const named = opts.names?.find((n) => n.name === item);
 			if (named) {
@@ -235,13 +273,13 @@ const QUOTED = new Set([',', '"', '‘', '’', '[', ']', '-', '–', '␣', 'ε
 /** Characters escaped inside a [class]. */
 const CLASS_ESCAPED = new Set([']', '[', '\\', '^', '-', '–', "'", '"', '‘', '’']);
 
-/** One symbol as editable text. */
-function symbolText(cp: number): string {
+/** One symbol as editable text; `reserved` holds words that would read as something else. */
+function symbolText(cp: number, reserved: ReadonlySet<string>): string {
 	if (NAMED_TEXT[cp] !== undefined) return NAMED_TEXT[cp];
 	if (invisible(cp)) return hex(cp);
 	const ch = String.fromCodePoint(cp);
 	if (ch === "'" || ch === '\\') return `'\\${ch}'`;
-	if (QUOTED.has(ch) || /\s/u.test(ch)) return `'${ch}'`;
+	if (QUOTED.has(ch) || /\s/u.test(ch) || reserved.has(ch)) return `'${ch}'`;
 	return ch;
 }
 
@@ -271,13 +309,15 @@ export function labelText(label: CharSet | null, opts: LabelTextOptions = {}): s
 			.join('');
 		return `[^${body}]`;
 	}
+	// Names and ε words are read before symbols, so a symbol spelled like one is quoted.
+	const reserved = new Set([...EPSILON_WORDS, ...(opts.names ?? []).map((n) => n.name)]);
+	const sym = (cp: number) => symbolText(cp, reserved);
 	return label.ranges
-		.map(([lo, hi]) =>
-			lo === hi
-				? symbolText(lo)
-				: hi === lo + 1
-					? `${symbolText(lo)},${symbolText(hi)}`
-					: `${symbolText(lo)}-${symbolText(hi)}`
-		)
+		.map(([lo, hi]) => {
+			if (lo === hi) return sym(lo);
+			if (hi === lo + 1) return `${sym(lo)},${sym(hi)}`;
+			const range = `${sym(lo)}-${sym(hi)}`;
+			return reserved.has(range) ? `'${String.fromCodePoint(lo)}'-${sym(hi)}` : range;
+		})
 		.join(',');
 }

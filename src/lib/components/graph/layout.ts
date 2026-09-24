@@ -22,9 +22,9 @@ import {
 	boxExtent,
 	boxHitsEllipse,
 	boxesOverlap,
-	polylineHitsBox,
 	dist,
 	dot,
+	ellipseBoundary,
 	ellipseExtent,
 	ellipseLevel,
 	enterParam,
@@ -33,11 +33,15 @@ import {
 	lineCubic,
 	pathAt,
 	pathToD,
+	polylineHitsBox,
 	polylineLength,
 	samplePath,
+	segmentHitsBox,
+	segmentsNear,
 	sub,
 	subPath,
 	unit,
+	SegmentGrid,
 	type Box,
 	type Cubic,
 	type CurvePath,
@@ -133,8 +137,8 @@ export interface StartArrow {
 }
 
 export interface AutomatonLayout {
-	nodes: Map<StateId, NodeGeometry>;
-	edges: EdgeGeometry[];
+	nodes: ReadonlyMap<StateId, NodeGeometry>;
+	edges: readonly EdgeGeometry[];
 	start: StartArrow | null;
 	bounds: Box;
 	/** True when node positions came from `opts.positions`. */
@@ -313,6 +317,60 @@ interface AutoResult {
 
 type Align = 'UL' | 'UR' | 'DL' | 'DR' | undefined;
 
+/**
+ * Machines up to this size try every Brandes–Köpf alignment and keep the
+ * straightest. Each try is a full dagre run, so larger machines take dagre's
+ * balanced default only.
+ */
+const ALIGN_SEARCH_STATES = 10;
+const ALIGN_SEARCH_EDGES = 20;
+
+// Not integer-like, so dagre keeps the nodes in insertion order (start first).
+const nodeKey = (id: StateId) => `s${id}`;
+
+/**
+ * What keeps the start state in the first rank: every edge into the start is
+ * reversed, and each part of the machine the start cannot reach (following the
+ * edges as dagre sees them) hangs off the start by an invisible edge. The start
+ * is then the only source, every state lies on a path from it, and dagre's DFS
+ * cycle breaking (from the sources) never reverses a tree edge out of it.
+ */
+function rankConstraints(
+	a: Automaton,
+	edges: readonly MergedEdge[]
+): { reversed: Set<string>; anchors: StateId[] } {
+	const reversed = new Set<string>();
+	const succ = new Map<StateId, StateId[]>();
+	for (const e of edges) {
+		const back = e.to === a.start;
+		if (back) reversed.add(e.key);
+		const [v, w] = back ? [e.to, e.from] : [e.from, e.to];
+		const list = succ.get(v);
+		if (list) list.push(w);
+		else succ.set(v, [w]);
+	}
+	if (!a.states[a.start]) return { reversed, anchors: [] };
+	const seen = new Set<StateId>();
+	const visit = (root: StateId) => {
+		const stack = [root];
+		seen.add(root);
+		while (stack.length > 0)
+			for (const w of succ.get(stack.pop()!) ?? [])
+				if (!seen.has(w)) {
+					seen.add(w);
+					stack.push(w);
+				}
+	};
+	visit(a.start);
+	const anchors: StateId[] = [];
+	for (const s of a.states)
+		if (!seen.has(s.id)) {
+			anchors.push(s.id);
+			visit(s.id);
+		}
+	return { reversed, anchors };
+}
+
 function runDagre(
 	a: Automaton,
 	boxes: Map<StateId, NodeBox>,
@@ -330,13 +388,12 @@ function runDagre(
 		align
 	});
 	g.setDefaultEdgeLabel(() => ({}));
-	// Insertion order drives dagre's cycle breaking: start first keeps it leftmost.
 	const order = [a.start, ...a.states.map((s) => s.id).filter((id) => id !== a.start)];
 	for (const id of order) {
 		const n = boxes.get(id);
-		if (n) g.setNode(String(id), { ...reserve(n) });
+		if (n) g.setNode(nodeKey(id), { ...reserve(n) });
 	}
-	const reversed = new Set<string>();
+	const { reversed, anchors } = rankConstraints(a, edges);
 	for (const e of edges) {
 		const size = labelSize(e.label);
 		// Room for the label beside the route, on either side.
@@ -347,17 +404,16 @@ function runDagre(
 			minlen: 1,
 			weight: 1
 		};
-		// Nothing points back into the start state, so it ranks first.
-		if (e.to === a.start) {
-			reversed.add(e.key);
-			g.setEdge(String(e.to), String(e.from), label, e.key);
-		} else g.setEdge(String(e.from), String(e.to), label, e.key);
+		if (reversed.has(e.key)) g.setEdge(nodeKey(e.to), nodeKey(e.from), label, e.key);
+		else g.setEdge(nodeKey(e.from), nodeKey(e.to), label, e.key);
 	}
+	for (const id of anchors)
+		g.setEdge(nodeKey(a.start), nodeKey(id), { minlen: 1, weight: 0 }, `anchor ${id}`);
 	dagre.layout(g);
 
 	const pos = new Map<StateId, Point>();
 	for (const id of order) {
-		const n = g.node(String(id));
+		const n = g.node(nodeKey(id));
 		if (n) pos.set(id, { x: n.x ?? 0, y: n.y ?? 0 });
 	}
 	const via = new Map<string, Point[]>();
@@ -369,10 +425,11 @@ function runDagre(
 		minY = Math.min(minY, p.y);
 	}
 	for (const e of edges) {
-		const v = reversed.has(e.key) ? String(e.to) : String(e.from);
-		const w = reversed.has(e.key) ? String(e.from) : String(e.to);
+		const back = reversed.has(e.key);
+		const v = nodeKey(back ? e.to : e.from);
+		const w = nodeKey(back ? e.from : e.to);
 		const pts = (g.edge(v, w, e.key)?.points ?? []).slice(1, -1).map((p) => ({ x: p.x, y: p.y }));
-		if (reversed.has(e.key)) pts.reverse();
+		if (back) pts.reverse();
 		via.set(e.key, pts);
 		const p = pos.get(e.from)!;
 		const q = pos.get(e.to)!;
@@ -392,8 +449,8 @@ function autoLayout(
 	edges: readonly MergedEdge[]
 ): AutoResult {
 	const nonLoop = edges.filter((e) => e.from !== e.to);
-	// Several alignments of Brandes–Köpf give different straightness; small machines try them all.
-	const aligns: Align[] = a.states.length <= 40 ? [undefined, 'UR', 'UL', 'DR', 'DL'] : [undefined];
+	const search = a.states.length <= ALIGN_SEARCH_STATES && nonLoop.length <= ALIGN_SEARCH_EDGES;
+	const aligns: Align[] = search ? [undefined, 'UR', 'UL', 'DR', 'DL'] : [undefined];
 	let best: (AutoResult & { score: number }) | null = null;
 	for (const align of aligns) {
 		const r = runDagre(a, boxes, nonLoop, align);
@@ -669,8 +726,13 @@ interface Drawn {
 
 function placeLabels(drawn: Drawn[], nodeEllipses: readonly Ellipse[], blocked: Box[]): void {
 	const placed: Box[] = [...blocked];
-	const order = [...drawn].sort((x, y) => polylineLength(x.pts) - polylineLength(y.pts));
-	for (const d of order) {
+	const grid = new SegmentGrid();
+	drawn.forEach((d, i) => grid.add(i, d.pts));
+	const order = [...drawn.keys()].sort(
+		(x, y) => polylineLength(drawn[x].pts) - polylineLength(drawn[y].pts)
+	);
+	for (const index of order) {
+		const d = drawn[index];
 		if (d.label) {
 			placed.push(boxAt(d.label, d.size));
 			continue;
@@ -685,12 +747,16 @@ function placeLabels(drawn: Drawn[], nodeEllipses: readonly Ellipse[], blocked: 
 				const at = { x: point.x + n.x * off, y: point.y + n.y * off };
 				const box = boxAt(at, d.size);
 				let cost = Math.abs(s - 0.5) * 40;
+				// Costs only grow, so a candidate stops as soon as it cannot beat the best.
+				const beaten = () => best !== null && cost >= best.cost - 1e-6;
 				if (d.prefer && dot(n, d.prefer) < 0) cost += 12;
+				if (beaten()) continue;
 				for (const e of nodeEllipses)
 					if (boxHitsEllipse(box, { ...e, rx: e.rx + 2, ry: e.ry + 2 })) cost += 1000;
 				for (const b of placed) if (boxesOverlap(box, b, 1)) cost += 600;
-				for (const o of drawn) if (polylineHitsBox(o.pts, box, 1.5)) cost += o === d ? 300 : 150;
-				if (!best || cost < best.cost - 1e-6) best = { cost, at };
+				if (beaten()) continue;
+				grid.owners(box, 1.5, (o) => (cost += o === index ? 300 : 150));
+				if (!beaten()) best = { cost, at };
 			}
 		}
 		d.label = best!.at;
@@ -709,8 +775,57 @@ const boxAt = (c: Point, size: { width: number; height: number }): Box => ({
 // Main entry
 // ---------------------------------------------------------------------------
 
-/** Lays out an automaton: node geometry, edge curves with labels and arrowheads, and bounds. */
+/**
+ * Everything a layout depends on, as a string: names and decorations of the
+ * states, the start, the transitions (ids, ends, labels), named sets, the start
+ * label, and pinned positions.
+ */
+export function layoutKey(a: Automaton, opts: LayoutOptions = {}): string {
+	const parts: string[] = [`${a.start}`, opts.startLabel ?? ''];
+	for (const s of a.states)
+		parts.push(
+			`${s.name}\u0001${s.accepting ? 1 : 0}${s.trap ? 1 : 0}${s.retract ? 1 : 0}\u0001${s.note ?? ''}`
+		);
+	parts.push('');
+	for (const t of a.transitions)
+		parts.push(`${t.id}:${t.from}>${t.to}:${t.label ? t.label.key() : 'ε'}:${t.display ?? ''}`);
+	parts.push('');
+	for (const n of opts.names ?? []) parts.push(`${n.name}=${n.set.key()}`);
+	if (opts.positions) {
+		parts.push('@');
+		for (const s of a.states) {
+			const p = opts.positions.get(s.id);
+			parts.push(p ? `${p.x},${p.y}` : '-');
+		}
+	}
+	return parts.join('\u0002');
+}
+
+const CACHE_SIZE = 48;
+const cache = new Map<string, AutomatonLayout>();
+
+/**
+ * Lays out an automaton: node geometry, edge curves with labels and arrowheads,
+ * and bounds. Results are cached by `layoutKey` (the last few dozen), so the
+ * same machine rebuilt as a new object costs a string key. Treat results as
+ * read-only; they are shared between callers.
+ */
 export function layoutAutomaton(a: Automaton, opts: LayoutOptions = {}): AutomatonLayout {
+	const key = layoutKey(a, opts);
+	const hit = cache.get(key);
+	if (hit) {
+		// Most recently used last.
+		cache.delete(key);
+		cache.set(key, hit);
+		return hit;
+	}
+	const layout = computeLayout(a, opts);
+	cache.set(key, layout);
+	if (cache.size > CACHE_SIZE) cache.delete(cache.keys().next().value!);
+	return layout;
+}
+
+function computeLayout(a: Automaton, opts: LayoutOptions): AutomatonLayout {
 	const merged = mergeTransitions(a, opts.names);
 	const boxes = nodeBoxes(a, merged);
 	const pinned = opts.positions !== undefined;
@@ -924,24 +1039,21 @@ export function layoutAutomaton(a: Automaton, opts: LayoutOptions = {}): Automat
 			};
 		});
 
-	// 7. Start arrow, in from the left.
+	// 7. Start arrow: in from the left, or from the first clear side.
 	let start: StartArrow | null = null;
 	const sb = boxes.get(a.start);
 	const sp = pos.get(a.start);
 	if (sb && sp) {
-		const text = opts.startLabel;
-		const length = text
-			? Math.max(START_ARROW + 12, textWidth(text, NOTE_FONT_SIZE) + 20)
-			: START_ARROW;
-		const tip = { x: sp.x - sb.orx, y: sp.y };
-		const tail = { x: tip.x - length, y: sp.y };
-		start = {
-			path: pathToD([lineCubic(tail, { x: tip.x - ARROW_LENGTH * 0.72, y: tip.y })]),
-			tail,
-			arrowTip: tip,
-			arrowAngle: 0,
-			label: text ? { text, x: (tail.x + tip.x) / 2 - 2, y: sp.y - 10 } : undefined
-		};
+		const others = [...boxes.values()]
+			.filter((n) => n.id !== a.start)
+			.map((n) => outer(n, pos.get(n.id)!));
+		const blockers: Box[] = [...noteBoxes, ...edges.map(labelBox)];
+		for (const o of loopObstacles)
+			blockers.push({ x: o.c.x - o.hw, y: o.c.y - o.hh, width: 2 * o.hw, height: 2 * o.hh });
+		for (const n of nodes.values())
+			if (n.retract)
+				blockers.push({ x: n.retract.x - 5, y: n.retract.y - 6, width: 10, height: 12 });
+		start = startArrow(outer(sb, sp), opts.startLabel, others, blockers, edges);
 	}
 
 	// 8. Bounds.
@@ -1002,6 +1114,96 @@ function preferredSide(
 	}
 	if (Math.abs(nl.y) < 0.2) return { x: nl.x > 0 ? nl.x : -nl.x, y: nl.x > 0 ? nl.y : -nl.y };
 	return nl.y < 0 ? nl : { x: -nl.x, y: -nl.y };
+}
+
+/** Sides the start arrow may come in from, in order of preference (unit vectors, center → tail). */
+const START_SIDES: readonly Point[] = [
+	{ x: -1, y: 0 },
+	{ x: -Math.SQRT1_2, y: -Math.SQRT1_2 },
+	{ x: -Math.SQRT1_2, y: Math.SQRT1_2 },
+	{ x: 0, y: -1 },
+	{ x: 0, y: 1 },
+	{ x: Math.SQRT1_2, y: -Math.SQRT1_2 },
+	{ x: Math.SQRT1_2, y: Math.SQRT1_2 },
+	{ x: 1, y: 0 }
+];
+
+/**
+ * The start arrow and its optional label, from the first side where neither
+ * touches another state, an edge, a label, a note or a loop. When every side
+ * is crowded, the side with the fewest collisions wins (earlier sides on ties).
+ */
+function startArrow(
+	s: Ellipse,
+	text: string | undefined,
+	others: readonly Ellipse[],
+	blockers: readonly Box[],
+	edges: readonly EdgeGeometry[]
+): StartArrow {
+	const textW = text ? textWidth(text, NOTE_FONT_SIZE) : 0;
+	const textH = 16;
+	let best: { hits: number; arrow: StartArrow } | null = null;
+	for (const d of START_SIDES) {
+		const horizontal = Math.abs(d.x) > 0.9;
+		const length = text && horizontal ? Math.max(START_ARROW + 12, textW + 20) : START_ARROW + 6;
+		const tip = ellipseBoundary(s, { x: s.x + d.x, y: s.y + d.y });
+		const tail = { x: tip.x + d.x * length, y: tip.y + d.y * length };
+		const mid = { x: (tip.x + tail.x) / 2, y: (tip.y + tail.y) / 2 };
+		let label: StartArrow['label'];
+		let labelBoxAt: Box | null = null;
+		if (text) {
+			// Above a horizontal arrow, beside a vertical one, on the upper side of a diagonal.
+			let n = leftNormal(d);
+			if (n.y > 0 || (Math.abs(n.y) < 1e-9 && n.x > 0)) n = { x: -n.x, y: -n.y };
+			const off = horizontal ? 10 : boxExtent(textW, textH, n) + 4;
+			const c = { x: mid.x + n.x * off - (horizontal ? 2 : 0), y: mid.y + n.y * off };
+			label = { text, x: c.x, y: c.y };
+			labelBoxAt = { x: c.x - textW / 2, y: c.y - textH / 2, width: textW, height: textH };
+		}
+		// The last stretch meets the start's own outline, where its edges leave too.
+		const near = { x: tip.x + d.x * 6, y: tip.y + d.y * 6 };
+		let hits = 0;
+		for (const e of others) {
+			const grown = { ...e, rx: e.rx + 6, ry: e.ry + 6 };
+			for (let k = 0; k <= 8; k++) {
+				const t = k / 8;
+				const p = { x: near.x + (tail.x - near.x) * t, y: near.y + (tail.y - near.y) * t };
+				if (ellipseLevel(p, grown) < 1) {
+					hits++;
+					break;
+				}
+			}
+			if (labelBoxAt && boxHitsEllipse(labelBoxAt, e)) hits++;
+		}
+		for (const b of blockers) {
+			if (segmentHitsBox(near, tail, b, 3)) hits++;
+			if (labelBoxAt && boxesOverlap(labelBoxAt, b, 1)) hits++;
+		}
+		for (const e of edges) {
+			const pts = e.points;
+			for (let i = 1; i < pts.length; i++)
+				if (segmentsNear(near, tail, pts[i - 1], pts[i], 5)) {
+					hits++;
+					break;
+				}
+			if (labelBoxAt && polylineHitsBox(pts, labelBoxAt, 1)) hits++;
+		}
+		const arrow: StartArrow = {
+			path: pathToD([
+				lineCubic(tail, {
+					x: tip.x + d.x * ARROW_LENGTH * 0.72,
+					y: tip.y + d.y * ARROW_LENGTH * 0.72
+				})
+			]),
+			tail,
+			arrowTip: tip,
+			arrowAngle: Math.atan2(-d.y, -d.x) || 0,
+			label
+		};
+		if (hits === 0) return arrow;
+		if (!best || hits < best.hits) best = { hits, arrow };
+	}
+	return best!.arrow;
 }
 
 /** The state whose outline (plus `slack`) contains p, preferring the closest center. */

@@ -4,15 +4,20 @@ State diagram of an automaton (docs/ARCHITECTURE.md §3.5, §5.2): automatic
 left-to-right layout or pinned positions, pan and zoom, simulation highlights,
 group outlines, and (with `editable`) a small editor. Edits never mutate the
 props; they are reported through `onchange` as a new automaton plus positions.
+
+Passing a different machine (one this view did not just report through
+`onchange`) refits the view and drops local edits in progress; with `viewKey`
+set, only a change of `viewKey` refits. `fit()` refits on demand.
 -->
 <script lang="ts">
-	import { tick } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import type { Automaton, Point, Positions, State, StateId } from '$lib/theory/automata/types';
 	import type { NamedSet } from '$lib/theory/chars';
 	import { arrowHeadD, ellipseBoundary, pathToD, lineCubic, type Box } from './geometry';
 	import {
 		edgeKey,
 		layoutAutomaton,
+		layoutKey,
 		nodeAt,
 		nodePositions,
 		type EdgeGeometry,
@@ -66,6 +71,11 @@ props; they are reported through `onchange` as a new automaton plus positions.
 		ariaLabel?: string;
 		/** Text above the start arrow, e.g. 'start'. */
 		startLabel?: string;
+		/**
+		 * When set, the view refits only when this value changes (e.g. a preset id),
+		 * so a stepper can swap machines without losing the user's zoom.
+		 */
+		viewKey?: unknown;
 	}
 
 	let {
@@ -81,15 +91,34 @@ props; they are reported through `onchange` as a new automaton plus positions.
 		ontransitionclick,
 		height = 320,
 		ariaLabel,
-		startLabel
+		startLabel,
+		viewKey
 	}: Props = $props();
 
 	const PAD = 18;
 	const ZOOM_STEP = 1.3;
 
+	/** What this view last reported through `onchange`. */
+	let emitted: { automaton: Automaton; key: string; positions: Positions } | null = null;
+	/** Whether a machine is (or draws exactly like) the one this view last reported. */
+	const echoes = (a: Automaton) =>
+		emitted !== null && (a === emitted.automaton || layoutKey(a) === emitted.key);
+
 	// Local copies that follow the props but also take the user's edits at once.
 	let current = $derived(automaton);
-	let pinned = $derived(positions);
+	let seenPositions: { value: Positions | undefined } | null = null;
+	let pinned = $derived.by(() => {
+		const a = automaton;
+		const p = positions;
+		const kept = seenPositions !== null && seenPositions.value === p;
+		seenPositions = { value: p };
+		// Only the machine that follows an edit can echo it.
+		if (emitted && !echoes(a)) emitted = null;
+		// New positions from the parent win. A parent that echoes an edit back
+		// without its positions keeps the ones the edit was made with; any other
+		// machine drops them.
+		return kept && emitted ? emitted.positions : p;
+	});
 
 	const layout = $derived(layoutAutomaton(current, { positions: pinned, names, startLabel }));
 	const shapes = $derived(groups && groups.length > 0 ? groupShapes(layout, groups) : []);
@@ -102,13 +131,13 @@ props; they are reported through `onchange` as a new automaton plus positions.
 	let vpWidth = $state(0);
 	let vpHeight = $state(0);
 	const hasViewport = $derived(vpWidth > 0 && vpHeight > 0);
-	const fit = $derived(
+	const fitted = $derived(
 		fitView(content, PAD, hasViewport ? { width: vpWidth, height: vpHeight } : undefined)
 	);
 	/** User-chosen view; null follows "fit". */
 	let camera = $state<ViewBox | null>(null);
-	const view = $derived(camera && boxesIntersect(camera, content) ? camera : fit);
-	const zoomed = $derived(camera !== null && Math.abs(fit.width / view.width - 1) > 0.02);
+	const view = $derived(camera && boxesIntersect(camera, content) ? camera : fitted);
+	const zoomed = $derived(camera !== null && Math.abs(fitted.width / view.width - 1) > 0.02);
 
 	const sizeStyle = $derived.by(() => {
 		if (height !== 'auto') return `height: ${height}px`;
@@ -133,12 +162,39 @@ props; they are reported through `onchange` as a new automaton plus positions.
 	function zoomAt(factor: number, about?: Point) {
 		const v = view;
 		const c = about ?? { x: v.x + v.width / 2, y: v.y + v.height / 2 };
-		camera = clampZoom(zoomView(v, factor, c), fit);
+		camera = clampZoom(zoomView(v, factor, c), fitted);
 	}
 
-	function fitNow() {
+	/** Shows the whole drawing again (what the "Fit" button does). */
+	export function fit() {
 		camera = null;
 	}
+
+	// A different machine drops anything half-done (a drag, a label being typed)
+	// and, unless viewKey decides, refits with nothing selected. An echo of this
+	// view's own edit keeps everything as it is.
+	let seenView: { automaton: Automaton; viewKey: unknown } | null = null;
+	$effect.pre(() => {
+		const a = automaton;
+		const k = viewKey;
+		untrack(() => {
+			const prev = seenView;
+			seenView = { automaton: a, viewKey: k };
+			if (!prev) return;
+			const foreign = a !== prev.automaton && !echoes(a);
+			const refit = k !== undefined || prev.viewKey !== undefined ? k !== prev.viewKey : foreign;
+			if (foreign) {
+				emitted = null;
+				cancelDrag(false);
+				linkFrom = null;
+				editor = null;
+			}
+			if (refit) {
+				camera = null;
+				if (selected !== null) selected = null;
+			}
+		});
+	});
 
 	// ------------------------------------------------------------------
 	// Highlight state
@@ -249,6 +305,7 @@ props; they are reported through `onchange` as a new automaton plus positions.
 		camera = view;
 		current = next;
 		pinned = pos;
+		emitted = { automaton: next, key: layoutKey(next), positions: pos };
 		onchange?.(next, pos);
 	}
 
@@ -503,7 +560,10 @@ props; they are reported through `onchange` as a new automaton plus positions.
 				grab: Point;
 				start: Point;
 				moved: boolean;
+				/** Every state's position when the drag began. */
 				base: Positions;
+				/** The pinned positions then (undefined for automatic layout), restored on Escape. */
+				before: Positions | undefined;
 		  }
 		| {
 				kind: 'link';
@@ -600,12 +660,27 @@ props; they are reported through `onchange` as a new automaton plus positions.
 		const s = viewScale(v, vp);
 		v = panView(v, (mid.x - pinch.mid.x) / s, (mid.y - pinch.mid.y) / s);
 		v = zoomView(v, dist / pinch.dist, toUser(v, vp, { x: mid.x - r.left, y: mid.y - r.top }));
-		camera = clampZoom(v, fit);
+		camera = clampZoom(v, fitted);
 		pinch = { dist, mid };
 	}
 
 	function finishMove(d: Drag) {
 		if (d.kind === 'move' && d.moved && pinned) emit(current, pinned);
+	}
+
+	/** Abandons a drag (a moved state goes back unless `restore` is false); the pointer no longer counts. */
+	function cancelDrag(restore = true) {
+		const d = drag;
+		if (!d) return;
+		drag = null;
+		if (restore && d.kind === 'move' && d.moved) pinned = d.before;
+		pointers.delete(d.id);
+		pinch = null;
+		try {
+			svgEl?.releasePointerCapture(d.id);
+		} catch {
+			/* capture is best-effort */
+		}
 	}
 
 	function onPointerDown(e: PointerEvent) {
@@ -658,7 +733,8 @@ props; they are reported through `onchange` as a new automaton plus positions.
 				grab: { x: at.x - n.x, y: at.y - n.y },
 				start,
 				moved: false,
-				base: currentPositions()
+				base: currentPositions(),
+				before: pinned
 			};
 			return;
 		}
@@ -750,7 +826,7 @@ props; they are reported through `onchange` as a new automaton plus positions.
 		switch (e.key) {
 			case 'Escape':
 				if (linkFrom !== null) linkFrom = null;
-				else if (drag) drag = null;
+				else if (drag) cancelDrag();
 				else if (selected && editable) selected = null;
 				else return;
 				break;
@@ -768,7 +844,7 @@ props; they are reported through `onchange` as a new automaton plus positions.
 				zoomAt(1 / ZOOM_STEP);
 				break;
 			case '0':
-				fitNow();
+				fit();
 				break;
 			case 'Enter':
 			case ' ':
@@ -789,7 +865,8 @@ props; they are reported through `onchange` as a new automaton plus positions.
 					const p = pos.get(target.id)!;
 					pos.set(target.id, { x: p.x + dx, y: p.y + dy });
 					emit(current, pos);
-				} else if (t === svgEl) {
+				} else if (t instanceof Element && (svgEl?.contains(t) || t.closest('[data-zoombar]'))) {
+					// Pans from anywhere in the drawing or the zoom buttons.
 					const s = viewScale(view, viewport());
 					camera = panView(view, (-dx * 3) / s, (-dy * 3) / s);
 				} else return;
@@ -988,33 +1065,8 @@ props; they are reported through `onchange` as a new automaton plus positions.
 				</g>
 			{/if}
 
-			<g class="labels">
-				{#each layout.edges as e (e.key)}
-					{@const look = edgeLook(e)}
-					<g
-						class="label"
-						class:eps={e.epsilon}
-						class:taken={look.taken}
-						class:dim={look.dim}
-						class:dead={look.dead}
-						class:selected={selectedEdge?.key === e.key}
-						class:interactive={edgeInteractive}
-						data-edge={e.key}
-						data-edge-label=""
-						aria-hidden={edgeInteractive ? undefined : 'true'}
-					>
-						{#if edgeInteractive}
-							<g class="button" role="button" tabindex="0" aria-label={edgeAria(e)}>
-								{@render labelBody(e)}
-							</g>
-						{:else}
-							{@render labelBody(e)}
-						{/if}
-					</g>
-				{/each}
-			</g>
-
-			<g class="nodes">
+			<!-- Each state, then the labels of its outgoing edges: the tab order. -->
+			<g class="items">
 				{#each current.states as s (s.id)}
 					{@const n = layout.nodes.get(s.id)}
 					{#if n}
@@ -1044,6 +1096,29 @@ props; they are reported through `onchange` as a new automaton plus positions.
 							{/if}
 						</g>
 					{/if}
+					{#each layout.edges.filter((e) => e.from === s.id) as e (e.key)}
+						{@const look = edgeLook(e)}
+						<g
+							class="label"
+							class:eps={e.epsilon}
+							class:taken={look.taken}
+							class:dim={look.dim}
+							class:dead={look.dead}
+							class:selected={selectedEdge?.key === e.key}
+							class:interactive={edgeInteractive}
+							data-edge={e.key}
+							data-edge-label=""
+							aria-hidden={edgeInteractive ? undefined : 'true'}
+						>
+							{#if edgeInteractive}
+								<g class="button" role="button" tabindex="0" aria-label={edgeAria(e)}>
+									{@render labelBody(e)}
+								</g>
+							{:else}
+								{@render labelBody(e)}
+							{/if}
+						</g>
+					{/each}
 				{/each}
 			</g>
 
@@ -1070,23 +1145,37 @@ props; they are reported through `onchange` as a new automaton plus positions.
 			{/if}
 		</svg>
 
-		<div class="zoom" class:shown={camera !== null} role="group" aria-label="Zoom">
-			<button type="button" onclick={() => zoomAt(ZOOM_STEP)} aria-label="Zoom in" title="Zoom in">
+		<div
+			class="zoom"
+			class:shown={camera !== null}
+			role="group"
+			aria-label="Zoom; arrow keys pan"
+			data-zoombar=""
+		>
+			<button
+				type="button"
+				onclick={() => zoomAt(ZOOM_STEP)}
+				aria-label="Zoom in"
+				aria-keyshortcuts="+"
+				title="Zoom in (+)"
+			>
 				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9" /></svg>
 			</button>
 			<button
 				type="button"
 				onclick={() => zoomAt(1 / ZOOM_STEP)}
 				aria-label="Zoom out"
-				title="Zoom out"
+				aria-keyshortcuts="-"
+				title="Zoom out (−)"
 			>
 				<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9" /></svg>
 			</button>
 			<button
 				type="button"
-				onclick={fitNow}
+				onclick={() => fit()}
 				aria-label="Fit to view"
-				title="Fit to view"
+				aria-keyshortcuts="0"
+				title="Fit to view (0) · arrow keys pan"
 				class:dim={!zoomed && camera === null}
 			>
 				<svg viewBox="0 0 16 16" aria-hidden="true"
@@ -1140,6 +1229,12 @@ props; they are reported through `onchange` as a new automaton plus positions.
 	</div>
 
 	{#if editable}
+		<!-- Always present, so screen readers announce the change of mode. -->
+		<p class="visually-hidden" role="status">
+			{linkFrom !== null
+				? `Choose the target of a transition from ${nameOf(current.states[linkFrom])}.`
+				: ''}
+		</p>
 		<div class="editbar" role="group" aria-label="Edit">
 			{#if linkFrom !== null}
 				<span class="status"

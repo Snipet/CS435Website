@@ -314,12 +314,124 @@ export function segmentHitsBox(a: Point, b: Point, box: Box, margin = 0): boolea
 	return clip(-dx, a.x - x0) && clip(dx, x1 - a.x) && clip(-dy, a.y - y0) && clip(dy, y1 - a.y);
 }
 
+/** Distance from p to the segment a–b. */
+export function pointSegmentDistance(p: Point, a: Point, b: Point): number {
+	const d = sub(b, a);
+	const l2 = dot(d, d);
+	const t = l2 < 1e-12 ? 0 : Math.min(Math.max(dot(sub(p, a), d) / l2, 0), 1);
+	return dist(p, { x: a.x + d.x * t, y: a.y + d.y * t });
+}
+
+/** Whether segments a–b and c–d cross or come within `margin` of each other. */
+export function segmentsNear(a: Point, b: Point, c: Point, d: Point, margin = 0): boolean {
+	const cross = (o: Point, p: Point, q: Point) =>
+		(p.x - o.x) * (q.y - o.y) - (p.y - o.y) * (q.x - o.x);
+	const d1 = cross(c, d, a);
+	const d2 = cross(c, d, b);
+	const d3 = cross(a, b, c);
+	const d4 = cross(a, b, d);
+	if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
+		return true;
+	return (
+		Math.min(
+			pointSegmentDistance(a, c, d),
+			pointSegmentDistance(b, c, d),
+			pointSegmentDistance(c, a, b),
+			pointSegmentDistance(d, a, b)
+		) < margin
+	);
+}
+
 /** Whether a polyline passes through the box grown by `margin`. */
 export function polylineHitsBox(pts: readonly Point[], box: Box, margin = 0): boolean {
 	if (pts.length === 1) return boxContains(box, pts[0], margin);
 	for (let i = 1; i < pts.length; i++)
 		if (segmentHitsBox(pts[i - 1], pts[i], box, margin)) return true;
 	return false;
+}
+
+/**
+ * Uniform grid over polyline segments, so "which polylines pass through this
+ * box" costs a few cells instead of a scan of every point of every polyline.
+ */
+export class SegmentGrid {
+	private readonly cells = new Map<number, number[]>();
+	/** Segments spanning too many cells to index; checked on every query. */
+	private readonly wide: number[] = [];
+	private readonly a: Point[] = [];
+	private readonly b: Point[] = [];
+	private readonly owner: number[] = [];
+	private maxOwner = 0;
+	private segSeen = new Int32Array(0);
+	private ownerSeen = new Int32Array(0);
+	private stamp = 0;
+
+	constructor(private readonly cell = 48) {}
+
+	private static key(cx: number, cy: number): number {
+		return (cx + 0x8000) * 0x10000 + (cy + 0x8000);
+	}
+
+	private span(lo: number, hi: number): [number, number] {
+		return [Math.floor(lo / this.cell), Math.floor(hi / this.cell)];
+	}
+
+	/** Adds the segments of a polyline (a lone point counts), tagged with an owner id ≥ 0. */
+	add(owner: number, pts: readonly Point[]): void {
+		this.maxOwner = Math.max(this.maxOwner, owner);
+		for (let i = pts.length === 1 ? 0 : 1; i < pts.length; i++) {
+			const a = pts[Math.max(i - 1, 0)];
+			const b = pts[i];
+			const s = this.owner.length;
+			this.a.push(a);
+			this.b.push(b);
+			this.owner.push(owner);
+			const [x0, x1] = this.span(Math.min(a.x, b.x), Math.max(a.x, b.x));
+			const [y0, y1] = this.span(Math.min(a.y, b.y), Math.max(a.y, b.y));
+			if (!((x1 - x0 + 1) * (y1 - y0 + 1) <= 64)) {
+				this.wide.push(s);
+				continue;
+			}
+			for (let cx = x0; cx <= x1; cx++)
+				for (let cy = y0; cy <= y1; cy++) {
+					const k = SegmentGrid.key(cx, cy);
+					const list = this.cells.get(k);
+					if (list) list.push(s);
+					else this.cells.set(k, [s]);
+				}
+		}
+	}
+
+	/** Calls `visit` once for each owner with a segment through the box grown by `margin`. */
+	owners(box: Box, margin: number, visit: (owner: number) => void): void {
+		const n = this.owner.length;
+		if (this.segSeen.length < n) this.segSeen = new Int32Array(n * 2);
+		if (this.ownerSeen.length <= this.maxOwner)
+			this.ownerSeen = new Int32Array(this.maxOwner * 2 + 2);
+		const stamp = ++this.stamp;
+		const test = (s: number) => {
+			if (this.segSeen[s] === stamp) return;
+			this.segSeen[s] = stamp;
+			const o = this.owner[s];
+			if (this.ownerSeen[o] === stamp) return;
+			if (segmentHitsBox(this.a[s], this.b[s], box, margin)) {
+				this.ownerSeen[o] = stamp;
+				visit(o);
+			}
+		};
+		for (const s of this.wide) test(s);
+		const [x0, x1] = this.span(box.x - margin, box.x + box.width + margin);
+		const [y0, y1] = this.span(box.y - margin, box.y + box.height + margin);
+		if (!((x1 - x0 + 1) * (y1 - y0 + 1) <= 4096)) {
+			for (let s = 0; s < n; s++) test(s);
+			return;
+		}
+		for (let cx = x0; cx <= x1; cx++)
+			for (let cy = y0; cy <= y1; cy++) {
+				const list = this.cells.get(SegmentGrid.key(cx, cy));
+				if (list) for (const s of list) test(s);
+			}
+	}
 }
 
 /** Whether an axis-aligned box touches an ellipse (exact, via scaling the ellipse to a circle). */

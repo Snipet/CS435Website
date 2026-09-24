@@ -14,8 +14,8 @@ import {
 	setStart,
 	updateState
 } from './edit';
-import { edgeKey } from './layout';
-import { dfaEndsIn00, mixedNfa } from './fixtures';
+import { edgeKey, edgeLabel } from './layout';
+import { dfaEndsIn00, mixedNfa, relopDfa } from './fixtures';
 
 const labelsOf = (a: Automaton) =>
 	a.transitions.map((t) => `${t.id}:${t.from}>${t.to}:${t.label ? t.label.key() : 'ε'}`);
@@ -131,6 +131,29 @@ describe('edge edits', () => {
 		);
 		expect(edgeTransitions(a, edgeKey(2, 0, true))).toHaveLength(0);
 		expect(edgeTransitions(a, edgeKey(2, 0, false))[0].label!.equals(CharSet.of('z'))).toBe(true);
+	});
+
+	it('keeps display overrides when symbols are added to their edge', () => {
+		// 'x' is already part of 1 → 4 on "other": nothing changes.
+		const x = { symbols: CharSet.of('x'), epsilon: false };
+		expect(setEdgeLabel(relopDfa, 1, 4, x)).toBe(relopDfa);
+		// '=' is not: it gets a transition of its own and the edge reads "=,other".
+		const a = setEdgeLabel(relopDfa, 1, 4, { symbols: CharSet.of('='), epsilon: false });
+		const ts = edgeTransitions(a, edgeKey(1, 4, false));
+		expect(ts.map((t) => t.display)).toEqual(['other', undefined]);
+		expect(ts[0].label!.equals(relopDfa.transitions[5].label!)).toBe(true);
+		expect(ts[1].label!.equals(CharSet.of('='))).toBe(true);
+		expect(edgeLabel(ts)).toBe('=,other');
+		expect(a.transitions.every((t, i) => t.id === i)).toBe(true);
+	});
+
+	it('merges new symbols into the plain transition next to a display override', () => {
+		const once = setEdgeLabel(relopDfa, 1, 4, { symbols: CharSet.of('='), epsilon: false });
+		const twice = setEdgeLabel(once, 1, 4, { symbols: CharSet.of('>'), epsilon: false });
+		const ts = edgeTransitions(twice, edgeKey(1, 4, false));
+		expect(ts).toHaveLength(2);
+		expect(ts[1].label!.equals(CharSet.of('=>'))).toBe(true);
+		expect(ts[0].display).toBe('other');
 	});
 
 	it('ignores edges between missing states', () => {
