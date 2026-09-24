@@ -2,11 +2,15 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import ThemeToggle from './ThemeToggle.svelte';
-	import { navLinks } from '$lib/site';
+	import { navLinks, type NavLink } from '$lib/site';
+	import { toolBySlug } from '$lib/tools/registry';
 
-	function isCurrent(href: string) {
-		const path = page.url.pathname;
-		return href === '/' ? path === '/' : path === href || path.startsWith(href + '/');
+	/** 'page' for the link's own page, 'true' for pages in its section (tools under Tools). */
+	function current(href: NavLink['href']): 'page' | 'true' | undefined {
+		const path = page.url.pathname.replace(/\/+$/, '') || '/';
+		if (path === resolve(href)) return 'page';
+		if (href === '/') return toolBySlug(path.split('/')[1] ?? '') ? 'true' : undefined;
+		return path.startsWith(resolve(href) + '/') ? 'true' : undefined;
 	}
 </script>
 
@@ -25,9 +29,7 @@
 
 		<nav aria-label="Primary">
 			{#each navLinks as link (link.href)}
-				<a href={resolve(link.href)} aria-current={isCurrent(link.href) ? 'page' : undefined}
-					>{link.label}</a
-				>
+				<a href={resolve(link.href)} aria-current={current(link.href)}>{link.label}</a>
 			{/each}
 		</nav>
 
@@ -104,7 +106,7 @@
 		background: var(--surface-2);
 		color: var(--text);
 	}
-	nav a[aria-current='page'] {
+	nav a[aria-current] {
 		color: var(--text);
 		background: var(--surface-2);
 	}

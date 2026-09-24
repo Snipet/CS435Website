@@ -10,7 +10,8 @@ export default defineConfig({
 				runes: ({ filename }) =>
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
-			adapter: adapter()
+			// Cloudflare Pages serves 404.html for unknown paths; it renders src/routes/+error.svelte.
+			adapter: adapter({ fallback: '404.html' })
 		})
 	],
 	test: {
