@@ -1,0 +1,307 @@
+import { describe, expect, it } from 'vitest';
+import { parseDefinitions, parseRegex } from '$lib/theory/regex';
+import {
+	automatonFromText,
+	subsetConstruction,
+	thompson,
+	type Automaton
+} from '$lib/theory/automata';
+import { names } from '$lib/theory/automata/test-helpers';
+import {
+	BLOWUP_MAX_K,
+	MAX_DFA_STATES,
+	MAX_NFA_STATES,
+	blowupNfaText,
+	blowupRows,
+	buildNfa,
+	checkPrediction,
+	construct,
+	countSubsets,
+	dfaHighlight,
+	drawnDfa,
+	nextTarget,
+	nfaHighlight,
+	partialDfa,
+	powerOfTwoText,
+	runSideBySide,
+	sameSet,
+	setText,
+	stepCell,
+	superscript,
+	targetSet,
+	thompsonSize,
+	worklist
+} from './logic';
+
+const src = (re: string, defs = '') => ({ from: 're' as const, re, defs, text: '' });
+const nfaSrc = (text: string) => ({ from: 'nfa' as const, re: '', defs: '', text });
+
+function nfaOf(re: string, defs = ''): Automaton {
+	const b = buildNfa(src(re, defs));
+	if (!b.nfa) throw new Error(b.reDiagnostics.map((d) => d.message).join('; '));
+	return b.nfa;
+}
+
+describe('formatting', () => {
+	const a = nfaOf('(1 | 0)*1');
+
+	it('writes sets with spaces inside the braces', () => {
+		expect(setText(a, [0, 1, 7])).toBe('{ A, B, H }');
+		expect(setText(a, [])).toBe('{ }');
+	});
+
+	it('writes powers of two', () => {
+		expect(superscript(10)).toBe('¹⁰');
+		expect(powerOfTwoText(3)).toBe('8');
+		expect(powerOfTwoText(10)).toBe('1,024');
+		expect(powerOfTwoText(100)).toBe('≈ 1.27 × 10³⁰');
+	});
+
+	it('compares sets', () => {
+		expect(sameSet([1, 2, 3], [3, 1, 2])).toBe(true);
+		expect(sameSet([1, 2], [1, 2, 3])).toBe(false);
+		expect(sameSet([], [])).toBe(true);
+	});
+});
+
+describe('thompsonSize', () => {
+	it('matches the states Thompson builds', () => {
+		const defs = "digit = '0' | '1'\npair = digit digit";
+		const d = parseDefinitions(defs);
+		for (const text of [
+			'(1 | 0)*1',
+			'ε',
+			'ɸ',
+			'a+',
+			'a?',
+			'(a|b)^3',
+			'a^0',
+			"'if'",
+			'Σ*',
+			'pair+ digit?',
+			'a^{2,4}',
+			'a^{2,}',
+			'(0 | 1)* 1 (0|1)^2'
+		]) {
+			const r = parseRegex(text, { defs: d.defs });
+			if (!r.ok) throw new Error(text);
+			expect(thompsonSize(r.regex), text).toBe(thompson(r.regex).nfa.states.length);
+		}
+	});
+
+	it('stops counting past the limit, even with nested definitions', () => {
+		const lines = ['a0 = x'];
+		for (let i = 1; i <= 40; i++) lines.push(`a${i} = a${i - 1} a${i - 1}`);
+		const d = parseDefinitions(lines.join('\n'));
+		const r = parseRegex('a40', { defs: d.defs });
+		if (!r.ok) throw new Error('parse');
+		expect(thompsonSize(r.regex)).toBe(MAX_NFA_STATES + 1);
+	});
+});
+
+describe('buildNfa', () => {
+	it('builds Thompson NFAs with grid positions', () => {
+		const b = buildNfa(src('(1 | 0)*1'));
+		expect(b.nfa?.states).toHaveLength(10);
+		expect(b.positions?.size).toBe(10);
+		expect(b.tooLarge).toBeNull();
+	});
+
+	it('reports regular-expression and definition problems', () => {
+		const bad = buildNfa(src('(1 | 0'));
+		expect(bad.nfa).toBeNull();
+		expect(bad.reDiagnostics.some((d) => d.severity === 'error')).toBe(true);
+		const defs = buildNfa(src('d d', 'd = 0 |'));
+		expect(defs.defsDiagnostics.some((d) => d.severity === 'error')).toBe(true);
+		const ok = buildNfa(src('d d', 'd = 0 | 1'));
+		expect(ok.nfa?.states).toHaveLength(12);
+	});
+
+	it('refuses NFAs over the size limit', () => {
+		const big = buildNfa(src('(a|b)^100'));
+		expect(big.nfa).toBeNull();
+		expect(big.tooLarge).toBeGreaterThan(MAX_NFA_STATES);
+	});
+
+	it('reads the text format without positions', () => {
+		const b = buildNfa(nfaSrc('start: A\naccept: B\nA 1 A\nA 1 B\n'));
+		expect(b.nfa?.states).toHaveLength(2);
+		expect(b.positions).toBeNull();
+		const bad = buildNfa(nfaSrc('A 1'));
+		expect(bad.nfa).toBeNull();
+		expect(bad.textDiagnostics.length).toBeGreaterThan(0);
+	});
+});
+
+describe('countSubsets and construct', () => {
+	it('counts the states subsetConstruction makes', () => {
+		for (const re of ['(1 | 0)*1', '(a|b)*abb', 'a | b*', '(0 | 1)* 1 (0|1)^3']) {
+			const nfa = nfaOf(re);
+			expect(countSubsets(nfa), re).toBe(subsetConstruction(nfa).dfa.states.length);
+			expect(countSubsets(nfa, { includeEmpty: true }), re).toBe(
+				subsetConstruction(nfa, { includeEmpty: true }).dfa.states.length
+			);
+		}
+	});
+
+	it('gives up past the limit', () => {
+		const nfa = nfaOf('(0 | 1)* 1 (0|1)^3');
+		expect(countSubsets(nfa, { limit: 17 })).toBe(17);
+		expect(countSubsets(nfa, { limit: 16 })).toBeNull();
+		const huge = automatonFromText(blowupNfaText(9));
+		expect(construct(huge, { naming: 'discovery', includeEmpty: false })).toEqual({
+			result: null,
+			tooLarge: true
+		});
+		expect(MAX_DFA_STATES).toBeLessThan(2 ** 10);
+	});
+});
+
+describe('worklist', () => {
+	const nfa = nfaOf('(1 | 0)*1');
+	const result = subsetConstruction(nfa);
+	const rows = worklist(result);
+
+	it('has one row per DFA state, in worklist order, with the step that created it', () => {
+		expect(rows.map((r) => result.dfa.states[r.state].name)).toEqual([
+			'ABCDHI',
+			'FGABCDHI',
+			'EJGABCDHI'
+		]);
+		expect(rows.map((r) => r.created)).toEqual([0, 3, 6]);
+	});
+
+	it('fills move → ε-closure → target per symbol', () => {
+		const [on0, on1] = rows[0].cells;
+		expect(names(nfa, on0.move!.targets)).toEqual(['F']);
+		expect(names(nfa, on0.closure!.order).join('')).toBe('FGABCDHI');
+		expect(on0.target).toEqual({ step: 3, to: 1, isNew: true });
+		expect(names(nfa, on1.move!.targets)).toEqual(['E', 'J']);
+		expect(on1.target).toMatchObject({ to: 2, isNew: true });
+		expect(rows[2].cells[1].target).toMatchObject({ to: 2, isNew: false });
+	});
+
+	it('locates steps in the table', () => {
+		expect(stepCell(result, result.steps[0])).toBeNull();
+		expect(stepCell(result, result.steps[4])).toEqual({ from: 0, column: 1 });
+		expect(stepCell(result, result.steps.at(-1)!)).toBeNull();
+	});
+
+	it('draws the ∅ state as a trap state', () => {
+		const a = automatonFromText('alphabet: 0,1\nstart: A\naccept: B\nA 1 A\nA 1 B\n');
+		const shown = subsetConstruction(a, { includeEmpty: true });
+		const drawn = drawnDfa(shown);
+		expect(drawn.states.filter((s) => s.trap).map((s) => s.name)).toEqual(['∅']);
+		expect(shown.dfa.states.some((s) => s.trap)).toBe(false);
+		const hidden = subsetConstruction(a);
+		expect(drawnDfa(hidden)).toBe(hidden.dfa);
+	});
+
+	it('lists the ∅ target when it is shown, and nothing when hidden', () => {
+		const a = automatonFromText('alphabet: 0,1\nstart: A\naccept: B\nA 1 A\nA 1 B\n');
+		const hidden = worklist(subsetConstruction(a));
+		expect(hidden[0].cells[0].target).toMatchObject({ to: null, isNew: false });
+		const shown = subsetConstruction(a, { includeEmpty: true });
+		expect(worklist(shown)[0].cells[0].target).toMatchObject({ to: shown.empty, isNew: true });
+	});
+});
+
+describe('highlights', () => {
+	const nfa = nfaOf('(1 | 0)*1');
+	const result = subsetConstruction(nfa);
+
+	it('start: the ε-closure of A and the ε-edges it followed', () => {
+		const h = nfaHighlight(result, 0);
+		expect(names(nfa, h.active).join('')).toBe('ABCDHI');
+		expect(h.taken.every((t) => nfa.transitions[t].label === null)).toBe(true);
+		expect(h.taken).toHaveLength(5);
+	});
+
+	it('move: the set being processed, then the targets', () => {
+		const h = nfaHighlight(result, 1);
+		expect(names(nfa, h.active)).toEqual(['F']);
+		expect(names(nfa, h.info).join('')).toBe('ABCDHI');
+		expect(h.taken).toEqual([result.steps[1].kind === 'move' ? result.steps[1].via[0] : -1]);
+	});
+
+	it('closure and target: the closure, with the move and ε-edges', () => {
+		for (const i of [2, 3]) {
+			const h = nfaHighlight(result, i);
+			expect(names(nfa, h.active).join('')).toBe('FGABCDHI');
+			expect(h.taken.length).toBeGreaterThan(1);
+		}
+		expect(nfaHighlight(result, result.steps.length - 1).active).toEqual([]);
+	});
+
+	it('DFA: the state being processed, then the target and its edge', () => {
+		expect(dfaHighlight(result, 0).active).toEqual([0]);
+		expect(dfaHighlight(result, 1).info).toEqual([0]);
+		expect(dfaHighlight(result, 3)).toEqual({ active: [1], taken: [0], info: [0] });
+	});
+
+	it('the DFA grows with the steps', () => {
+		expect(partialDfa(result.dfa, result.steps[0]).states).toHaveLength(1);
+		expect(partialDfa(result.dfa, result.steps[3]).transitions).toHaveLength(1);
+		expect(partialDfa(result.dfa, result.steps.at(-1)).states).toHaveLength(3);
+	});
+});
+
+describe('predictions', () => {
+	const nfa = nfaOf('(1 | 0)*1');
+	const result = subsetConstruction(nfa);
+
+	it('finds the next target to predict', () => {
+		expect(nextTarget(result, 0)).toBe(3);
+		expect(nextTarget(result, 3)).toBe(6);
+		expect(nextTarget(result, result.steps.length - 1)).toBeNull();
+		expect(names(nfa, targetSet(result, 3)).join('')).toBe('FGABCDHI');
+	});
+
+	it('lists missing and extra states', () => {
+		const want = targetSet(result, 3);
+		expect(checkPrediction([...want].reverse(), want).correct).toBe(true);
+		const c = checkPrediction([5, 6, 4], want);
+		expect(c.correct).toBe(false);
+		expect(names(nfa, c.hits)).toEqual(['F', 'G']);
+		expect(names(nfa, c.extra)).toEqual(['E']);
+		expect(names(nfa, c.missing).join('')).toBe('ABCDHI');
+	});
+});
+
+describe('runSideBySide', () => {
+	it('keeps the DFA state equal to the NFA active set', () => {
+		const nfa = nfaOf('(a|b)*abb');
+		const { dfa } = subsetConstruction(nfa);
+		const run = runSideBySide(nfa, dfa, 'aabb');
+		expect(run.steps).toHaveLength(5);
+		expect(run.steps.every((s) => s.same)).toBe(true);
+		expect(run.nfaAccepts && run.dfaAccepts).toBe(true);
+	});
+
+	it('an empty active set matches the hidden ∅ state', () => {
+		const nfa = nfaOf('(1 | 0)*1');
+		const { dfa } = subsetConstruction(nfa);
+		const run = runSideBySide(nfa, dfa, '1x1');
+		expect(run.steps[2]).toMatchObject({ nfaActive: [], dfaState: null, same: true });
+		expect(run.steps[3]).toMatchObject({ nfaActive: [], dfaState: null, same: true });
+		expect(run.nfaAccepts || run.dfaAccepts).toBe(false);
+	});
+});
+
+describe('blow-up', () => {
+	it('draws the slide-16 NFA shape for any k', () => {
+		expect(blowupNfaText(1)).toBe('start: A\naccept: C\nA 0,1 A\nA 1 B\nB 0,1 C\n');
+		expect(automatonFromText(blowupNfaText(5)).states).toHaveLength(7);
+	});
+
+	it('has k + 2 NFA states and 2^(k+1) DFA states', () => {
+		const rows = blowupRows();
+		expect(rows.map((r) => r.k)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+		expect(rows).toHaveLength(BLOWUP_MAX_K);
+		for (const r of rows) {
+			expect(r.nfaStates).toBe(r.k + 2);
+			expect(r.dfaStates).toBe(r.formula);
+			expect(r.formula).toBe(2 ** (r.k + 1));
+		}
+	});
+});
