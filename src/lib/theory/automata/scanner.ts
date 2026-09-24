@@ -41,7 +41,11 @@ export interface MatchMatrix {
 }
 
 export interface ScanToken {
-	/** Rule index; `rules.length` for the Error rule. */
+	/**
+	 * Rule index, or `ERROR_RULE` for the Error rule. `driveScanner` also
+	 * reports `ERROR_RULE` for an accepting state without token info
+	 * (`error` is false then).
+	 */
 	rule: number;
 	name: string;
 	lexeme: string;
@@ -59,9 +63,21 @@ export interface ScanResult {
 	stuck: number | null;
 }
 
+/** Token name of the Error rule. */
 export const ERROR_TOKEN = 'Error';
+/** Rule index reported for Error tokens (the Error rule is listed after every rule). */
+export const ERROR_RULE = -1;
 
-function ruleAlphabet(rules: TokenRule[], extra: CharSet = CharSet.EMPTY): CharSet {
+/**
+ * The default Σ for token rules: every symbol the rules use, plus `extra`.
+ * `scan`, `scannerNfa` and `scannerDfa` all use it when no alphabet is given;
+ * pass the same alphabet to each (e.g. `scannerAlphabet(rules, CharSet.of(input))`)
+ * to make Σ in a rule cover more symbols.
+ */
+export function scannerAlphabet(
+	rules: readonly TokenRule[],
+	extra: CharSet = CharSet.EMPTY
+): CharSet {
 	const ranges: Range[] = [...extra.ranges];
 	for (const r of rules) ranges.push(...regexSymbols(r.regex).ranges);
 	return CharSet.fromRanges(ranges);
@@ -77,14 +93,14 @@ function ruleNfa(rule: TokenRule, alphabet: CharSet) {
  * count symbols (code points). With `errorRule`, an unmatched symbol becomes
  * an (Error, one symbol) token and scanning continues; otherwise scanning
  * stops and `stuck` is its offset. Σ in a rule means any symbol of `alphabet`
- * (default: every symbol in the rules and the input).
+ * (default: `scannerAlphabet(rules)`, as for `scannerDfa`).
  */
 export function scan(
 	rules: TokenRule[],
 	input: string,
 	opts: { errorRule?: boolean; alphabet?: CharSet } = {}
 ): ScanResult {
-	const alphabet = opts.alphabet ?? ruleAlphabet(rules, CharSet.of(input));
+	const alphabet = opts.alphabet ?? scannerAlphabet(rules);
 	const machines = rules.map((r) => compile(subsetConstruction(ruleNfa(r, alphabet).nfa).dfa));
 	const cps = codePoints(input);
 	const tokens: ScanToken[] = [];
@@ -134,7 +150,7 @@ export function scan(
 		} else if (opts.errorRule) {
 			const end = cps[i].end;
 			tokens.push({
-				rule: rules.length,
+				rule: ERROR_RULE,
 				name: ERROR_TOKEN,
 				lexeme: input.slice(pos, end),
 				start: pos,
@@ -156,13 +172,14 @@ export function scan(
  * One NFA for all rules: a new start state A with an ε-transition to each
  * rule's Thompson NFA (in rule order). Each rule's final state accepts and
  * reports { rule, token }. States are named A, B, C, … rule by rule; the
- * positions stack the rules' Thompson layouts top to bottom.
+ * positions stack the rules' Thompson layouts top to bottom. Σ in a rule
+ * means any symbol of `alphabet` (default: `scannerAlphabet(rules)`).
  */
 export function scannerNfa(
 	rules: TokenRule[],
 	opts: { alphabet?: CharSet } = {}
 ): { nfa: Automaton; starts: StateId[]; positions: Positions } {
-	const alphabet = opts.alphabet ?? ruleAlphabet(rules);
+	const alphabet = opts.alphabet ?? scannerAlphabet(rules);
 	const parts = rules.map((r) => ruleNfa(r, alphabet));
 	const states: State[] = [{ id: 0, name: letterName(0), accepting: false }];
 	const transitions: Transition[] = [];
@@ -208,7 +225,8 @@ export function scannerNfa(
 /**
  * Subset construction of `scannerNfa`; an accepting DFA state reports the
  * token of the lowest-numbered rule among its NFA states. With `minimal`, the
- * DFA is minimized keeping different tokens apart.
+ * DFA is minimized keeping different tokens apart. `alphabet` is as for
+ * `scannerNfa`.
  */
 export function scannerDfa(
 	rules: TokenRule[],
@@ -267,7 +285,9 @@ export function longestMatchRun(
  * Runs a scanner DFA over the whole input with `longestMatchRun`, reporting
  * each token by the accepting state's token (or its name when it has none).
  * Unmatched symbols become Error tokens with `errorRule`, and otherwise stop
- * the scan. Error tokens and states without token info report rule -1.
+ * the scan. Error tokens, and states without token info, report `ERROR_RULE`.
+ * For a DFA from `scannerDfa(rules)` the tokens equal those of `scan(rules)`
+ * with the same alphabet.
  */
 export function driveScanner(
 	dfa: Automaton,
@@ -289,7 +309,7 @@ export function driveScanner(
 			const info = dfa.states[run.token.state].accept;
 			const name = info?.token ?? dfa.states[run.token.state].name;
 			tokens.push({
-				rule: info?.rule ?? -1,
+				rule: info?.rule ?? ERROR_RULE,
 				name,
 				lexeme: input.slice(pos, run.token.end),
 				start: pos,
@@ -301,7 +321,7 @@ export function driveScanner(
 		} else if (opts.errorRule) {
 			const end = pos + (input.codePointAt(pos)! > 0xffff ? 2 : 1);
 			tokens.push({
-				rule: -1,
+				rule: ERROR_RULE,
 				name: ERROR_TOKEN,
 				lexeme: input.slice(pos, end),
 				start: pos,

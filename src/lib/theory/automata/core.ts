@@ -24,33 +24,43 @@ export function letterName(i: number): string {
 	return s;
 }
 
-const UPPER = /^[A-Z]+$/;
-const CHUNKS = /\d+|\D+/g;
+// Runs of digits, of capital letters, and of anything else.
+const CHUNKS = /\d+|[A-Z]+|[^\dA-Z]+/g;
+const isDigit = (c: number) => c >= 48 && c <= 57;
+const isUpper = (c: number) => c >= 65 && c <= 90;
 
-function compareDigits(a: string, b: string): number {
-	const x = a.replace(/^0+(?=\d)/, '');
-	const y = b.replace(/^0+(?=\d)/, '');
-	if (x.length !== y.length) return x.length - y.length;
-	return x < y ? -1 : x > y ? 1 : a.length - b.length;
+/**
+ * Digit runs compare numerically (then fewer leading zeros first), capital
+ * runs by length and then alphabetically (Z < AA), anything else as plain
+ * strings. Runs of different kinds start with characters from disjoint ranges,
+ * so they compare by that first character, which keeps the order total.
+ */
+function compareChunks(x: string, y: string): number {
+	const cx = x.charCodeAt(0);
+	const cy = y.charCodeAt(0);
+	if (isDigit(cx) && isDigit(cy)) {
+		const a = x.replace(/^0+(?=\d)/, '');
+		const b = y.replace(/^0+(?=\d)/, '');
+		if (a.length !== b.length) return a.length - b.length;
+		if (a !== b) return a < b ? -1 : 1;
+		return x.length - y.length;
+	}
+	if (isUpper(cx) && isUpper(cy) && x.length !== y.length) return x.length - y.length;
+	return x < y ? -1 : x > y ? 1 : 0;
 }
 
 /**
  * Natural order for state names: digit runs compare numerically (q2 < q10), and
- * all-capital names follow `letterName` order (Z < AA). This is the "name
- * order" used by `move`.
+ * runs of capitals follow `letterName` order (Z < AA, AA0 < AB). It is a total
+ * order, so sorting never depends on the input order. This is the "name order"
+ * used by `move`.
  */
 export function compareNames(a: string, b: string): number {
-	if (UPPER.test(a) && UPPER.test(b) && a.length !== b.length) return a.length - b.length;
 	const ca = a.match(CHUNKS) ?? [];
 	const cb = b.match(CHUNKS) ?? [];
 	for (let i = 0; i < Math.min(ca.length, cb.length); i++) {
-		const x = ca[i];
-		const y = cb[i];
-		if (x === y) continue;
-		const dx = x.charCodeAt(0) >= 48 && x.charCodeAt(0) <= 57;
-		const dy = y.charCodeAt(0) >= 48 && y.charCodeAt(0) <= 57;
-		if (dx && dy) return compareDigits(x, y);
-		return x < y ? -1 : 1;
+		const c = compareChunks(ca[i], cb[i]);
+		if (c !== 0) return c;
 	}
 	return ca.length - cb.length;
 }
@@ -336,7 +346,9 @@ export function transitionTable(
 //   A -0,1-> B             arrow form
 //
 // States are created in order of first mention. Names containing spaces or
-// punctuation are written in double quotes: "{A, B}".
+// punctuation are written in double quotes: "{A, B}". A quote or bracket opens
+// a quoted part only at the start of a word or item (or just inside "-…->"),
+// so primed names such as q0' are written bare.
 
 interface Word {
 	text: string;
@@ -346,10 +358,12 @@ interface Word {
 
 const DIRECTIVE = /^(\s*)(start|initial|accept|accepting|final|finals|states|alphabet)(\s*):/i;
 const EPSILON_WORDS = new Set(['ε', 'ϵ', 'eps', 'epsilon', '\\e']);
-const BARE_NAME = /^[^\s"'#[\],:-][^\s"'#[\],:]*$/u;
+const BARE_NAME = /^[^\s"'#[\],:-][^\s"#[\],:]*$/u;
 const UNSAFE_SYMBOL = new Set([...' \'",[]#:-\\', 'ε', 'ϵ']);
 
 const span = (start: number, end: number) => ({ start, end, source: null });
+
+const isOpener = (ch: string) => ch === "'" || ch === '"' || ch === '[';
 
 function splitWords(
 	line: string,
@@ -369,7 +383,9 @@ function splitWords(
 				comment = true;
 				break;
 			}
-			if (ch === "'" || ch === '"' || ch === '[') {
+			const itemStart =
+				i === start || line[i - 1] === ',' || (i === start + 1 && line[start] === '-');
+			if (isOpener(ch) && itemStart) {
 				const close = ch === '[' ? ']' : ch;
 				let j = i + 1;
 				while (j < line.length && line[j] !== close) j += line[j] === '\\' ? 2 : 1;
@@ -462,14 +478,17 @@ function parseClassBody(body: string): CharSet | null {
 	return negate ? set.complement() : set;
 }
 
-/** Splits on commas outside quotes and brackets; `at` is each piece's offset in `text`. */
+/**
+ * Splits on commas outside quotes and brackets (which open only at the start of
+ * an item); `at` is each piece's offset in `text`.
+ */
 function splitItems(text: string): { text: string; at: number }[] {
 	const items: { text: string; at: number }[] = [];
 	let i = 0;
 	let start = 0;
 	while (i < text.length) {
 		const ch = text[i];
-		if (ch === "'" || ch === '"' || ch === '[') {
+		if (isOpener(ch) && i === start) {
 			const close = ch === '[' ? ']' : ch;
 			i++;
 			while (i < text.length && text[i] !== close) i += text[i] === '\\' ? 2 : 1;
@@ -743,9 +762,37 @@ export function formatLabelText(set: CharSet): string {
 	return formatClass(set);
 }
 
-/** Writes a machine in the text format; `parseAutomatonText` reads it back unchanged. */
+/**
+ * One name per state for the text format, which identifies states by name. A
+ * state keeps its name unless an earlier state has it, or it is '' and another
+ * state is '' too; those states get fresh names (letterName of the id, else
+ * numbered variants) that no state uses.
+ */
+function textNames(a: Automaton): string[] {
+	const taken = new Set(a.states.map((s) => s.name));
+	const blanks = a.states.filter((s) => s.name === '').length;
+	const used = new Set<string>();
+	return a.states.map((s) => {
+		let name = s.name;
+		if (used.has(name) || (name === '' && blanks > 1)) {
+			const base = letterName(s.id);
+			name = base;
+			for (let k = 2; taken.has(name) || used.has(name); k++) name = `${base}${k}`;
+		}
+		used.add(name);
+		return name;
+	});
+}
+
+/**
+ * Writes a machine in the text format; `parseAutomatonText` reads it back
+ * unchanged. State names must be unique for that: repeated names, and '' when
+ * several states have it, are written as fresh names (see `textNames`), so the
+ * text still describes the same machine.
+ */
 export function formatAutomatonText(a: Automaton): string {
 	const lines: string[] = [];
+	const text = textNames(a).map(formatName);
 	const mention: StateId[] = [];
 	const seen = new Set<StateId>();
 	const note = (id: StateId) => {
@@ -761,14 +808,12 @@ export function formatAutomatonText(a: Automaton): string {
 		note(t.to);
 	}
 	if (mention.length !== a.states.length || mention.some((id, i) => id !== i))
-		lines.push(`states: ${a.states.map((s) => formatName(s.name)).join(' ')}`);
-	lines.push(`start: ${formatName(a.states[a.start].name)}`);
+		lines.push(`states: ${text.join(' ')}`);
+	lines.push(`start: ${text[a.start]}`);
 	const acc = a.states.filter((s) => s.accepting);
-	if (acc.length > 0) lines.push(`accept: ${acc.map((s) => formatName(s.name)).join(' ')}`);
+	if (acc.length > 0) lines.push(`accept: ${acc.map((s) => text[s.id]).join(' ')}`);
 	if (a.alphabet) lines.push(`alphabet: ${formatLabelText(a.alphabet)}`);
 	for (const t of a.transitions)
-		lines.push(
-			`${formatName(a.states[t.from].name)} ${t.label ? formatLabelText(t.label) : 'ε'} ${formatName(a.states[t.to].name)}`
-		);
+		lines.push(`${text[t.from]} ${t.label ? formatLabelText(t.label) : 'ε'} ${text[t.to]}`);
 	return lines.join('\n') + '\n';
 }

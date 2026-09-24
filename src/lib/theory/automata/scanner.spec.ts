@@ -5,11 +5,14 @@ import { analyzeDeterminism, complete } from './core';
 import { compareLanguages } from './language';
 import {
 	driveScanner,
+	ERROR_RULE,
 	longestMatchRun,
 	scan,
+	scannerAlphabet,
 	scannerDfa,
 	scannerNfa,
 	type ScanResult,
+	type ScanToken,
 	type TokenRule
 } from './scanner';
 import { accepts } from './simulate';
@@ -115,7 +118,7 @@ describe('scan (Lexical Analysis II loop)', () => {
 			['Error', '='],
 			['Integer', '56']
 		]);
-		expect(r.tokens[0]).toMatchObject({ rule: 4, error: true, skipped: false });
+		expect(r.tokens[0]).toMatchObject({ rule: ERROR_RULE, error: true, skipped: false });
 		expect(r.stuck).toBeNull();
 	});
 
@@ -135,9 +138,15 @@ describe('scan (Lexical Analysis II loop)', () => {
 		expect(scan([], 'x').stuck).toBe(0);
 	});
 
-	it('reads Σ as any symbol of the rules and input', () => {
-		const r = scan([integer, { name: 'Other', regex: any() }], '1x', { errorRule: true });
-		expect(pairs(r)).toEqual([
+	it('reads Σ as any symbol the rules use, or of the given alphabet', () => {
+		const withAny = [integer, { name: 'Other', regex: any() }];
+		expect(pairs(scan(withAny, '1x', { errorRule: true }))).toEqual([
+			['Integer', '1'],
+			['Error', 'x']
+		]);
+		const alphabet = scannerAlphabet(withAny, CharSet.of('1x'));
+		expect(alphabet.equals(CharSet.range('0', '9').union(CharSet.single('x')))).toBe(true);
+		expect(pairs(scan(withAny, '1x', { alphabet }))).toEqual([
 			['Integer', '1'],
 			['Other', 'x']
 		]);
@@ -263,6 +272,35 @@ describe('driveScanner', () => {
 			['Integer', '6', false]
 		]);
 		expect(r.runs).toHaveLength(4);
+	});
+
+	it('gives the same tokens as scan for the same rules and alphabet', () => {
+		const other: TokenRule = { name: 'Other', regex: any() };
+		const cases: { rules: TokenRule[]; input: string; alphabet?: CharSet }[] = [
+			{ rules, input: 'f+3 +g' },
+			{ rules, input: 'x1 = 22+y' },
+			{ rules: keywordRules, input: 'new newer ne 7' },
+			{ rules: [{ name: 'A', regex: sym('a') }, other], input: 'ab' },
+			{ rules: [{ name: 'A', regex: sym('a') }, other], input: 'ab', alphabet: CharSet.of('ab') },
+			{
+				rules: [integer, other],
+				input: '12x?',
+				alphabet: scannerAlphabet([integer], CharSet.of('x?'))
+			}
+		];
+		for (const { rules: rs, input, alphabet } of cases) {
+			for (const errorRule of [false, true]) {
+				const expected = scan(rs, input, { errorRule, alphabet });
+				const got = driveScanner(scannerDfa(rs, { alphabet }), input, { errorRule });
+				const view = (ts: ScanToken[]) => ts.map((t) => [t.rule, t.name, t.lexeme, t.error]);
+				expect(view(got.tokens)).toEqual(view(expected.tokens));
+				expect(got.stuck).toBe(expected.stuck);
+				const minimal = driveScanner(scannerDfa(rs, { alphabet, minimal: true }), input, {
+					errorRule
+				});
+				expect(view(minimal.tokens)).toEqual(view(expected.tokens));
+			}
+		}
 	});
 
 	it('accepts the combined language', () => {

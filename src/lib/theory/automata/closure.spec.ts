@@ -111,7 +111,7 @@ describe('move', () => {
 		expect(r.via).toEqual([1, 2, 0]);
 	});
 
-	it('matches symbol classes contained in a label', () => {
+	it('moves on symbol classes', () => {
 		const a = automatonFromText(`
 			start: A
 			A [a-z] B
@@ -120,6 +120,20 @@ describe('move', () => {
 		expect(names(a, move(a, [0], CharSet.range('a', 'f')).targets)).toEqual(['B', 'C']);
 		expect(names(a, move(a, [0], CharSet.range('g', 'z')).targets)).toEqual(['B']);
 		expect(move(a, [0], CharSet.EMPTY).targets).toEqual([]);
+	});
+
+	it('moves on every symbol of a set that is not a class (union of the moves)', () => {
+		const a = automatonFromText(`
+			start: A
+			A a B
+			A b C
+			A [x-z] D
+		`);
+		const r = move(a, [0], CharSet.of('ab'));
+		expect(names(a, r.targets)).toEqual(['B', 'C']);
+		expect(r.via).toEqual([0, 1]);
+		expect(names(a, move(a, [0], CharSet.range('a', 'y')).targets)).toEqual(['B', 'C', 'D']);
+		expect(move(a, [0], CharSet.of('cw')).targets).toEqual([]);
 	});
 });
 

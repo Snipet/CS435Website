@@ -103,8 +103,10 @@ export class ClosureIndex {
 	}
 
 	/**
-	 * move(T, a). A string names one symbol; a CharSet should be a symbol class
-	 * (a transition matches when its label contains the whole set).
+	 * move(T, a). A string names one symbol. A CharSet moves on each of its
+	 * symbols: a transition matches when its label shares a symbol with the set,
+	 * so the result is the union of move(T, x) over x in the set (for a symbol
+	 * class, the same as moving on any one of its symbols).
 	 */
 	move(states: Iterable<StateId>, symbol: CharSet | string): MoveResult {
 		const set = typeof symbol === 'string' ? CharSet.single(symbol) : symbol;
@@ -113,7 +115,7 @@ export class ClosureIndex {
 			const cp = set.first()!;
 			return this.moveWhere(states, (label) => label.has(cp));
 		}
-		return this.moveWhere(states, (label) => set.isSubsetOf(label));
+		return this.moveWhere(states, (label) => label.overlaps(set));
 	}
 }
 
@@ -130,7 +132,10 @@ export function epsilonClosureTrace(
 	return new ClosureIndex(a).closureTrace(seeds);
 }
 
-/** States reachable from `states` on one symbol (no ε-closure). */
+/**
+ * States reachable from `states` on one symbol, or on any symbol of a set (no
+ * ε-closure). States are scanned in name order, transitions in creation order.
+ */
 export function move(
 	a: Automaton,
 	states: Iterable<StateId>,

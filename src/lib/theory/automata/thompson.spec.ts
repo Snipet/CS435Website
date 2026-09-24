@@ -76,7 +76,7 @@ describe('thompson: lecture golden (1 | 0)*1', () => {
 		nfa.transitions.forEach((t, i) => expect(t.id).toBe(i));
 	});
 
-	it('lays states out on the grid (C above D, E above F)', () => {
+	it('lays states out as on the slide: C above D, E above F, the rest on one axis', () => {
 		const at = (n: string) => positions.get(nfa.states.find((s) => s.name === n)!.id);
 		expect(at('A')).toEqual({ x: 0, y: 42 });
 		expect(at('B')).toEqual({ x: 96, y: 42 });
@@ -86,8 +86,8 @@ describe('thompson: lecture golden (1 | 0)*1', () => {
 		expect(at('F')).toEqual({ x: 288, y: 84 });
 		expect(at('G')).toEqual({ x: 384, y: 42 });
 		expect(at('H')).toEqual({ x: 480, y: 42 });
-		expect(at('I')).toEqual({ x: 576, y: 0 });
-		expect(at('J')).toEqual({ x: 672, y: 0 });
+		expect(at('I')).toEqual({ x: 576, y: 42 });
+		expect(at('J')).toEqual({ x: 672, y: 42 });
 		expect(positions.size).toBe(10);
 	});
 
@@ -259,6 +259,36 @@ describe('thompson: inductive clauses', () => {
 		expect(positions.get(5)).toEqual({ x: 288, y: 42 });
 	});
 
+	it('centers the parts of a concatenation on one axis', () => {
+		const { nfa, positions } = thompson(cat(sym('a'), alt(sym('b'), sym('c')), sym('d')));
+		const y = (n: string) => positions.get(nfa.states.find((s) => s.name === n)!.id)!.y;
+		// a: A → B, union: C … H (D, E above F, G), d: I → J.
+		expect(['A', 'B', 'C', 'H', 'I', 'J'].map(y)).toEqual([42, 42, 42, 42, 42, 42]);
+		expect(['D', 'F', 'E', 'G'].map(y)).toEqual([0, 0, 84, 84]);
+	});
+
+	it('puts every fragment’s start and final on the axis of its concatenation', () => {
+		const exprs = [
+			lecture(),
+			cat(alt(sym('a'), cat(sym('b'), star(sym('c')))), plus(alt(sym('d'), sym('e'), sym('f')))),
+			cat(opt(sym('x')), repeat(alt(sym('y'), sym('z')), 1, 3), sym('w'))
+		];
+		for (const r of exprs) {
+			const { steps, positions } = thompson(r);
+			const y = (id: number) => positions.get(id)!.y;
+			for (const s of steps) {
+				expect(y(s.fragment.start)).toBe(y(s.fragment.final));
+				if (s.node.kind !== 'concat') continue;
+				for (const part of steps.filter(
+					(p) => p.path.length === s.path.length + 1 && s.path.every((v, i) => p.path[i] === v)
+				))
+					expect(y(part.fragment.start)).toBe(y(s.fragment.start));
+			}
+			const seen = new Set([...positions.values()].map((p) => `${p.x},${p.y}`));
+			expect(seen.size).toBe(positions.size);
+		}
+	});
+
 	it('folds n-ary alternation left to right: (A | B) | C', () => {
 		const { nfa } = thompson(alt(sym('a'), sym('b'), sym('c')));
 		expect(nfa.states).toHaveLength(10);
@@ -317,7 +347,14 @@ describe('thompson: derived forms', () => {
 		expect(edgeList(zero.nfa)).toEqual(['A-ε->B']);
 		expect(zero.steps).toHaveLength(1);
 		expect(lang(pow(alt(sym('0'), sym('1')), 2))).toEqual(['00', '01', '10', '11']);
-		expect(thompson(pow(sym('a'), 1)).steps[1].newStates).toEqual([]);
+		const one = thompson(pow(sym('a'), 1));
+		expect(one.steps[1].newStates).toEqual([]);
+		// The operand's final is still the final: nothing is demoted.
+		expect(one.steps[1].demoted).toEqual([]);
+		expect(one.steps[1].fragment.final).toBe(one.nfa.states.findIndex((s) => s.accepting));
+		expect(thompson(repeat(sym('a'), 1, 1)).steps[1].demoted).toEqual([]);
+		expect(thompson(repeat(sym('a'), 1, 2)).steps[1].demoted).toEqual([1]);
+		expect(thompson(repeat(sym('a'), 0, 1)).steps[1].demoted).toHaveLength(1);
 	});
 
 	it('A{n,m} = n copies then (m − n) copies of A?', () => {

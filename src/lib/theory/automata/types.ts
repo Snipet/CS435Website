@@ -32,7 +32,11 @@ export interface State {
 	accept?: AcceptInfo;
 	/** Subset construction: NFA states contained, in naming (discovery) order. */
 	subset?: StateId[];
-	/** Minimization: original DFA states merged into this state. */
+	/**
+	 * Minimization: ids of the states of the DFA given to `minimize` that were
+	 * merged into this state, ascending. A trap added during minimization is not
+	 * listed (the state is flagged `trap` instead).
+	 */
 	merged?: StateId[];
 	/** Hand-coded scanners: push back one character on reaching this state (drawn with *). */
 	retract?: boolean;

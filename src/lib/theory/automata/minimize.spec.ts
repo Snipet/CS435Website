@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { alt, cat, star, sym } from '../regex/ast';
+import { CharSet } from '../charset';
+import { alt, cat, chars, plus, star, sym } from '../regex/ast';
 import { analyzeDeterminism, automatonFromText } from './core';
 import { compareLanguages } from './language';
 import { distinguish, minimize, type MinimizeResult } from './minimize';
+import { scannerDfa } from './scanner';
 import { runDfa } from './simulate';
 import { subsetConstruction } from './subset';
 import { edgeList, id, names } from './test-helpers';
@@ -163,9 +165,11 @@ describe('minimize: partial DFAs and unreachable states', () => {
 		`);
 		const result = minimize(a);
 		expect(result.trap).not.toBeNull();
+		expect(result.blockOf.get(result.trap!)).toBe(result.blockOf.get(id(a, 'dead')));
 		const dead = result.dfa.states.find((s) => s.name === 'dead')!;
 		expect(dead.trap).toBe(true);
-		expect(dead.merged).toContain(result.trap);
+		// merged lists states of the machine passed in; the added trap is not one of them.
+		expect(dead.merged).toEqual([id(a, 'dead')]);
 	});
 
 	it('drops unreachable states and reports them by original id', () => {
@@ -181,6 +185,23 @@ describe('minimize: partial DFAs and unreachable states', () => {
 		expect(result.input.states.map((s) => s.name)).toEqual(['A', 'B']);
 		expect(result.map.get(id(a, 'B'))).toBe(1);
 		expect(result.map.has(id(a, 'Z'))).toBe(false);
+	});
+
+	it('lists merged states by their ids in the machine passed in', () => {
+		// U is unreachable and comes before X, so input ids differ from original ids;
+		// 1 is missing everywhere, so a trap is added and dropped again.
+		const a = automatonFromText(
+			'states: S U X Y\nstart: S\naccept: X Y\nalphabet: 0,1\nS 0 X\nX 0 Y\nY 0 X\nU 0 X'
+		);
+		const result = minimize(a);
+		expect(result.dfa.states.map((s) => [s.name, names(a, s.merged!).join(' ')])).toEqual([
+			['S', 'S'],
+			['X', 'X Y']
+		]);
+		expect(result.input.states.map((s) => s.name)).toEqual(['S', 'X', 'Y', 'trap']);
+		// Blocks use input ids; map converts original ids to them.
+		for (const s of result.dfa.states)
+			for (const o of s.merged!) expect(result.blockOf.get(result.map.get(o)!)).toBe(s.id);
 	});
 
 	it('handles machines with no accepting states', () => {
@@ -308,5 +329,65 @@ describe('distinguish', () => {
 
 	it('throws for NFAs', () => {
 		expect(() => distinguish(thompson(star(sym('a'))).nfa, 0, 1)).toThrow();
+	});
+});
+
+describe('distinguish: tokens', () => {
+	const a = automatonFromText(`
+		start: S
+		accept: X Y
+		S a P
+		S b Q
+		P a X
+		Q a Y
+	`);
+	a.states[id(a, 'X')].accept = { rule: 0, token: 'If' };
+	a.states[id(a, 'Y')].accept = { rule: 1, token: 'Id' };
+
+	it('tells states apart by token by default, like minimize', () => {
+		expect(distinguish(a, id(a, 'X'), id(a, 'Y'))).toEqual({
+			equivalent: false,
+			witness: '',
+			accepts: id(a, 'X'),
+			tokens: { p: 'If', q: 'Id' }
+		});
+		expect(distinguish(a, id(a, 'P'), id(a, 'Q'))).toEqual({
+			equivalent: false,
+			witness: 'a',
+			accepts: id(a, 'P'),
+			tokens: { p: 'If', q: 'Id' }
+		});
+	});
+
+	it('ignores tokens with byToken: false', () => {
+		expect(distinguish(a, id(a, 'P'), id(a, 'Q'), { byToken: false })).toEqual({
+			equivalent: true
+		});
+		expect(distinguish(a, id(a, 'P'), id(a, 'S'), { byToken: false })).toEqual({
+			equivalent: false,
+			witness: 'a',
+			accepts: id(a, 'P')
+		});
+	});
+
+	it('agrees with minimize on which states stay apart', () => {
+		const rules = [
+			{ name: 'If', regex: sym('if') },
+			{ name: 'Id', regex: plus(chars(CharSet.range('a', 'z'))) }
+		];
+		for (const splitByToken of [true, false]) {
+			const result = minimize(scannerDfa(rules), { splitByToken });
+			const { input, blockOf } = result;
+			for (const x of input.states)
+				for (const y of input.states) {
+					const d = distinguish(input, x.id, y.id, { byToken: splitByToken });
+					expect(d.equivalent).toBe(blockOf.get(x.id) === blockOf.get(y.id));
+				}
+			checkWitnesses(result);
+		}
+		// The reviewer's pair: EJHIK reports If, GHIK reports Id.
+		const input = minimize(scannerDfa(rules)).input;
+		const d = distinguish(input, id(input, 'EJHIK'), id(input, 'GHIK'));
+		expect(d).toMatchObject({ equivalent: false, witness: '', tokens: { p: 'If', q: 'Id' } });
 	});
 });

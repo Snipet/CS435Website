@@ -13,7 +13,9 @@
  *
  * The result is laid out on a grid and its states are named A, B, C, … by
  * column, then top to bottom, which reproduces the lecture's (1 | 0)*1 NFA.
- * State ids follow the names (A = 0); transition ids follow creation order.
+ * Every fragment's start and final sit on its vertical center, so the parts of
+ * a concatenation line up on one axis as on the slides. State ids follow the
+ * names (A = 0); transition ids follow creation order.
  */
 import type { CharSet } from '../charset';
 import { formatLabel } from '../chars';
@@ -128,16 +130,20 @@ export function thompson(r: Regex, opts: { alphabet?: CharSet } = {}): ThompsonR
 		return { start: s, final: f, states: [s, f], w: 2, h: 1, cells };
 	}
 
+	// Operands are centered vertically, so their starts and finals share one
+	// horizontal axis (Lexical Analysis IV, slides 4 and 6).
 	function concat2(a: Frag, b: Frag): Frag {
 		edge(a.final, b.start, null);
-		const cells = new Map(a.cells);
-		shiftInto(cells, b.cells, a.w, 0);
+		const h = Math.max(a.h, b.h);
+		const cells = new Map<number, Cell>();
+		shiftInto(cells, a.cells, 0, (h - a.h) / 2);
+		shiftInto(cells, b.cells, a.w, (h - b.h) / 2);
 		return {
 			start: a.start,
 			final: b.final,
 			states: [...a.states, ...b.states],
 			w: a.w + b.w,
-			h: Math.max(a.h, b.h),
+			h,
 			cells
 		};
 	}
@@ -315,7 +321,8 @@ export function thompson(r: Regex, opts: { alphabet?: CharSet } = {}): ThompsonR
 						: max === min
 							? `${times(min)} of the operand`
 							: `${times(min)} of the operand, then ${times(max - min)} of A?`;
-				return finish(acc, [first.final], () =>
+				// A{1} is the operand itself, whose final stays final.
+				return finish(acc, acc === first ? [] : [first.final], () =>
 					pieces.length === 1 && max === min
 						? 'One copy: the operand itself.'
 						: `${what}, joined by ε.`

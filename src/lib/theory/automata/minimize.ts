@@ -19,7 +19,11 @@ export interface MinimizeSplit {
 	parts: StateId[][];
 	/** A class on which parts[0] and parts[1] go to different blocks (empty in round 0). */
 	symbol: CharSet;
-	/** A string accepted from exactly one of parts[0] and parts[1] ("" in round 0). */
+	/**
+	 * A string that separates parts[0] and parts[1] ("" in round 0): it is
+	 * accepted from exactly one of them, or (when splitting by token) accepted
+	 * from both with different tokens.
+	 */
 	witness: string;
 	/** For every part i ≥ 1: the class and string that separate it from parts[0]. */
 	witnesses: { part: number; symbol: CharSet; witness: string }[];
@@ -33,11 +37,17 @@ export interface MinimizeRound {
 }
 
 export interface MinimizeResult {
+	/**
+	 * The minimal DFA. Each state is named after its block's first member and
+	 * lists in `merged` the states of the machine passed to `minimize` (original
+	 * ids, ascending) that it replaces; an added trap is not listed, and a state
+	 * whose block holds it is flagged `trap`.
+	 */
 	dfa: Automaton;
 	rounds: MinimizeRound[];
 	/** State of `input` → index of its block in the last round (= its state in `dfa`). */
 	blockOf: Map<StateId, number>;
-	/** The total, trimmed machine that was partitioned. All ids above refer to it. */
+	/** The total, trimmed machine that was partitioned. `rounds` and `blockOf` use its ids. */
 	input: Automaton;
 	/** The trap state added to make the machine total (an `input` id), or null. */
 	trap: StateId | null;
@@ -176,9 +186,12 @@ export function minimize(dfa: Automaton, opts: { splitByToken?: boolean } = {}):
 	const final = history[history.length - 1];
 	const lonelyTrap = trap !== null && blocks[final[trap]].length === 1;
 	const kept = blocks.filter((b) => !(lonelyTrap && b[0] === trap));
+	const originalOf = new Map([...map].map(([o, i]) => [i, o]));
 	const states: State[] = kept.map((b, id) => {
 		const first = input.states[b[0]];
-		const state: State = { id, name: first.name, accepting: first.accepting, merged: [...b] };
+		// Input ids keep the original order (the added trap comes last), so b[0] is original.
+		const merged = b.flatMap((s) => originalOf.get(s) ?? []);
+		const state: State = { id, name: first.name, accepting: first.accepting, merged };
 		let accept: AcceptInfo | undefined;
 		for (const s of b) {
 			const a = input.states[s].accept;
@@ -206,22 +219,43 @@ export function minimize(dfa: Automaton, opts: { splitByToken?: boolean } = {}):
 	return { dfa: result, rounds, blockOf, input, trap, removed, map };
 }
 
+export type Distinction =
+	| { equivalent: true }
+	| {
+			equivalent: false;
+			witness: string;
+			/** The state (p or q) the witness is accepted from; p when both accept it. */
+			accepts: StateId;
+			/** Present when both accept the witness, with these different tokens. */
+			tokens?: { p: string; q: string };
+	  };
+
 /**
- * The shortest string (shortlex among the shortest) accepted from exactly one
- * of p and q, found by breadth-first search over pairs of states. Missing
- * transitions go to the trap. Tokens are ignored.
+ * The shortest string (shortlex among the shortest) that tells p and q apart,
+ * found by breadth-first search over pairs of states. Missing transitions go
+ * to the trap. With `byToken` (default, as in `minimize`), a string accepted
+ * from both with different tokens also tells them apart; a state without
+ * token info counts as the token ''. Throws when given an NFA.
  */
 export function distinguish(
 	dfa: Automaton,
 	p: StateId,
-	q: StateId
-): { equivalent: true } | { equivalent: false; witness: string; accepts: StateId } {
+	q: StateId,
+	opts: { byToken?: boolean } = {}
+): Distinction {
 	if (analyzeDeterminism(dfa).kind === 'nfa') throw new Error('distinguish expects a DFA');
+	const byToken = opts.byToken ?? true;
 	const m = compile(dfa);
 	const reps = symbolClasses(dfa).map((c) => c.first()!);
 	const acc = (s: number) => s >= 0 && m.accepting[s];
-	const differ = (x: number, y: number) => acc(x) !== acc(y);
-	if (differ(p, q)) return { equivalent: false, witness: '', accepts: acc(p) ? p : q };
+	const token = (s: number) => dfa.states[s].accept?.token ?? '';
+	const differ = (x: number, y: number) =>
+		acc(x) !== acc(y) || (byToken && acc(x) && token(x) !== token(y));
+	const found = (x: number, y: number, witness: string): Distinction =>
+		acc(x) && acc(y)
+			? { equivalent: false, witness, accepts: p, tokens: { p: token(x), q: token(y) } }
+			: { equivalent: false, witness, accepts: acc(x) ? p : q };
+	if (differ(p, q)) return found(p, q, '');
 	const n = dfa.states.length + 1;
 	const code = (x: number, y: number) => (x + 1) * n + (y + 1);
 	const seen = new Set<number>([code(p, q)]);
@@ -236,7 +270,7 @@ export function distinguish(
 			if (seen.has(c)) continue;
 			seen.add(c);
 			const w2 = w + String.fromCodePoint(cp);
-			if (differ(x2, y2)) return { equivalent: false, witness: w2, accepts: acc(x2) ? p : q };
+			if (differ(x2, y2)) return found(x2, y2, w2);
 			queue.push({ x: x2, y: y2, w: w2 });
 		}
 	}

@@ -129,10 +129,10 @@ page notes the difference.
 
 | Context       | Names                                                                                                                                                                                                        |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Thompson NFA  | Letters `A, B, C, …` by final layout column, then top to bottom (reproduces the `(1                                                                                                                          | 0)*1`NFA A–J). After`Z`: `AA, AB, …`. |
+| Thompson NFA  | Letters `A, B, C, …` by final layout column, then top to bottom (reproduces the `(1 \| 0)*1` NFA A–J). After `Z`: `AA, AB, …`.                                                                               |
 | Subset DFA    | Concatenated NFA names in discovery order (`ABCDHI`, `FGABCDHI`, `EJGABCDHI`). Falls back to `{AA, B}` set notation when any NFA name has more than one character. Alternatives: sorted set, or `D0, D1, …`. |
 | Empty subset  | `∅`; omitted by default (trap convention) with an option to show it.                                                                                                                                         |
-| Minimized DFA | The first member's name; `State.merged` lists all members.                                                                                                                                                   |
+| Minimized DFA | The first member's name; `State.merged` lists all members (ids in the DFA that was minimized).                                                                                                               |
 | Hand-built    | Whatever the user types; new states default to the next free letter.                                                                                                                                         |
 | Relop         | `0`–`8` as on Lexical Analysis IV, slide 16.                                                                                                                                                                 |
 
@@ -268,11 +268,16 @@ function nodeAtPath(r: Regex, path: number[]): Regex | undefined;
 // types.ts — Automaton, State, Transition, AcceptInfo, Positions (see file)
 
 // core.ts
-function alphabetOf(a): CharSet; // declared Σ or union of labels
+function alphabetOf(a): CharSet; // union of labels, plus the declared Σ when there is one
+function labelUnion(a): CharSet; // union of labels only
 function symbolClasses(a, extra?: CharSet[]): CharSet[]; // disjoint classes covering every label (ascending)
+function isLabeled(t): boolean; // a non-ε transition with a non-empty label
 function outgoing(a, s): Transition[];
 function incoming(a, s): Transition[];
+function outgoingIndex(a): Transition[][]; // [state] = outgoing transitions by creation id
 function letterName(i: number): string; // 0→A … 25→Z, 26→AA …
+function compareNames(x: string, y: string): number; // total "name order": q2 < q10, Z < AA
+function sortByName(a, ids: Iterable<StateId>): StateId[];
 interface DeterminismReport {
 	kind: 'dfa' | 'partial-dfa' | 'nfa';
 	epsilonMoves: Transition[];
@@ -297,9 +302,10 @@ function parseAutomatonText(text: string): {
 	automaton: Automaton | null;
 	diagnostics: Diagnostic[];
 };
-function formatAutomatonText(a): string;
+function formatAutomatonText(a): string; // repeated names (and '' on several states) get fresh names
 // Text format:  "start: A" / "accept: B C" / "A 0,1 B" / "A ε B" / "A 'x' B" / "A [a-z] B"; "#" comments.
 // Also "A -0,1-> B", "states: A B C" (fixes id order), "alphabet: 0,1", and "double-quoted" state names.
+// Quotes and brackets open only at the start of a word or comma item, so q0' is a bare name.
 
 // thompson.ts
 interface ThompsonFragment {
@@ -330,7 +336,8 @@ interface ThompsonResult {
 function thompson(r: Regex, opts?: { alphabet?: CharSet }): ThompsonResult;
 // Golden: (1 | 0)*1 → A–J with exactly the slide's 11 edges; states are named by layout.
 // State ids follow the names (A = 0); transition ids follow creation order. States created
-// through step i: thompsonStatesThrough(result, i).
+// through step i: thompsonStatesThrough(result, i). Layout: every fragment's start and final
+// sit on its vertical center, so concatenated parts share one axis (slides 4, 6).
 
 // closure.ts
 interface ClosureEvent {
@@ -347,7 +354,14 @@ function move(
 	a,
 	states: Iterable<StateId>,
 	symbol: CharSet | string
-): { targets: StateId[]; via: number[] };
+): { targets: StateId[]; via: number[] }; // a CharSet moves on each of its symbols (union)
+// The same operations with lookup tables built once, for many calls on one automaton:
+class ClosureIndex {
+	constructor(a);
+	closure(seeds);
+	closureTrace(seeds);
+	move(states, symbol);
+}
 
 // subset.ts
 type SubsetNaming = 'discovery' | 'sorted-set' | 'numbered';
@@ -376,6 +390,8 @@ function subsetConstruction(
 	opts?: { naming?: SubsetNaming; includeEmpty?: boolean }
 ): SubsetResult;
 // Golden: Thompson((1 | 0)*1) → ABCDHI, FGABCDHI, EJGABCDHI with the slide's edges.
+const EMPTY_SUBSET_NAME = '∅';
+function subsetAccept(nfa, subset: Iterable<StateId>): AcceptInfo | undefined; // lowest rule wins
 
 // minimize.ts
 interface MinimizeRound {
@@ -384,25 +400,36 @@ interface MinimizeRound {
 		block: StateId[];
 		parts: StateId[][];
 		symbol: CharSet;
+		// A witness is accepted from exactly one part, or (splitting by token) from both with different tokens.
 		witness: string /* separates parts[0] and parts[1] */;
 		witnesses: { part: number; symbol: CharSet; witness: string }[] /* parts[0] vs each part */;
 	}[];
 }
 interface MinimizeResult {
-	dfa: Automaton;
+	dfa: Automaton /* State.merged = ids of the machine passed in (ascending); an added trap is not listed */;
 	rounds: MinimizeRound[];
 	blockOf: Map<StateId, number>;
-	input: Automaton /* total, trimmed machine that was partitioned; ids above refer to it */;
+	input: Automaton /* total, trimmed machine that was partitioned; rounds and blockOf use its ids */;
 	trap: StateId | null;
 	removed: StateId[];
 	map: Map<StateId, StateId> /* original id → input id */;
 }
 function minimize(dfa, opts?: { splitByToken?: boolean }): MinimizeResult;
+type Distinction =
+	| { equivalent: true }
+	| {
+			equivalent: false;
+			witness: string;
+			accepts: StateId /* p when both accept */;
+			tokens?: { p: string; q: string } /* both accept, different tokens */;
+	  };
 function distinguish(
 	dfa,
 	p: StateId,
-	q: StateId
-): { equivalent: true } | { equivalent: false; witness: string; accepts: StateId };
+	q: StateId,
+	opts?: { byToken?: boolean /* default true */ }
+): Distinction;
+// minimize and distinguish throw on NFAs: check analyzeDeterminism(a).kind !== 'nfa' first (or use toDfa).
 
 // simulate.ts
 interface DfaStep {
@@ -493,13 +520,27 @@ interface ScanResult {
 	steps: MatchMatrix[];
 	stuck: number | null;
 }
-function scan(rules: TokenRule[], input: string, opts?: { errorRule?: boolean }): ScanResult;
-function scannerNfa(rules: TokenRule[]): {
+// Σ in a rule means any symbol of opts.alphabet; all three default to scannerAlphabet(rules).
+function scannerAlphabet(rules: TokenRule[], extra?: CharSet): CharSet; // symbols the rules use ∪ extra
+function scan(
+	rules: TokenRule[],
+	input: string,
+	opts?: { errorRule?: boolean; alphabet?: CharSet }
+): ScanResult;
+function scannerNfa(
+	rules: TokenRule[],
+	opts?: { alphabet?: CharSet }
+): {
 	nfa: Automaton;
 	starts: StateId[];
 	positions: Positions /* rules' Thompson layouts stacked */;
 };
-function scannerDfa(rules: TokenRule[], opts?: { minimal?: boolean }): Automaton; // accept tags carry the token
+function scannerDfa(
+	rules: TokenRule[],
+	opts?: { minimal?: boolean; alphabet?: CharSet }
+): Automaton; // accept tags carry the token
+const ERROR_TOKEN = 'Error';
+const ERROR_RULE = -1; // ScanToken.rule of Error tokens (scan and driveScanner)
 interface DriverStep {
 	pos: number;
 	state: StateId | null;
@@ -511,6 +552,16 @@ function longestMatchRun(
 	input: string,
 	start: number
 ): { steps: DriverStep[]; token: { state: StateId; end: number } | null };
+// Whole input with longestMatchRun; same tokens as scan(rules) for scannerDfa(rules) with the same alphabet.
+function driveScanner(
+	dfa,
+	input: string,
+	opts?: { errorRule?: boolean; skip?: ReadonlySet<string> /* token names */ }
+): {
+	tokens: ScanToken[];
+	runs: { start: number; steps: DriverStep[]; token: { state: StateId; end: number } | null }[];
+	stuck: number | null;
+};
 ```
 
 ## 5. UI contracts

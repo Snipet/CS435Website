@@ -13,8 +13,11 @@ import {
 	formatLabelText,
 	incoming,
 	isDeterministic,
+	isLabeled,
+	labelUnion,
 	letterName,
 	outgoing,
+	outgoingIndex,
 	parseAutomatonText,
 	reachableStates,
 	removeUnreachable,
@@ -57,6 +60,62 @@ describe('compareNames / sortByName / stateNamed', () => {
 		expect(compareNames('s', 's1')).toBeLessThan(0);
 	});
 
+	it('is a total order (transitive and antisymmetric), so sorting ignores input order', () => {
+		const sample = [
+			'Z',
+			'AA',
+			'AA0',
+			'B1',
+			'AB',
+			'Ab',
+			'ab',
+			'A',
+			'A1',
+			'A01',
+			'A10',
+			'a1',
+			'q0',
+			'q00',
+			"q0'",
+			'q10',
+			'{A, B}',
+			'{AA, B}',
+			'∅',
+			'trap',
+			'trap2',
+			'',
+			'1',
+			'01',
+			'_',
+			'@',
+			' x',
+			'ABCDHI',
+			'EJGABCDHI',
+			'FGABCDHI'
+		];
+		const sign = (x: number) => Math.sign(x);
+		for (const x of sample) {
+			expect(compareNames(x, x)).toBe(0);
+			for (const y of sample) {
+				if (x !== y) expect(compareNames(x, y)).not.toBe(0);
+				expect(sign(compareNames(x, y)) + sign(compareNames(y, x))).toBe(0);
+				for (const z of sample)
+					if (compareNames(x, y) < 0 && compareNames(y, z) < 0)
+						expect(compareNames(x, z), `${x} < ${y} < ${z}`).toBeLessThan(0);
+			}
+		}
+		// The cycles Z < AA < AA0 < Z and Z < AA < B1 < Z are gone.
+		expect(['AA0', 'Z', 'AA'].sort(compareNames)).toEqual(['Z', 'AA', 'AA0']);
+		const machine = automatonFromText('states: Z AA B1\nstart: Z');
+		const orders = [
+			[0, 1, 2],
+			[1, 2, 0],
+			[2, 0, 1],
+			[2, 1, 0]
+		].map((perm) => names(machine, sortByName(machine, perm)).join(' '));
+		expect(new Set(orders)).toEqual(new Set(['B1 Z AA']));
+	});
+
 	it('sorts ids by name and finds states', () => {
 		const a = automatonFromText('start: q10\nq10 a q2\nq2 a q1');
 		expect(names(a, sortByName(a, [0, 1, 2]))).toEqual(['q1', 'q2', 'q10']);
@@ -74,7 +133,7 @@ describe('alphabet, classes, adjacency', () => {
 		C ε B
 	`);
 
-	it('alphabetOf is the declared Σ or the union of labels', () => {
+	it('alphabetOf is the union of labels, plus the declared Σ', () => {
 		expect(alphabetOf(a).equals(CharSet.range('a', 'z'))).toBe(true);
 		const declared = { ...a, alphabet: CharSet.range('0', '9') };
 		expect(
@@ -94,6 +153,37 @@ describe('alphabet, classes, adjacency', () => {
 		expect(outgoing(a, 0).map((t) => t.id)).toEqual([0, 1]);
 		expect(incoming(a, 1).map((t) => t.id)).toEqual([0, 2]);
 		expect(acceptingStates(a)).toEqual([1]);
+	});
+
+	it('isLabeled is true only for transitions with a non-empty label', () => {
+		const t = (label: CharSet | null) => ({ id: 0, from: 0, to: 1, label });
+		expect(isLabeled(t(null))).toBe(false);
+		expect(isLabeled(t(CharSet.EMPTY))).toBe(false);
+		expect(isLabeled(t(CharSet.single('a')))).toBe(true);
+	});
+
+	it('labelUnion joins overlapping labels and ignores ε and the declared Σ', () => {
+		const b = automatonFromText('start: A\nalphabet: [0-9]\nA [a-f] B\nA [d-k] C\nB ε C\nC x A');
+		expect(labelUnion(b).equals(CharSet.range('a', 'k').union(CharSet.single('x')))).toBe(true);
+		expect(labelUnion(automatonFromText('start: A\nA ε B')).isEmpty).toBe(true);
+	});
+
+	it('outgoingIndex lists each state’s transitions by creation id', () => {
+		const b: Automaton = {
+			states: [0, 1, 2].map((id) => ({ id, name: letterName(id), accepting: false })),
+			// Stored out of id order, plus one transition from a state that does not exist.
+			transitions: [
+				{ id: 3, from: 0, to: 2, label: null },
+				{ id: 1, from: 0, to: 1, label: CharSet.single('a') },
+				{ id: 2, from: 2, to: 0, label: CharSet.single('b') },
+				{ id: 0, from: 0, to: 0, label: CharSet.single('c') },
+				{ id: 4, from: 7, to: 0, label: null }
+			],
+			start: 0
+		};
+		const out = outgoingIndex(b);
+		expect(out.map((ts) => ts.map((t) => t.id))).toEqual([[0, 1, 3], [], [2]]);
+		expect(outgoingIndex(automatonFromText('states: A\nstart: A'))).toEqual([[]]);
 	});
 });
 
@@ -334,6 +424,17 @@ describe('parseAutomatonText', () => {
 		expect(parseAutomatonText('start: A\nA [] B').diagnostics[0].severity).toBe('warning');
 	});
 
+	it('reads primed names bare; quotes open only at the start of a word or item', () => {
+		const { automaton, diagnostics } = parseAutomatonText(
+			"start: q0\naccept: q0',q1\nq0 0 q0'\nq0' 1 q1\nq1 -'x',y-> q0''"
+		);
+		expect(diagnostics).toEqual([]);
+		expect(automaton!.states.map((s) => s.name)).toEqual(['q0', "q0'", 'q1', "q0''"]);
+		expect(acceptingStates(automaton!)).toEqual([1, 2]);
+		expect(automaton!.transitions[2].label!.equals(CharSet.of('xy'))).toBe(true);
+		expect(formatAutomatonText(automaton!)).toContain("q0' 1 q1");
+	});
+
 	it('automatonFromText throws on errors', () => {
 		expect(() => automatonFromText('A ab B')).toThrow(/not one symbol/);
 	});
@@ -405,6 +506,45 @@ describe('formatAutomatonText', () => {
 		};
 		a.transitions.push({ id: labels.length, from: 0, to: 1, label: null });
 		roundTrip(a);
+	});
+
+	it('gives empty and repeated names fresh names instead of merging states', () => {
+		const blank = automatonFromText('states: A B C\nstart: A\naccept: C\nA 0 B\nB 1 C');
+		for (const s of blank.states) s.name = '';
+		const text = formatAutomatonText(blank);
+		expect(text).toBe('states: A B C\nstart: A\naccept: C\nA 0 B\nB 1 C\n');
+		const back = automatonFromText(text);
+		expect(back.states).toHaveLength(3);
+		expect(edgeList(back)).toEqual(['A-0->B', 'B-1->C']);
+
+		// The first "x" keeps its name; the second is renamed past the taken "B".
+		const dup: Automaton = {
+			states: [
+				{ id: 0, name: 'x', accepting: false },
+				{ id: 1, name: 'x', accepting: true },
+				{ id: 2, name: 'B', accepting: false }
+			],
+			transitions: [
+				{ id: 0, from: 0, to: 1, label: CharSet.single('a') },
+				{ id: 1, from: 1, to: 2, label: null }
+			],
+			start: 0
+		};
+		const again = automatonFromText(formatAutomatonText(dup));
+		expect(again.states.map((s) => s.name)).toEqual(['x', 'B2', 'B']);
+		expect(again.transitions.map((t) => [t.from, t.to])).toEqual([
+			[0, 1],
+			[1, 2]
+		]);
+		expect(acceptingStates(again)).toEqual([1]);
+
+		// A single '' is a valid name and is kept.
+		const one = { ...dup, states: dup.states.map((s, i) => ({ ...s, name: ['', 'y', 'z'][i] })) };
+		expect(automatonFromText(formatAutomatonText(one)).states.map((s) => s.name)).toEqual([
+			'',
+			'y',
+			'z'
+		]);
 	});
 
 	it('formats labels', () => {
