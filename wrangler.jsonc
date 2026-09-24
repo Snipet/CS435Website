@@ -1,6 +1,6 @@
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "cs435website",
+	"name": "cs435",
 	"pages_build_output_dir": "./build",
 	"compatibility_date": "2026-09-01"
 }

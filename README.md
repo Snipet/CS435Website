@@ -20,7 +20,7 @@ npm run preview      # serve the production build locally
 
 ## Deployment
 
-The `cs435website` Cloudflare Pages project is connected to this GitHub repository:
+The `cs435` Cloudflare Pages project (cs435.seanfunk.xyz) is connected to this GitHub repository:
 
 - every branch and pull request gets a preview deployment, and
 - every push to `main` deploys to production.
