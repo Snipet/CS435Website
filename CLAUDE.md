@@ -25,4 +25,5 @@ UI contracts, and the quality bar.
 ## Workflow
 
 Feature branches (`feat/…`, `fix/…`, `chore/…`, `docs/…`) → PR → CI green → squash merge.
-Preview deploys: `npm run deploy:preview`; production: `npm run deploy` from main.
+Cloudflare Pages (GitHub integration) builds a preview for every branch/PR and deploys
+production on every push to `main`; there is no manual deploy step.
