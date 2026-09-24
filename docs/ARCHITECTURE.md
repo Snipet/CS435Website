@@ -639,8 +639,10 @@ saved state must accept its `LinkStates` shape (extra fields are allowed).
   `onchange(automaton, positions)`, `onstateclick(id)`,
   `ontransitionclick(transitionIds, edgeKey)`, plus `height` (px or `'auto'`),
   `ariaLabel`, `startLabel` (text on the start arrow, e.g. `start`) and
-  `viewKey?`. Supports pan/zoom (arrow keys pan from the drawing or the zoom
-  buttons) and "fit"; `fit()` is also a component export (`bind:this`).
+  `viewKey?`, and `frame?` (a box that "fit" always shows, e.g. the finished
+  machine's bounds while a construction grows on pinned positions). Supports
+  pan/zoom (arrow keys pan from the drawing or the zoom buttons) and "fit";
+  `fit()` is also a component export (`bind:this`).
   Passing a machine the view did not just report through `onchange` (compared
   by object, then by `layoutKey`) refits the view, clears the selection and
   drops a drag or label edit in progress; an echo of its own edit, with or

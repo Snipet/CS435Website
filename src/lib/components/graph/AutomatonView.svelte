@@ -76,6 +76,12 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		 * so a stepper can swap machines without losing the user's zoom.
 		 */
 		viewKey?: unknown;
+		/**
+		 * An area (layout units) that "fit" always shows, e.g. the bounds of the
+		 * finished machine while a construction grows with pinned positions, so the
+		 * drawing does not shift as states appear.
+		 */
+		frame?: Box;
 	}
 
 	let {
@@ -92,7 +98,8 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		height = 320,
 		ariaLabel,
 		startLabel,
-		viewKey
+		viewKey,
+		frame
 	}: Props = $props();
 
 	const PAD = 18;
@@ -122,7 +129,9 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 
 	const layout = $derived(layoutAutomaton(current, { positions: pinned, names, startLabel }));
 	const shapes = $derived(groups && groups.length > 0 ? groupShapes(layout, groups) : []);
-	const content = $derived(unionBox([layout.bounds, ...shapes.map((s) => s.bounds)]));
+	const content = $derived(
+		unionBox([layout.bounds, ...shapes.map((s) => s.bounds), ...(frame ? [frame] : [])])
+	);
 
 	// ------------------------------------------------------------------
 	// Camera
