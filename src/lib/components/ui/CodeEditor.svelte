@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { tick } from 'svelte';
 	import type { Diagnostic } from '$lib/theory/diagnostics';
+	import { summarizeDiagnostics } from './diagnostic-summary';
 	import Icon from './Icon.svelte';
+	import ProblemStatus from './ProblemStatus.svelte';
 	import { layoutLines, lineCol, lineIndexAt, lineStarts } from './editor-lines';
 	import type { HighlightToken } from './types';
 
@@ -76,6 +78,11 @@
 		const { line, col } = lineCol(value, d.span.start);
 		return `Line ${line}, col ${col}`;
 	}
+	const summary = $derived(
+		summarizeDiagnostics(diagnostics, (d) =>
+			d.span && located.has(d) ? `line ${lineCol(value, d.span.start).line}` : null
+		)
+	);
 
 	async function insertText(text: string) {
 		const ta = element;
@@ -164,6 +171,8 @@
 					autocapitalize="off"
 					autocomplete="off"
 					{onkeydown}
+					onfocus={() => (escapeArmed = false)}
+					onblur={() => (escapeArmed = false)}
 					oninput={() => oninput?.(value)}></textarea>
 			</div>
 		</div>
@@ -175,6 +184,7 @@
 					: ''}</span
 		>
 	</div>
+	<ProblemStatus {summary} />
 	{#if diagnostics.length}
 		<ul class="diags" id="{uid}-diags">
 			{#each diagnostics as d, i (i)}

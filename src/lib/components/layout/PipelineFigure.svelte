@@ -45,7 +45,7 @@
 		{/each}
 	</ol>
 	<figcaption id="pipeline-caption">
-		<span>Phases of a compiler.</span>
+		<span>Phases of a compiler. The slide also lists an optimizer and a peephole optimizer.</span>
 		<CitationTag cite={{ deck: '01', slide: 4 }} />
 	</figcaption>
 </figure>

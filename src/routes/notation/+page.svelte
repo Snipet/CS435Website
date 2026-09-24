@@ -94,14 +94,16 @@
 		}
 	];
 
-	// Lexical Analysis II, slide 7: scanning "f+3 +g".
+	// Lexical Analysis II, slide 7 scans "f+3  +g" (two spaces). The slide lists
+	// (Whitespace, " "); maximal munch matches both spaces (docs/ARCHITECTURE.md §3.9).
+	const scannedText = 'f+3  +g';
 	const scanned: (TokenPair & { start: number; end: number })[] = [
 		{ name: 'Identifier', lexeme: 'f', rule: 2, start: 0, end: 1 },
 		{ name: 'Plus', lexeme: '+', rule: 3, start: 1, end: 2 },
 		{ name: 'Integer', lexeme: '3', rule: 1, start: 2, end: 3 },
-		{ name: 'Whitespace', lexeme: ' ', rule: 0, start: 3, end: 4, skipped: true },
-		{ name: 'Plus', lexeme: '+', rule: 3, start: 4, end: 5 },
-		{ name: 'Identifier', lexeme: 'g', rule: 2, start: 5, end: 6 }
+		{ name: 'Whitespace', lexeme: '  ', rule: 0, start: 3, end: 5, skipped: true },
+		{ name: 'Plus', lexeme: '+', rule: 3, start: 5, end: 6 },
+		{ name: 'Identifier', lexeme: 'g', rule: 2, start: 6, end: 7 }
 	];
 	const scannedRanges: HighlightRange[] = scanned.map((t) => ({
 		start: t.start,
@@ -114,20 +116,29 @@
 	let activeId = $state<SectionId>('sets');
 
 	onMount(() => {
-		const targets = sections
+		const heads = sections
 			.map((s) => document.getElementById(s.id))
 			.filter((el): el is HTMLElement => el !== null);
-		const visible: Record<string, boolean> = {};
-		const observer = new IntersectionObserver(
-			(entries) => {
-				for (const e of entries) visible[e.target.id] = e.isIntersecting;
-				const first = sections.find((s) => visible[s.id]);
-				if (first) activeId = first.id;
-			},
-			{ rootMargin: '-72px 0px -55% 0px' }
-		);
-		targets.forEach((t) => observer.observe(t));
-		return () => observer.disconnect();
+		// The current section is the last one whose heading is above 45% of the
+		// viewport; at the bottom of the page it is the last section. Scroll events
+		// already arrive at most once per frame, so this runs directly.
+		const update = () => {
+			const line = innerHeight * 0.45;
+			let current = heads[0];
+			for (const h of heads) if (h.getBoundingClientRect().top <= line) current = h;
+			const root = document.documentElement;
+			if (root.scrollTop > 0 && root.scrollTop + innerHeight >= root.scrollHeight - 2) {
+				current = heads[heads.length - 1];
+			}
+			if (current) activeId = current.id as SectionId;
+		};
+		update();
+		addEventListener('scroll', update, { passive: true });
+		addEventListener('resize', update);
+		return () => {
+			removeEventListener('scroll', update);
+			removeEventListener('resize', update);
+		};
 	});
 </script>
 
@@ -778,13 +789,14 @@
 					</table>
 				</div>
 				<p>
-					Scanning <span class="f">"f+3 +g"</span> with
+					Scanning <span class="f pre">"{scannedText}"</span> (two spaces) with
 					<span class="f long">R = Whitespace | Integer | Identifier | '+'</span>. Pointing at a
-					pair highlights its lexeme.
+					pair highlights its lexeme. The slide lists the whitespace token as
+					<span class="f pre">(Whitespace, " ")</span>; under maximal munch it matches both spaces.
 				</p>
 				<div class="example token-example">
 					<CharStream
-						text="f+3 +g"
+						text={scannedText}
 						size="lg"
 						highlights={hovered === null
 							? scannedRanges
@@ -1007,10 +1019,14 @@
 		font-variant-ligatures: none;
 		white-space: nowrap;
 	}
+	.f.pre {
+		white-space: pre;
+	}
+	/* break-word, not anywhere: a column is never squeezed narrower than its longest token. */
 	td.f,
 	.f.long {
 		white-space: normal;
-		overflow-wrap: anywhere;
+		overflow-wrap: break-word;
 	}
 	.note {
 		margin-left: 0.5em;
@@ -1080,10 +1096,17 @@
 	.ref td:first-child {
 		white-space: nowrap;
 	}
+	.clauses td:nth-child(2) {
+		white-space: nowrap;
+	}
 	.clauses td:nth-child(3) {
 		min-width: 18rem;
 	}
 	@media (max-width: 600px) {
+		.ref th,
+		.ref td {
+			padding: 8px 10px;
+		}
 		.ref td:first-child {
 			white-space: normal;
 		}

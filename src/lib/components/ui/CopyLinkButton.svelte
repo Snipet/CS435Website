@@ -18,7 +18,19 @@
 	let status = $state<'idle' | 'copied' | 'manual'>('idle');
 	let url = $state('');
 	let manualInput: HTMLInputElement | undefined = $state();
+	let root: HTMLDivElement | undefined = $state();
+	let manualStyle = $state('');
 	let timer: ReturnType<typeof setTimeout> | undefined;
+
+	/** Keeps the manual-copy box under the button and inside the viewport. */
+	function place() {
+		if (!root) return;
+		const vw = document.documentElement.clientWidth;
+		const r = root.getBoundingClientRect();
+		const width = Math.min(360, vw - 32);
+		const left = Math.max(16, Math.min(r.right - width, vw - width - 16));
+		manualStyle = `left: ${left - r.left}px; right: auto; width: ${width}px;`;
+	}
 
 	function legacyCopy(text: string): boolean {
 		const ta = document.createElement('textarea');
@@ -47,6 +59,7 @@
 	}
 
 	async function copy() {
+		// Writes a pending change, or restores the state hash after an in-page anchor.
 		flushHash();
 		url = location.href;
 		clearTimeout(timer);
@@ -56,6 +69,7 @@
 		} else {
 			// Show the link so it can be copied by hand.
 			status = 'manual';
+			place();
 			await tick();
 			manualInput?.focus();
 			manualInput?.select();
@@ -63,7 +77,9 @@
 	}
 </script>
 
-<div class="copy-link">
+<svelte:window onresize={() => status === 'manual' && place()} />
+
+<div class="copy-link" bind:this={root}>
 	<Button
 		{variant}
 		{size}
@@ -75,7 +91,7 @@
 	</Button>
 	<span class="visually-hidden" role="status">{status === 'copied' ? 'Link copied' : ''}</span>
 	{#if status === 'manual'}
-		<div class="manual">
+		<div class="manual" style={manualStyle}>
 			<label class="manual-label" for={manualId}>Copy this link</label>
 			<input
 				id={manualId}

@@ -8,7 +8,7 @@
  * const step = $derived(result.steps[stepper.index]);
  * ```
  */
-import { onDestroy } from 'svelte';
+import { onDestroy, untrack } from 'svelte';
 import type { Attachment } from 'svelte/attachments';
 
 export const DEFAULT_SPEED = 1.5;
@@ -46,9 +46,15 @@ export class Stepper {
 		return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 	}
 
-	/** Current step, always within range even after `total` shrinks. */
+	/**
+	 * Current step, always within range. When `total` shrinks below it, the
+	 * clamped position is kept, so the step does not jump when `total` grows again.
+	 */
 	get index(): number {
-		return clampIndex(this.#index, this.total);
+		const i = clampIndex(this.#index, this.total);
+		// Allowed inside templates and deriveds: the write is untracked and settles in one pass.
+		if (i !== this.#index) untrack(() => (this.#index = i));
+		return i;
 	}
 	set index(i: number) {
 		this.set(i);

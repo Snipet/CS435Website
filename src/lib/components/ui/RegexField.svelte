@@ -30,7 +30,9 @@
 
 <script lang="ts">
 	import type { Diagnostic } from '$lib/theory/diagnostics';
+	import { summarizeDiagnostics } from './diagnostic-summary';
 	import Icon from './Icon.svelte';
+	import ProblemStatus from './ProblemStatus.svelte';
 	import { applyAliases, DEFAULT_ALIASES } from './regex-aliases';
 
 	interface Props {
@@ -83,7 +85,9 @@
 		)
 	);
 
-	let lastSelection = { start: 0, end: 0 };
+	// The caret when the field last had focus, and the text it belongs to. The
+	// palette inserts there; after an outside change (a preset) it appends.
+	let lastSelection: { start: number; end: number; text: string } | null = null;
 	let focusIndex = $state(0);
 	const paletteButtons: HTMLButtonElement[] = $state([]);
 
@@ -91,8 +95,15 @@
 		if (!element) return;
 		lastSelection = {
 			start: element.selectionStart ?? value.length,
-			end: element.selectionEnd ?? value.length
+			end: element.selectionEnd ?? value.length,
+			text: value
 		};
+	}
+
+	/** Where a palette symbol goes when the field is not focused. */
+	function savedSelection(): { start: number; end: number } {
+		if (lastSelection && lastSelection.text === value) return lastSelection;
+		return { start: value.length, end: value.length };
 	}
 
 	function handleInput(event: Event & { currentTarget: HTMLInputElement }) {
@@ -115,8 +126,9 @@
 		const el = element;
 		if (!el || disabled) return;
 		const focused = document.activeElement === el;
-		const start = focused ? (el.selectionStart ?? value.length) : lastSelection.start;
-		const end = focused ? (el.selectionEnd ?? value.length) : lastSelection.end;
+		const saved = savedSelection();
+		const start = focused ? (el.selectionStart ?? value.length) : saved.start;
+		const end = focused ? (el.selectionEnd ?? value.length) : saved.end;
 		el.focus();
 		el.setSelectionRange(start, end);
 		// execCommand keeps native undo and fires `input`; fall back to a direct edit.
@@ -219,6 +231,7 @@
 			{/each}
 		</div>
 	{/if}
+	<ProblemStatus summary={summarizeDiagnostics(diagnostics)} />
 	{#if diagnostics.length}
 		<ul class="diags" id="{uid}-diags">
 			{#each diagnostics as d, i (i)}

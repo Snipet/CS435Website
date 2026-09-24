@@ -61,6 +61,22 @@ describe('Stepper', () => {
 		expect(stepper.index).toBe(0);
 	});
 
+	it('keeps the clamped step when the number of steps grows again', () => {
+		total = 10;
+		stepper.set(8);
+		total = 3;
+		expect(stepper.index).toBe(2);
+		total = 10;
+		expect(stepper.index).toBe(2);
+		stepper.next();
+		expect(stepper.index).toBe(3);
+		// While there are no steps (e.g. the input does not parse) the position resets.
+		total = 0;
+		expect(stepper.index).toBe(0);
+		total = 10;
+		expect(stepper.index).toBe(0);
+	});
+
 	it('plays at the configured speed and stops at the end', () => {
 		expect(stepper.speed).toBe(DEFAULT_SPEED);
 		stepper.speed = 2;
