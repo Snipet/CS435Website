@@ -19,7 +19,7 @@ import {
 import { expandRefs, regexEquals } from './analyze';
 import { FLEX_DOT, parseFlexPattern } from './flex';
 import { parseDefinitions, parseRegex } from './lecture';
-import { printFlexPattern, printRegex, type PrintOptions } from './print';
+import { flexCaveats, printFlexPattern, printRegex, type PrintOptions } from './print';
 
 function lecture(text: string, defs?: ReadonlyMap<string, Regex>): Regex {
 	const r = parseRegex(text, { defs });
@@ -105,6 +105,39 @@ describe('printRegex: lecture notation', () => {
 		expect(printRegex(number, { expandRefs: true })).toBe('[0-9] [0-9]*');
 		expect(printRegex(plus(D), { expandRefs: true })).toBe('[0-9]+');
 	});
+
+	it('keeps a bare letter quoted when it spells a definition name', () => {
+		const L = chars(CharSet.range('a', 'z'));
+		const oneLetter = new Map<string, Regex>([
+			['L', L],
+			['e', sym('x')]
+		]);
+		const r = cat(sym('L'), ref('L', L), sym('e'), sym('1'));
+		// L is used in r; e is only in scope.
+		expect(printRegex(r, { symbols: 'bare' })).toBe("'L' L e 1");
+		const printed = printRegex(r, { symbols: 'bare', names: oneLetter.keys() });
+		expect(printed).toBe("'L' L 'e' 1");
+		const back = parseRegex(printed, { defs: oneLetter });
+		expect(back.ok && regexEquals(back.regex, r)).toBe(true);
+	});
+
+	it('escapes whitespace other than space, and lone surrogates', () => {
+		expect(printRegex(sym(' '))).toBe("'\\xA0'");
+		expect(printRegex(sym('　'))).toBe("'\\u{3000}'");
+		expect(printRegex(chars(CharSet.of('  ')))).toBe('[ \\xA0]');
+		// Two halves of 😀 written separately stay separate.
+		const halves: Regex = {
+			kind: 'concat',
+			parts: [chars(CharSet.single(0xd83d)), chars(CharSet.single(0xde00))],
+			quoted: true
+		};
+		expect(printRegex(halves)).toBe("'\\u{D83D}\\u{DE00}'");
+		const back = parseRegex(printRegex(halves));
+		expect(back.ok && regexEquals(back.regex, halves)).toBe(true);
+		const cls = chars(CharSet.fromCodePoints([0x61, 0xd83d, 0xde00]));
+		expect(printRegex(cls)).toBe('[a\\u{D83D}\\u{DE00}]');
+		expect(printRegex(sym('😀'))).toBe("'😀'");
+	});
 });
 
 describe('printRegex: flex', () => {
@@ -134,6 +167,37 @@ describe('printRegex: flex', () => {
 		expect(f(chars(FLEX_DOT))).toBe('.');
 		expect(f(sym('say "hi"'))).toBe('"say \\"hi\\""');
 		expect(f(cat(sym('\0'), sym('1')))).toBe('\\x001');
+	});
+
+	it('escapes spaces that would end the pattern or vanish, and lone surrogates', () => {
+		expect(f(sym(' '))).toBe('\\xA0');
+		expect(f(cat(sym('a'), sym(' '), sym('b')))).toBe('a\\xA0b');
+		expect(f(sym('　'))).toBe('\\u{3000}');
+		expect(f(sym('a b'))).toBe('"a\\u{2003}b"');
+		const halves: Regex = {
+			kind: 'concat',
+			parts: [chars(CharSet.single(0xd83d)), chars(CharSet.single(0xde00))],
+			quoted: true
+		};
+		expect(f(halves)).toBe('"\\u{D83D}\\u{DE00}"');
+		for (const r of [cat(sym('a'), sym(' '), sym('b')), sym('﻿'), halves]) {
+			const back = parseFlexPattern(f(r));
+			expect(back.ok && regexEquals(back.pattern.regex, r), f(r)).toBe(true);
+		}
+	});
+
+	it('lists what the flex output writes that flex itself reads differently', () => {
+		const u =
+			'\\u{…} is not a flex escape (flex reads \\u as u); it is used for characters flex cannot write directly';
+		const phi = 'ɸ has no flex spelling; it is written as a class that matches nothing';
+		expect(flexCaveats(lecture('letter (letter | digit)* | Σ | ε', defs))).toEqual([]);
+		expect(flexCaveats(sym('é😀'))).toEqual([]);
+		expect(flexCaveats(sym(' '))).toEqual([]);
+		expect(flexCaveats(sym('　'))).toEqual([u]);
+		expect(flexCaveats(chars(CharSet.ANY))).toEqual([u]);
+		expect(flexCaveats(cat(sym('a'), empty()))).toEqual([phi, u]);
+		// Definitions are printed separately, so their bodies count too.
+		expect(flexCaveats(star(ref('NOTHING', empty())))).toEqual([phi, u]);
 	});
 
 	it('prints whole patterns with anchors and trailing context', () => {
@@ -176,6 +240,12 @@ const POOL = [
 	'Σ',
 	'²',
 	'😀',
+	' ',
+	' ',
+	'　',
+	'﻿',
+	'\ud83d',
+	'\ude00',
 	' '
 ];
 

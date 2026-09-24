@@ -12,8 +12,9 @@
  *   r1r2  r1|r2  (r)  r1/r2  ^r  r$
  *
  * `^` counts as an anchor only at the very start and `$` only at the very end;
- * elsewhere they are ordinary characters (as in flex). `""` is ε. `\u{H…}` is
- * accepted as an escape for any code point.
+ * elsewhere they are ordinary characters (as in flex). `""` is ε. Only ASCII
+ * whitespace ends a pattern. `\u{H…}` is accepted as an escape for any code
+ * point, with an info note since flex itself has no such escape.
  */
 import { CharSet } from '../charset';
 import { showChar } from '../chars';
@@ -21,16 +22,21 @@ import { hasErrors, type Diagnostic } from '../diagnostics';
 import type { CharsNode, Regex, Span } from './ast';
 import type { DefinitionEntry, DefinitionsResult } from './lecture';
 import {
+	MAX_DEPTH,
 	MAX_REPEAT,
 	Reporter,
 	charAt,
 	isDigit,
-	isSpace,
+	isFlexBlank,
+	isFlexSpace,
+	noteFlexU,
 	orderDefinitions,
 	parseClass,
 	readEscape,
 	rotateCycle,
-	sortDiagnostics
+	sortDiagnostics,
+	tooDeep,
+	treeHeight
 } from './internal';
 
 export interface FlexPattern {
@@ -73,16 +79,21 @@ const NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]*/;
 
 type Mode = 'pattern' | 'definition';
 
+/** Finds the body of {NAME}. */
+type Lookup = (name: string) => Regex | undefined;
+
 class FlexParser {
 	private pos = 0;
 	private depth = 0;
+	/** Set when input nests too deeply; parsing stops and unwinds quietly. */
+	private aborted = false;
 	/** Where the pattern ends: trailing whitespace is not part of it. */
 	private end: number;
 
 	constructor(
 		private readonly text: string,
 		private readonly rep: Reporter,
-		private readonly defs: ReadonlyMap<string, Regex> | undefined,
+		private readonly lookup: Lookup,
 		private readonly invalid: ReadonlySet<string> | undefined,
 		private readonly mode: Mode
 	) {
@@ -98,7 +109,7 @@ class FlexParser {
 	}
 
 	private restIsBlank(from: number): boolean {
-		return this.text.slice(from).trim() === '';
+		return isFlexBlank(this.text.slice(from));
 	}
 
 	/** `$` at `pos` is an anchor when nothing but whitespace follows it. */
@@ -108,9 +119,9 @@ class FlexParser {
 
 	parse(): FlexPattern {
 		const t = this.text;
-		if (t[0] !== undefined && isSpace(t[0])) {
+		if (isFlexSpace(t[0])) {
 			let j = 0;
-			while (j < t.length && isSpace(t[j])) j++;
+			while (j < t.length && isFlexSpace(t[j])) j++;
 			this.rep.error('a flex pattern cannot start with a space', 0, j);
 			this.pos = j;
 		}
@@ -180,12 +191,29 @@ class FlexParser {
 	private parseAlt(): Regex | null {
 		const ops: Regex[] = [];
 		let lastBar = -1;
+		// A bar already reported as having no operand on either side.
+		let bothSides = -1;
 		for (;;) {
 			const op = this.parseConcat();
 			if (op) ops.push(op);
 			else if (lastBar >= 0 || this.text[this.pos] === '|') {
-				if (lastBar >= 0) this.rep.error('missing operand after |', lastBar, lastBar + 1);
-				else this.rep.error('missing operand before |', this.pos, this.pos + 1);
+				if (lastBar >= 0) {
+					if (lastBar !== bothSides)
+						this.rep.error('missing operand after |', lastBar, lastBar + 1);
+				} else {
+					const after = this.pos + 1;
+					const lone =
+						this.text[after] === ')' ||
+						this.text[after] === '/' ||
+						this.isEolAt(after) ||
+						isFlexBlank(this.text.slice(after, this.end));
+					this.rep.error(
+						lone ? '| needs an operand on each side' : 'missing operand before |',
+						this.pos,
+						after
+					);
+					if (lone) bothSides = this.pos;
+				}
 				ops.push(this.placeholder(this.pos, this.pos));
 			}
 			if (this.pos < this.end && this.text[this.pos] === '|') {
@@ -216,9 +244,9 @@ class FlexParser {
 				continue;
 			}
 			if (this.isEolAt(this.pos)) break;
-			if (isSpace(c)) {
+			if (isFlexSpace(c)) {
 				let j = this.pos;
-				while (j < t.length && isSpace(t[j])) j++;
+				while (j < t.length && isFlexSpace(t[j])) j++;
 				if (j >= t.length) {
 					this.end = this.pos;
 					break;
@@ -326,11 +354,17 @@ class FlexParser {
 					this.rep.error('empty group (); use "" for the empty string', start, this.pos);
 					return plain(this.placeholder(start, this.pos));
 				}
+				if (this.depth >= MAX_DEPTH) {
+					this.rep.error(tooDeep, start, start + 1);
+					this.aborted = true;
+					this.pos = this.end;
+					return plain(this.placeholder(start, start + 1));
+				}
 				this.depth++;
 				const inner = this.parseAlt();
 				this.depth--;
 				if (t[this.pos] === ')' && this.pos < this.end) this.pos++;
-				else this.rep.error('( is never closed', start, start + 1);
+				else if (!this.aborted) this.rep.error('( is never closed', start, start + 1);
 				const node = inner ?? this.placeholder(start, this.pos);
 				node.span = this.span(start, this.pos);
 				return plain(node);
@@ -357,6 +391,7 @@ class FlexParser {
 					this.rep.error(esc.error, start, esc.end);
 					return null;
 				}
+				noteFlexU(t, start, esc.end, this.rep);
 				return plain(literal(esc.cp, esc.end));
 			}
 			case '{':
@@ -400,7 +435,10 @@ class FlexParser {
 			if (c === '\\') {
 				const esc = readEscape(t, j, this.end, 'flex');
 				if ('error' in esc) this.rep.error(esc.error, j, esc.end);
-				else chars.push(this.stringChar(esc.cp, j, esc.end));
+				else {
+					noteFlexU(t, j, esc.end, this.rep);
+					chars.push(this.stringChar(esc.cp, j, esc.end));
+				}
 				j = esc.end;
 				continue;
 			}
@@ -439,7 +477,7 @@ class FlexParser {
 			const name = m[0];
 			this.pos = start + name.length + 2;
 			const span = this.span(start, this.pos);
-			const def = this.defs?.get(name);
+			const def = this.lookup(name);
 			if (def) return { node: { kind: 'ref', name, body: def, span }, string: false };
 			if (this.invalid?.has(name))
 				this.rep.error(`definition {${name}} has errors`, start, this.pos);
@@ -467,11 +505,17 @@ function parseFlex(
 	opts: FlexParseOptions,
 	mode: Mode
 ): FlexParseResult {
-	if (text.trim() === '') {
+	if (isFlexBlank(text)) {
 		rep.error(mode === 'pattern' ? 'Enter a flex pattern' : 'missing pattern', 0, text.length);
 		return { ok: false, diagnostics: rep.diagnostics };
 	}
-	const pattern = new FlexParser(text, rep, opts.defs, opts.invalid, mode).parse();
+	const defs = opts.defs;
+	const pattern = new FlexParser(text, rep, (n) => defs?.get(n), opts.invalid, mode).parse();
+	const height = Math.max(
+		treeHeight(pattern.regex),
+		pattern.trailing ? treeHeight(pattern.trailing) : 0
+	);
+	if (!hasErrors(rep.diagnostics) && height > MAX_DEPTH) rep.error(tooDeep, 0, text.length);
 	const diagnostics = sortDiagnostics(rep.diagnostics);
 	return hasErrors(diagnostics) ? { ok: false, diagnostics } : { ok: true, pattern, diagnostics };
 }
@@ -481,36 +525,15 @@ export function parseFlexPattern(text: string, opts: FlexParseOptions = {}): Fle
 	return parseFlex(text, new Reporter([], null), opts, 'pattern');
 }
 
-/** Names used as {NAME} in a flex pattern, skipping escapes, strings, and classes. */
+/** Names used as {NAME} in a definition, found by the parser itself so the two cannot disagree. */
 function flexRefNames(text: string): string[] {
 	const names: string[] = [];
-	let i = 0;
-	while (i < text.length) {
-		const c = text[i];
-		if (c === '\\') i += 2;
-		else if (c === '"') {
-			i++;
-			while (i < text.length && text[i] !== '"') i += text[i] === '\\' ? 2 : 1;
-			i++;
-		} else if (c === '[') {
-			i++;
-			if (text[i] === '^') i++;
-			if (text[i] === ']') i++;
-			while (i < text.length && text[i] !== ']') {
-				if (text[i] === '\\') i += 2;
-				else if (text.startsWith('[:', i) && text.indexOf(':]', i) > 0)
-					i = text.indexOf(':]', i) + 2;
-				else i++;
-			}
-			i++;
-		} else if (c === '{') {
-			const m = NAME_RE.exec(text.slice(i + 1));
-			if (m && text[i + 1 + m[0].length] === '}') {
-				names.push(m[0]);
-				i += m[0].length + 2;
-			} else i++;
-		} else i++;
-	}
+	const record = (name: string): Regex => {
+		names.push(name);
+		return { kind: 'epsilon' };
+	};
+	if (!isFlexBlank(text))
+		new FlexParser(text, new Reporter([], null), record, undefined, 'definition').parse();
 	return names;
 }
 
@@ -526,6 +549,7 @@ export function parseFlexDefinitions(lines: FlexDefinitionLine[]): DefinitionsRe
 	// ordered by line first.
 	const perLine: Diagnostic[][] = lines.map(() => []);
 	const byName = new Map<string, { line: FlexDefinitionLine; entry: DefinitionEntry; k: number }>();
+	const duplicates: number[] = [];
 	const error = (k: number, message: string, span: Span) =>
 		perLine[k].push({ severity: 'error', message, span });
 
@@ -553,6 +577,7 @@ export function parseFlexDefinitions(lines: FlexDefinitionLine[]): DefinitionsRe
 		const prior = byName.get(line.name);
 		if (prior) {
 			error(k, `${line.name} is already defined on line ${prior.line.line}`, entry.nameSpan);
+			duplicates.push(k);
 			return;
 		}
 		byName.set(line.name, { line, entry, k });
@@ -560,8 +585,11 @@ export function parseFlexDefinitions(lines: FlexDefinitionLine[]): DefinitionsRe
 
 	const deps = new Map([...byName].map(([name, d]) => [name, flexRefNames(d.line.text)]));
 	const { order, cycles } = orderDefinitions([...byName.keys()], deps);
+	const inCycle = new Set<string>();
 	for (const cycle of cycles)
-		for (const name of new Set(cycle)) {
+		for (const name of cycle) {
+			if (inCycle.has(name)) continue;
+			inCycle.add(name);
 			const walk = rotateCycle(cycle, name)
 				.map((n) => `{${n}}`)
 				.join(' → ');
@@ -569,20 +597,26 @@ export function parseFlexDefinitions(lines: FlexDefinitionLine[]): DefinitionsRe
 			error(d.k, `${name} is defined in terms of itself: ${walk}`, d.entry.nameSpan);
 		}
 
+	// Dependencies come first in `order`, so any definition name not yet built has failed.
+	const names = new Set(byName.keys());
 	const built = new Map<string, Regex>();
-	for (const name of order) {
-		const { line, entry, k } = byName.get(name)!;
-		const invalid = new Set([...byName.keys()].filter((n) => !built.has(n)));
-		const rep = new Reporter([], name, line.textStart ?? 0);
-		const res = parseFlex(line.text, rep, { defs: built, invalid }, 'definition');
+	const build = (k: number): Regex | null => {
+		const line = lines[k];
+		const rep = new Reporter([], line.name, line.textStart ?? 0);
+		const res = parseFlex(line.text, rep, { defs: built, invalid: names }, 'definition');
 		perLine[k].push(...res.diagnostics);
-		if (res.ok) {
-			entry.regex = res.pattern.regex;
-			built.set(name, res.pattern.regex);
-		}
+		return res.ok ? res.pattern.regex : null;
+	};
+	for (const name of order) {
+		const { entry, k } = byName.get(name)!;
+		entry.regex = build(k);
+		if (entry.regex) built.set(name, entry.regex);
 	}
+	// A duplicate is never used, but its own problems are still reported.
+	for (const k of duplicates) build(k);
 
 	const defs = new Map<string, Regex>();
 	for (const e of entries) if (e.regex && !defs.has(e.name)) defs.set(e.name, e.regex);
-	return { defs, entries, diagnostics: perLine.flatMap(sortDiagnostics) };
+	const invalid = new Set(entries.map((e) => e.name).filter((n) => !defs.has(n)));
+	return { defs, invalid, entries, diagnostics: perLine.flatMap(sortDiagnostics) };
 }

@@ -4,14 +4,27 @@
  */
 import { CharSet, MAX_CODE_POINT } from '../charset';
 import type { Diagnostic } from '../diagnostics';
-import type { Span } from './ast';
+import { children, type Regex, type Span } from './ast';
 
 export type Dialect = 'lecture' | 'flex';
 
 /** Largest count accepted by A^n and r{n,m}; bigger counts are almost always typos. */
 export const MAX_REPEAT = 1000;
 
+/**
+ * Deepest tree either parser returns (parentheses, chained postfix operators,
+ * and definition bodies all count). Deeper input is reported, not parsed, so
+ * recursive algorithms over the AST stay well inside the call stack.
+ */
+export const MAX_DEPTH = 500;
+export const tooDeep = `expression is nested too deeply (more than ${MAX_DEPTH} levels)`;
+
+/** Lecture notation: any Unicode whitespace is cosmetic. */
 export const isSpace = (ch: string): boolean => /\s/u.test(ch);
+/** flex ends a pattern only at ASCII whitespace; other spaces (e.g. U+00A0) are characters. */
+export const isFlexSpace = (ch: string | undefined): boolean =>
+	ch !== undefined && ch.length === 1 && ' \t\n\r\f\v'.includes(ch);
+export const isFlexBlank = (text: string): boolean => /^[ \t\n\r\f\v]*$/.test(text);
 export const isDigit = (ch: string | undefined): boolean =>
 	ch !== undefined && ch >= '0' && ch <= '9';
 const isHex = (ch: string | undefined): boolean => ch !== undefined && /^[0-9A-Fa-f]$/.test(ch);
@@ -26,6 +39,9 @@ export function charAt(text: string, i: number): string | undefined {
 
 /** Collects diagnostics with spans in one source. */
 export class Reporter {
+	/** Messages already given by infoOnce. */
+	private readonly noted = new Set<string>();
+
 	constructor(
 		readonly diagnostics: Diagnostic[],
 		readonly source: string | null,
@@ -44,6 +60,21 @@ export class Reporter {
 	info(message: string, start: number, end: number): void {
 		this.diagnostics.push({ severity: 'info', message, span: this.span(start, end) });
 	}
+
+	/** An info note given only for the first occurrence in this source. */
+	infoOnce(message: string, start: number, end: number): void {
+		if (this.noted.has(message)) return;
+		this.noted.add(message);
+		this.info(message, start, end);
+	}
+}
+
+const FLEX_U_NOTE =
+	'\\u{…} is accepted here but is not flex syntax; flex reads \\u as the letter u';
+
+/** Notes a successful flex escape at `i` that used the site's \u{…} extension. */
+export function noteFlexU(text: string, i: number, end: number, rep: Reporter): void {
+	if (text.startsWith('\\u{', i)) rep.infoOnce(FLEX_U_NOTE, i, end);
 }
 
 const NAMED: Record<Dialect, Record<string, number>> = {
@@ -122,6 +153,13 @@ export const POSIX_CLASSES: Record<string, CharSet> = {
 	graph: CharSet.range(0x21, 0x7e)
 };
 
+function unknownClass(whole: string, name: string): string {
+	const lower = name.toLowerCase();
+	return lower !== name && Object.hasOwn(POSIX_CLASSES, lower)
+		? `unknown character class ${whole}; class names are lowercase, e.g. [:${lower}:]`
+		: `unknown character class ${whole}`;
+}
+
 export interface ClassResult {
 	set: CharSet;
 	/** Offset just past the closing ']' (or the end of input when unterminated). */
@@ -131,9 +169,9 @@ export interface ClassResult {
 
 /**
  * Parses a bracket class starting at the '[' at `start`: ranges `a-z`,
- * negation `[^…]`, escapes, `[:alpha:]`-style classes, and a literal ']' first
- * or '-' first/last. Negated classes are complements over all code points (so
- * `[^a]` contains \n, as in flex).
+ * negation `[^…]`, escapes, `[:alpha:]` and `[:^alpha:]` classes, and a literal
+ * ']' first or '-' first/last. Negated classes are complements over all code
+ * points (so `[^a]` and `[[:^alpha:]]` contain \n, as in flex).
  */
 export function parseClass(
 	text: string,
@@ -160,6 +198,7 @@ export function parseClass(
 				i = esc.end;
 				return null;
 			}
+			if (dialect === 'flex') noteFlexU(text, i, esc.end, rep);
 			i = esc.end;
 			return esc.cp;
 		}
@@ -179,13 +218,14 @@ export function parseClass(
 		}
 		first = false;
 		if (text[i] === '[' && text[i + 1] === ':') {
-			const close = text.indexOf(':]', i + 2);
-			if (close >= 0 && close < limit && /^[a-z]+$/.test(text.slice(i + 2, close))) {
-				const name = text.slice(i + 2, close);
-				if (Object.hasOwn(POSIX_CLASSES, name))
-					for (const r of POSIX_CLASSES[name].ranges) parts.push([r[0], r[1]]);
-				else rep.error(`unknown character class [:${name}:]`, i, close + 2);
-				i = close + 2;
+			const m = /^\[:(\^?)([A-Za-z]+):\]/.exec(text.slice(i, limit));
+			if (m) {
+				const [whole, negated, name] = m;
+				if (Object.hasOwn(POSIX_CLASSES, name)) {
+					const set = negated ? POSIX_CLASSES[name].complement() : POSIX_CLASSES[name];
+					for (const r of set.ranges) parts.push([r[0], r[1]]);
+				} else rep.error(unknownClass(whole, name), i, i + whole.length);
+				i += whole.length;
 				continue;
 			}
 		}
@@ -231,25 +271,34 @@ export function orderDefinitions(
 	const order: string[] = [];
 	const cycles: string[][] = [];
 	const inCycle = new Set<string>();
-	const stack: string[] = [];
 
-	const visit = (name: string): void => {
-		const s = state.get(name);
-		if (s === 'done') return;
-		if (s === 'active') {
-			const cycle = [...stack.slice(stack.indexOf(name)), name];
-			cycles.push(cycle);
-			for (const n of cycle) inCycle.add(n);
-			return;
+	for (const root of names) {
+		if (state.has(root)) continue;
+		// An explicit stack, since definitions can chain arbitrarily deep.
+		const stack: { name: string; next: number }[] = [{ name: root, next: 0 }];
+		state.set(root, 'active');
+		while (stack.length > 0) {
+			const frame = stack[stack.length - 1];
+			const ds = deps.get(frame.name) ?? [];
+			if (frame.next < ds.length) {
+				const d = ds[frame.next++];
+				const s = deps.has(d) ? state.get(d) : 'done';
+				if (s === 'active') {
+					const k = stack.findIndex((f) => f.name === d);
+					const cycle = [...stack.slice(k).map((f) => f.name), d];
+					cycles.push(cycle);
+					for (const n of cycle) inCycle.add(n);
+				} else if (s === undefined) {
+					state.set(d, 'active');
+					stack.push({ name: d, next: 0 });
+				}
+				continue;
+			}
+			stack.pop();
+			state.set(frame.name, 'done');
+			if (!inCycle.has(frame.name)) order.push(frame.name);
 		}
-		state.set(name, 'active');
-		stack.push(name);
-		for (const d of deps.get(name) ?? []) if (deps.has(d)) visit(d);
-		stack.pop();
-		state.set(name, 'done');
-		if (!inCycle.has(name)) order.push(name);
-	};
-	for (const n of names) visit(n);
+	}
 	return { order, cycles };
 }
 
@@ -267,4 +316,34 @@ export function sortDiagnostics(ds: Diagnostic[]): Diagnostic[] {
 		.map((d, k) => ({ d, k }))
 		.sort((a, b) => (a.d.span?.start ?? -1) - (b.d.span?.start ?? -1) || a.k - b.k)
 		.map((x) => x.d);
+}
+
+const heights = new WeakMap<Regex, number>();
+
+/**
+ * Height of the tree, counting definition bodies (a leaf is 1). Iterative and
+ * cached per node, so shared definitions and long postfix chains are cheap.
+ */
+export function treeHeight(root: Regex): number {
+	const known = heights.get(root);
+	if (known !== undefined) return known;
+	const stack: { node: Regex; kids: Regex[]; next: number; max: number }[] = [
+		{ node: root, kids: children(root), next: 0, max: 0 }
+	];
+	for (;;) {
+		const top = stack[stack.length - 1];
+		if (top.next < top.kids.length) {
+			const kid = top.kids[top.next++];
+			const h = heights.get(kid);
+			if (h !== undefined) top.max = Math.max(top.max, h);
+			else stack.push({ node: kid, kids: children(kid), next: 0, max: 0 });
+			continue;
+		}
+		const h = top.max + 1;
+		heights.set(top.node, h);
+		stack.pop();
+		if (stack.length === 0) return h;
+		const parent = stack[stack.length - 1];
+		parent.max = Math.max(parent.max, h);
+	}
 }

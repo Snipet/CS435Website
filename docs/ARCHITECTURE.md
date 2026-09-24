@@ -107,8 +107,12 @@ Full flex pattern syntax: `x`, `\.`, `"string"`, `.` (any char but `\n`), `^`,
 `NAME pattern` lines in the definitions section. The slide prints trailing
 context as `r1 \ r2`; the site uses real flex syntax `r1/r2` and the notation
 page notes the difference. As in flex, `^` / `$` anywhere but the very start /
-end are ordinary characters, and `""` is ε. `\u{H…}` is accepted as an escape
-(flex itself has none) so every code point can be printed.
+end are ordinary characters, `""` is ε, only ASCII whitespace ends a pattern,
+and classes accept `[:alpha:]`-style names (lowercase) and their complements
+`[:^alpha:]`. `\u{H…}` is accepted as an escape (flex itself has none) so every
+code point can be printed; a pattern that uses it gets an info note, and
+`flexCaveats` lists what a flex printout writes that flex would read
+differently.
 
 ### 3.4 Automata formalism
 
@@ -232,10 +236,14 @@ interface DefinitionEntry {
 }
 interface DefinitionsResult {
 	defs: Map<string, Regex>;
+	invalid: Set<string>; // written but not built; pass { defs, invalid } to the parsers
 	entries: DefinitionEntry[];
 	diagnostics: Diagnostic[];
 }
 function parseDefinitions(text: string): DefinitionsResult; // lines "name = RE"
+// Both parsers report trees deeper than 500 levels (parentheses, chained postfix
+// operators, and definition bodies all count) as an error, so recursion over any
+// parsed AST is safe.
 
 // flex.ts
 interface FlexPattern {
@@ -265,11 +273,14 @@ function printRegex(
 		expandRefs?: boolean;
 		parens?: 'minimal' | 'full';
 		symbols?: 'quoted' | 'bare'; // lecture: 0 instead of '0'
+		names?: Iterable<string>; // bare: definition names in scope; such letters stay quoted
 	}
 ): string;
 function printFlexPattern(p: FlexPattern, opts?): string; // ^, regex, /trailing, $
+function flexCaveats(r: Regex): string[]; // ɸ and \u{…} in the flex printout (and its definitions)
 
-// analyze.ts
+// analyze.ts — each distinct node (e.g. a shared definition body) is handled once,
+// except by walk, which visits a definition once per use.
 function nullable(r: Regex): boolean;
 function symbolsOf(r: Regex): CharSet; // union of every chars node (refs expanded)
 function containsAny(r: Regex): boolean; // uses Σ

@@ -437,8 +437,6 @@ describe('parseRegex: errors', () => {
 
 	it('reports misused ellipses', () => {
 		const side = "… needs a single character on each side, e.g. 'a' | … | 'z'";
-		expect(errorsOf("'a' | …")).toEqual([[side, 6, 7]]);
-		expect(errorsOf("… | 'z'")).toEqual([[side, 0, 1]]);
 		expect(errorsOf("'ab' | … | 'z'")).toEqual([[side, 7, 8]]);
 		expect(errorsOf("[a-c] | … | 'z'")).toEqual([[side, 8, 9]]);
 		expect(errorsOf("'a' | ... | 'z'*")).toEqual([
@@ -450,6 +448,41 @@ describe('parseRegex: errors', () => {
 		expect(errorsOf("'a' … 'z'")).toEqual([
 			["… must be a whole alternative between two characters, e.g. 'a' | … | 'z'", 4, 5]
 		]);
+	});
+
+	it('reads a leading or trailing ellipsis as "and so on", as on the slides', () => {
+		const last = '… after the last alternative stands for "and so on"; list every alternative';
+		const first = '… before the first alternative stands for "and so on"; list every alternative';
+		expect(errorsOf("'a' | …")).toEqual([[last, 6, 7]]);
+		expect(errorsOf("… | 'z'")).toEqual([[first, 0, 1]]);
+		expect(errorsOf("('a' | 'b' | ...)")).toEqual([
+			['... after the last alternative stands for "and so on"; list every alternative', 13, 16]
+		]);
+		// Lexical Analysis II, slide 4 and Lexical Analysis, slide 28.
+		for (const text of [
+			"Keyword = 'if' | 'else' | …",
+			"keyword = 'for' | 'typename' | 'class' | …"
+		]) {
+			const res = parseDefinitions(text);
+			expect(res.diagnostics.map((d) => [d.message, d.span?.end])).toEqual([[last, text.length]]);
+		}
+	});
+
+	it('reports a lone | once', () => {
+		expect(errorsOf('|')).toEqual([['| needs an operand on each side', 0, 1]]);
+		expect(errorsOf('(|)')).toEqual([['| needs an operand on each side', 1, 2]]);
+		expect(errorsOf('a (|)')).toEqual([['| needs an operand on each side', 3, 4]]);
+	});
+
+	it('reports input nested too deeply instead of overflowing the stack', () => {
+		const deep = 'expression is nested too deeply (more than 500 levels)';
+		const parens = (n: number) => '('.repeat(n) + 'a' + ')'.repeat(n);
+		expect(parseRegex(parens(400)).ok).toBe(true);
+		expect(errorsOf(parens(2000))).toEqual([[deep, 500, 501]]);
+		expect(errorsOf('('.repeat(5000))).toEqual([[deep, 500, 501]]);
+		const stars = 'a' + '*'.repeat(10000);
+		expect(errorsOf(stars)).toEqual([[deep, 0, stars.length]]);
+		expect(errorsOf(`'a'^1${'^1'.repeat(600)}`)[0][0]).toBe(deep);
 	});
 
 	it('reports several independent errors at once', () => {
@@ -532,6 +565,41 @@ describe('parseDefinitions', () => {
 		expect([...res.defs.keys()]).toEqual(['c']);
 	});
 
+	it('reports each definition in a cycle once, even when it is in several', () => {
+		const res = parseDefinitions("a = b | c\nb = a\nc = a 'x'");
+		expect(res.diagnostics.map((d) => d.message)).toEqual([
+			'a is defined in terms of itself: a → b → a',
+			'b is defined in terms of itself: b → a → b',
+			'c is defined in terms of itself: c → a → c'
+		]);
+	});
+
+	it('lists the definitions that failed, for use with parseRegex', () => {
+		const res = parseDefinitions("digit = [0-9\nnumber = digit+\nx = 'x'\nloop = loop");
+		expect([...res.defs.keys()]).toEqual(['x']);
+		expect([...res.invalid]).toEqual(['digit', 'number', 'loop']);
+		const use = parseRegex('digit+ x', { defs: res.defs, invalid: res.invalid });
+		expect(use.ok).toBe(false);
+		expect(use.diagnostics.map((d) => [d.message, d.span?.start, d.span?.end])).toEqual([
+			['definition digit has errors', 0, 5]
+		]);
+		// A duplicate whose first definition worked is not listed.
+		expect(parseDefinitions("a = 'x'\na = 'y'").invalid.size).toBe(0);
+	});
+
+	it('orders long chains of definitions without recursion', () => {
+		const n = 30000;
+		const lines = Array.from({ length: n }, (_, k) => `d${k} = d${k + 1}`);
+		lines.push(`d${n} = 'a'`);
+		const res = parseDefinitions(lines.join('\n'));
+		const errors = res.diagnostics.filter((d) => d.severity === 'error');
+		// Each use adds a level, so only the last 500 or so build.
+		expect(errors[0].message).toBe('definition d1 has errors');
+		expect(errors.filter((d) => d.message.startsWith('expression is nested'))).toHaveLength(1);
+		expect(res.defs.has(`d${n}`)).toBe(true);
+		expect(res.defs.has('d0')).toBe(false);
+	});
+
 	it('reports duplicates on the later definition', () => {
 		const res = parseDefinitions('x = 1\ny = 2\nx = 3');
 		expect(res.diagnostics.map((d) => [d.message, d.span])).toEqual([
@@ -543,6 +611,15 @@ describe('parseDefinitions', () => {
 			['y', true],
 			['x', false]
 		]);
+	});
+
+	it("still reports problems in a duplicate's own RE", () => {
+		const res = parseDefinitions("a = 'x'\na = (");
+		expect(res.diagnostics.map((d) => [d.message, d.span?.start, d.span?.source])).toEqual([
+			['a is already defined on line 1', 8, 'a'],
+			['( is never closed', 12, 'a']
+		]);
+		expectTree(res.defs.get('a')!, sym('x'));
 	});
 
 	it('reports malformed lines', () => {
@@ -559,7 +636,12 @@ describe('parseDefinitions', () => {
 	});
 
 	it('returns an empty result for empty text', () => {
-		expect(parseDefinitions('')).toEqual({ defs: new Map(), entries: [], diagnostics: [] });
+		expect(parseDefinitions('')).toEqual({
+			defs: new Map(),
+			invalid: new Set(),
+			entries: [],
+			diagnostics: []
+		});
 	});
 });
 

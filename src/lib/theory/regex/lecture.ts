@@ -19,6 +19,7 @@ import { showChar } from '../chars';
 import { hasErrors, type Diagnostic } from '../diagnostics';
 import type { CharsNode, Regex, RepeatNode, Span } from './ast';
 import {
+	MAX_DEPTH,
 	MAX_REPEAT,
 	Reporter,
 	charAt,
@@ -28,7 +29,9 @@ import {
 	parseClass,
 	readEscape,
 	rotateCycle,
-	sortDiagnostics
+	sortDiagnostics,
+	tooDeep,
+	treeHeight
 } from './internal';
 
 export type ParseResult =
@@ -61,6 +64,12 @@ export interface DefinitionEntry {
 export interface DefinitionsResult {
 	/** Successfully built definitions, in source order. */
 	defs: Map<string, Regex>;
+	/**
+	 * Names of definitions that were written but could not be built. Pass it with
+	 * `defs` to parseRegex / parseFlexPattern so a use of one is an error rather
+	 * than being read as symbols.
+	 */
+	invalid: Set<string>;
 	/** One entry per definition line, in source order. */
 	entries: DefinitionEntry[];
 	diagnostics: Diagnostic[];
@@ -319,6 +328,10 @@ interface RangeInfo {
 
 class Parser {
 	private k = 0;
+	/** Open parentheses around the current position. */
+	private depth = 0;
+	/** Set when input nests too deeply; parsing stops and unwinds quietly. */
+	private aborted = false;
 	/** One-character literals and symbols: the only operands an ellipsis accepts. */
 	private readonly literals = new WeakSet<Regex>();
 	private readonly ranges = new WeakMap<Regex, RangeInfo>();
@@ -367,14 +380,26 @@ class Parser {
 	private parseAlt(): Regex {
 		const ops: (Regex | Ellipsis)[] = [];
 		let lastBar: Token | null = null;
+		// A bar already reported as having no operand on either side.
+		let bothSides: Token | null = null;
 		for (;;) {
 			const t = this.peek();
 			if (t.kind === 'ellipsis' && isOperandEnd(this.peek(1))) {
 				this.next();
 				ops.push({ ellipsis: t });
 			} else if (isOperandEnd(t)) {
-				if (lastBar) this.rep.error('missing operand after |', lastBar.start, lastBar.end);
-				else if (t.kind === 'bar') this.rep.error('missing operand before |', t.start, t.end);
+				if (lastBar) {
+					if (lastBar !== bothSides)
+						this.rep.error('missing operand after |', lastBar.start, lastBar.end);
+				} else if (t.kind === 'bar') {
+					const lone = isOperandEnd(this.peek(1)) && this.peek(1).kind !== 'bar';
+					this.rep.error(
+						lone ? '| needs an operand on each side' : 'missing operand before |',
+						t.start,
+						t.end
+					);
+					if (lone) bothSides = t;
+				}
 				ops.push(this.placeholder(t.start, t.start));
 			} else ops.push(this.parseConcat());
 			if (this.peek().kind !== 'bar') break;
@@ -396,6 +421,15 @@ class Parser {
 				continue;
 			}
 			const tok = op.ellipsis;
+			if (j === 0 || j === ops.length - 1) {
+				// Keyword = 'if' | 'else' | … — "and so on", not a range.
+				this.rep.error(
+					`${this.src(tok)} ${j === 0 ? 'before the first' : 'after the last'} alternative stands for "and so on"; list every alternative`,
+					tok.start,
+					tok.end
+				);
+				continue;
+			}
 			const left = out[out.length - 1];
 			const right = ops[j + 1];
 			const leftRange = left ? this.rangeOf(left) : null;
@@ -576,11 +610,19 @@ class Parser {
 					this.rep.error('empty group (); use ε for the empty string', t.start, close.end);
 					return single(this.placeholder(t.start, close.end));
 				}
+				if (this.depth >= MAX_DEPTH) {
+					this.rep.error(tooDeep, t.start, t.end);
+					this.aborted = true;
+					this.k = this.toks.length - 1;
+					return single(this.placeholder(t.start, t.end));
+				}
+				this.depth++;
 				const inner = this.parseAlt();
+				this.depth--;
 				if (this.peek().kind === 'rparen') {
 					const close = this.next();
 					inner.span = this.span(t.start, close.end);
-				} else this.rep.error('( is never closed', t.start, t.end);
+				} else if (!this.aborted) this.rep.error('( is never closed', t.start, t.end);
 				return { nodes: [inner], grouped: true };
 			}
 			case 'postfix':
@@ -686,6 +728,7 @@ function parseRange(
 	}
 	const toks = tokenize(text, from, to, rep);
 	const regex = new Parser(toks, text, rep, defs, invalid).parseTop();
+	if (!hasErrors(diagnostics) && treeHeight(regex) > MAX_DEPTH) rep.error(tooDeep, from, to);
 	const sorted = sortDiagnostics(diagnostics);
 	return hasErrors(sorted)
 		? { ok: false, diagnostics: sorted }
@@ -779,8 +822,11 @@ export function parseDefinitions(text: string): DefinitionsResult {
 	}
 
 	const { order, cycles } = orderDefinitions([...byName.keys()], deps);
+	const inCycle = new Set<string>();
 	for (const cycle of cycles)
-		for (const name of new Set(cycle)) {
+		for (const name of cycle) {
+			if (inCycle.has(name)) continue;
+			inCycle.add(name);
 			const walk = rotateCycle(cycle, name).join(' → ');
 			diagnostics.push({
 				severity: 'error',
@@ -789,27 +835,38 @@ export function parseDefinitions(text: string): DefinitionsResult {
 			});
 		}
 
+	// Dependencies come first in `order`, so any definition name not yet built has failed.
+	const names = new Set(byName.keys());
 	const built = new Map<string, Regex>();
-	for (const name of order) {
-		const p = byName.get(name)!;
+	const build = (p: Pending): Regex | null => {
+		const name = p.entry.name;
 		if (p.exprStart >= p.exprEnd) {
 			diagnostics.push({
 				severity: 'error',
 				message: `missing RE after ${name} =`,
 				span: { start: p.eq, end: p.eq + 1, source: name }
 			});
-			continue;
+			return null;
 		}
-		const invalid = new Set([...byName.keys()].filter((n) => !built.has(n)));
-		const res = parseRange(text, p.exprStart, p.exprEnd, name, built, invalid);
+		const res = parseRange(text, p.exprStart, p.exprEnd, name, built, names);
 		diagnostics.push(...res.diagnostics);
-		if (res.ok) {
-			p.entry.regex = res.regex;
-			built.set(name, res.regex);
-		}
+		return res.ok ? res.regex : null;
+	};
+	for (const name of order) {
+		const p = byName.get(name)!;
+		p.entry.regex = build(p);
+		if (p.entry.regex) built.set(name, p.entry.regex);
 	}
+	// A duplicate is never used, but its own problems are still reported.
+	for (const p of pending) if (p.duplicate) build(p);
 
 	const defs = new Map<string, Regex>();
 	for (const p of live) if (p.entry.regex) defs.set(p.entry.name, p.entry.regex);
-	return { defs, entries: pending.map((p) => p.entry), diagnostics: sortDiagnostics(diagnostics) };
+	const invalid = new Set(pending.map((p) => p.entry.name).filter((n) => !defs.has(n)));
+	return {
+		defs,
+		invalid,
+		entries: pending.map((p) => p.entry),
+		diagnostics: sortDiagnostics(diagnostics)
+	};
 }

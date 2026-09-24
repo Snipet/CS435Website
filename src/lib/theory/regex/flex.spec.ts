@@ -201,6 +201,22 @@ describe('parseFlexPattern: syntax', () => {
 		expect(set('[ "]').equals(CharSet.of(' "'))).toBe(true);
 	});
 
+	it('[:^name:] is the complement; other class names are errors', () => {
+		const r = flex('[[:^alpha:]]');
+		if (r.kind !== 'chars') throw new Error('shape');
+		expect(r.set.equals(letter.set.complement())).toBe(true);
+		expect(r.set.has('\n')).toBe(true);
+		const mixed = flex('[[:^digit:][:digit:]]');
+		expect(mixed.kind === 'chars' && mixed.set.equals(CharSet.ANY)).toBe(true);
+		const lower = (name: string) =>
+			`unknown character class [:${name}:]; class names are lowercase, e.g. [:alpha:]`;
+		expect(errorsOf('[[:ALPHA:]]')).toEqual([[lower('ALPHA'), 1, 10]]);
+		expect(errorsOf('[[:Alpha:]]')).toEqual([[lower('Alpha'), 1, 10]]);
+		expect(errorsOf('[[:^ALPHA:]]')).toEqual([[lower('^ALPHA'), 1, 11]]);
+		expect(errorsOf('[[:FOO:]]')).toEqual([['unknown character class [:FOO:]', 1, 8]]);
+		expect(errorsOf('[[:^foo:]]')).toEqual([['unknown character class [:^foo:]', 1, 9]]);
+	});
+
 	it('escapes: \\x41, octal, named, and any other \\c', () => {
 		expectTree(flex('\\x41'), sym('A'));
 		expectTree(flex('\\101'), sym('A'));
@@ -211,6 +227,37 @@ describe('parseFlexPattern: syntax', () => {
 		expectTree(flex('\\ '), sym(' '));
 		expectTree(flex('\\u{3B5}'), sym('ε'));
 		expectTree(flex('"\\"\\n"'), sym('"\n'));
+	});
+
+	it('notes the \\u{…} extension once per pattern', () => {
+		const note = '\\u{…} is accepted here but is not flex syntax; flex reads \\u as the letter u';
+		expect(infosOf('\\u{2}')).toEqual([[note, 0, 5]]);
+		expect(infosOf('a"\\u{41}"[\\u{42}]\\u{43}')).toEqual([[note, 2, 8]]);
+		expect(infosOf('[x\\u{42}]')).toEqual([[note, 2, 8]]);
+		expect(infosOf('\\u')).toEqual([]);
+	});
+
+	it('only ASCII whitespace ends a pattern; other spaces are characters', () => {
+		for (const sp of [' ', ' ', '　', '﻿']) {
+			expectTree(flex(`a${sp}b`), cat(sym('a'), sym(sp), sym('b')));
+			expectTree(flex(sp), sym(sp));
+			expectTree(flex(`a${sp}`), cat(sym('a'), sym(sp)));
+		}
+		expect(errorsOf('a\fb')[0][0]).toBe(
+			'unquoted space ends a flex pattern; write " " or \\  for a space'
+		);
+		expect(pattern('a$\r\n').eol).toBe(true);
+	});
+
+	it('reports input nested too deeply instead of overflowing the stack', () => {
+		const deep = 'expression is nested too deeply (more than 500 levels)';
+		const parens = (n: number) => '('.repeat(n) + 'a' + ')'.repeat(n);
+		expect(parseFlexPattern(parens(400)).ok).toBe(true);
+		expect(errorsOf(parens(2000))).toEqual([[deep, 500, 501]]);
+		const stars = 'a' + '*'.repeat(10000);
+		expect(errorsOf(stars)).toEqual([[deep, 0, stars.length]]);
+		const trailing = 'a/b' + '?'.repeat(600);
+		expect(errorsOf(trailing)).toEqual([[deep, 0, trailing.length]]);
 	});
 
 	it('"a b" and "" (the empty string)', () => {
@@ -285,6 +332,9 @@ describe('parseFlexPattern: errors', () => {
 		expect(errorsOf('a|')).toEqual([['missing operand after |', 1, 2]]);
 		expect(errorsOf('|a')).toEqual([['missing operand before |', 0, 1]]);
 		expect(errorsOf('*a')).toEqual([['* has nothing to repeat', 0, 1]]);
+		expect(errorsOf('|')).toEqual([['| needs an operand on each side', 0, 1]]);
+		expect(errorsOf('(|)')).toEqual([['| needs an operand on each side', 1, 2]]);
+		expect(errorsOf('|$')).toEqual([['| needs an operand on each side', 0, 1]]);
 	});
 
 	it('rejects misplaced trailing context and anchors', () => {
@@ -335,6 +385,44 @@ describe('parseFlexDefinitions', () => {
 			['9X is not a valid name: use letters, digits, _ and -, starting with a letter or _', '9X']
 		]);
 		expect(res.defs.size).toBe(0);
+	});
+
+	it('finds references exactly where the parser does', () => {
+		// [a[:] is the class {a, [, :}, so {A} is a real reference and A, B form a cycle.
+		const cycle = [
+			'A is defined in terms of itself: {A} → {B} → {A}',
+			'B is defined in terms of itself: {B} → {A} → {B}'
+		];
+		const res = parseFlexDefinitions(lines(['A', '{B}'], ['B', '[a[:]{A}']));
+		expect(res.diagnostics.map((d) => d.message)).toEqual(cycle);
+		// A later ':]' does not hide the reference either.
+		const later = parseFlexDefinitions(lines(['A', '{B}'], ['B', '[x[:]{A}":]"']));
+		expect(later.diagnostics.map((d) => d.message)).toEqual(cycle);
+	});
+
+	it('reports each definition in a cycle once, even when it is in several', () => {
+		const res = parseFlexDefinitions(lines(['A', '{B}|{C}'], ['B', '{A}'], ['C', '{A}x']));
+		expect(res.diagnostics.map((d) => d.message)).toEqual([
+			'A is defined in terms of itself: {A} → {B} → {A}',
+			'B is defined in terms of itself: {B} → {A} → {B}',
+			'C is defined in terms of itself: {C} → {A} → {C}'
+		]);
+	});
+
+	it("lists the definitions that failed, and still checks a duplicate's own pattern", () => {
+		const res = parseFlexDefinitions(
+			lines(['DIGIT', '[0-9'], ['NUM', '{DIGIT}+'], ['X', 'x'], ['X', '(y'])
+		);
+		expect([...res.invalid]).toEqual(['DIGIT', 'NUM']);
+		expect(res.diagnostics.map((d) => [d.message, d.span?.source])).toEqual([
+			['unterminated class: missing ]', 'DIGIT'],
+			['definition {DIGIT} has errors', 'NUM'],
+			['X is already defined on line 3', 'X'],
+			['( is never closed', 'X']
+		]);
+		expectTree(res.defs.get('X')!, sym('x'));
+		const use = parseFlexPattern('{NUM}|{X}', { defs: res.defs, invalid: res.invalid });
+		expect(use.diagnostics.map((d) => d.message)).toEqual(['definition {NUM} has errors']);
 	});
 
 	it('keeps anchors and trailing context out of definitions', () => {

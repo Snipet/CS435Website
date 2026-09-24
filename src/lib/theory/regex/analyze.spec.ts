@@ -143,6 +143,49 @@ describe('walk / nodeAtPath', () => {
 	});
 });
 
+describe('shared definitions', () => {
+	// d0 = x, dk = d(k-1) d(k-1): the expanded tree has 2^k leaves.
+	const chain = (x: string, levels: number) => {
+		const lines = [`d0 = ${x}`];
+		for (let k = 1; k <= levels; k++) lines.push(`d${k} = d${k - 1} d${k - 1}`);
+		const res = parseDefinitions(lines.join('\n'));
+		expect(res.diagnostics).toEqual([]);
+		return res.defs.get(`d${levels}`)!;
+	};
+
+	it('are analyzed once per definition, not once per use', () => {
+		const started = performance.now();
+		const r = chain("'a'", 40);
+		expect(nullable(r)).toBe(false);
+		expect(symbolsOf(r).equals(CharSet.single('a'))).toBe(true);
+		expect(containsAny(r)).toBe(false);
+		expect(refsIn(r)).toHaveLength(40);
+		expect(refsIn(r).slice(0, 3)).toEqual(['d39', 'd38', 'd37']);
+		expect(resolveAny(r, CharSet.of('ab'))).toBe(r);
+		expect(regexEquals(r, chain("'a'", 40))).toBe(true);
+		expect(regexEquals(r, chain("'b'", 40))).toBe(false);
+		const expanded = expandRefs(r);
+		expect(refsIn(expanded)).toEqual([]);
+		expect(nullable(expanded)).toBe(false);
+		expect(regexEquals(expanded, expandRefs(chain("'a'", 40)))).toBe(true);
+		expect(regexEquals(expanded, expandRefs(chain("'b'", 40)))).toBe(false);
+		expect(nullable(chain("'a'*", 40))).toBe(true);
+		expect(performance.now() - started).toBeLessThan(1000);
+	});
+
+	it('resolve Σ once per definition and share the result', () => {
+		const r = chain('Σ', 40);
+		expect(containsAny(r)).toBe(true);
+		const resolved = resolveAny(r, CharSet.of('01'));
+		expect(containsAny(resolved)).toBe(false);
+		expect(symbolsOf(resolved).equals(CharSet.of('01'))).toBe(true);
+		if (resolved.kind !== 'concat') throw new Error('shape');
+		const [left, right] = resolved.parts;
+		if (left.kind !== 'ref' || right.kind !== 'ref') throw new Error('shape');
+		expect(left.body).toBe(right.body);
+	});
+});
+
 describe('expandRefs / regexEquals', () => {
 	it('expands nested references', () => {
 		const r = expandRefs(lecture('id'));
