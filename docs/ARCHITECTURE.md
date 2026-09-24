@@ -96,6 +96,8 @@ hand-roll quoting.
   is a range. `[a-z]`-style classes are also accepted.
 - Regular definitions: one per line, `name = RE`. Lines starting with `//` are
   comments. Definitions may appear in any order; cycles are errors.
+- Extensions so every AST prints and reads back: `A^{n,m}` / `A^{n,}` (bounded
+  repetition), `\u{H…}` escapes, `A^*` / `A^+` as spellings of `A*` / `A+`.
 
 ### 3.3 Flex dialect (Scanning with Flex)
 
@@ -104,7 +106,13 @@ Full flex pattern syntax: `x`, `\.`, `"string"`, `.` (any char but `\n`), `^`,
 `r1r2`, `r1|r2`, `(r)`, `r1/r2` (trailing context), `{NAME}`. Definitions are
 `NAME pattern` lines in the definitions section. The slide prints trailing
 context as `r1 \ r2`; the site uses real flex syntax `r1/r2` and the notation
-page notes the difference.
+page notes the difference. As in flex, `^` / `$` anywhere but the very start /
+end are ordinary characters, `""` is ε, only ASCII whitespace ends a pattern,
+and classes accept `[:alpha:]`-style names (lowercase) and their complements
+`[:^alpha:]`. `\u{H…}` is accepted as an escape (flex itself has none) so every
+code point can be printed; a pattern that uses it gets an info note, and
+`flexCaveats` lists what a flex printout writes that flex would read
+differently.
 
 ### 3.4 Automata formalism
 
@@ -211,7 +219,12 @@ type ParseResult =
 	{ ok: true; regex: Regex; diagnostics: Diagnostic[] } | { ok: false; diagnostics: Diagnostic[] };
 function parseRegex(
 	text: string,
-	opts?: { defs?: ReadonlyMap<string, Regex>; source?: string | null }
+	// invalid: names of definitions that failed; a use is an error, not symbols
+	opts?: {
+		defs?: ReadonlyMap<string, Regex>;
+		source?: string | null;
+		invalid?: ReadonlySet<string>;
+	}
 ): ParseResult;
 interface DefinitionEntry {
 	name: string;
@@ -223,10 +236,14 @@ interface DefinitionEntry {
 }
 interface DefinitionsResult {
 	defs: Map<string, Regex>;
+	invalid: Set<string>; // written but not built; pass { defs, invalid } to the parsers
 	entries: DefinitionEntry[];
 	diagnostics: Diagnostic[];
 }
 function parseDefinitions(text: string): DefinitionsResult; // lines "name = RE"
+// Both parsers report trees deeper than 500 levels (parentheses, chained postfix
+// operators, and definition bodies all count) as an error, so recursion over any
+// parsed AST is safe.
 
 // flex.ts
 interface FlexPattern {
@@ -240,19 +257,30 @@ type FlexParseResult =
 	| { ok: false; diagnostics: Diagnostic[] };
 function parseFlexPattern(
 	text: string,
-	opts?: { defs?: ReadonlyMap<string, Regex> }
+	opts?: { defs?: ReadonlyMap<string, Regex>; invalid?: ReadonlySet<string> }
 ): FlexParseResult;
+// Spans are relative to each `text`, or absolute when textStart/nameStart are given.
 function parseFlexDefinitions(
-	lines: { name: string; text: string; line: number }[]
+	lines: { name: string; text: string; line: number; textStart?: number; nameStart?: number }[]
 ): DefinitionsResult;
+const FLEX_DOT: CharSet; // `.` = every character except \n
 
 // print.ts
 function printRegex(
 	r: Regex,
-	opts?: { dialect?: 'lecture' | 'flex'; expandRefs?: boolean; parens?: 'minimal' | 'full' }
+	opts?: {
+		dialect?: 'lecture' | 'flex';
+		expandRefs?: boolean;
+		parens?: 'minimal' | 'full';
+		symbols?: 'quoted' | 'bare'; // lecture: 0 instead of '0'
+		names?: Iterable<string>; // bare: definition names in scope; such letters stay quoted
+	}
 ): string;
+function printFlexPattern(p: FlexPattern, opts?): string; // ^, regex, /trailing, $
+function flexCaveats(r: Regex): string[]; // ɸ and \u{…} in the flex printout (and its definitions)
 
-// analyze.ts
+// analyze.ts — each distinct node (e.g. a shared definition body) is handled once,
+// except by walk, which visits a definition once per use.
 function nullable(r: Regex): boolean;
 function symbolsOf(r: Regex): CharSet; // union of every chars node (refs expanded)
 function containsAny(r: Regex): boolean; // uses Σ
@@ -260,6 +288,8 @@ function resolveAny(r: Regex, alphabet: CharSet): Regex;
 function refsIn(r: Regex): string[];
 function walk(r: Regex, visit: (node: Regex, path: number[], depth: number) => void): void;
 function nodeAtPath(r: Regex, path: number[]): Regex | undefined;
+function expandRefs(r: Regex): Regex;
+function regexEquals(a: Regex, b: Regex): boolean; // structure only (no spans/text)
 ```
 
 ### 4.3 Automata (`theory/automata/`)
