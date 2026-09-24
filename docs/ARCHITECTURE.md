@@ -511,15 +511,28 @@ with its `ToolMeta`, and keeps its user-editable state in the URL hash through
 
 - `AutomatonView.svelte` — SVG renderer following §3.5. Props: `automaton`,
   `positions?` (pinned; otherwise automatic left-to-right layout),
-  `highlight?: { active?, taken?, dim?, dimTransitions?, tone? }`,
-  `groups?: { id, label, states, tone? }[]` (fragment outlines, partition
-  blocks), `names?: NamedSet[]` for labels, `editable?`, `selected?` (bindable),
-  callbacks `onchange`, `onstateclick`, `ontransitionclick`, plus `height`,
-  `ariaLabel`. Supports pan/zoom and "fit".
-- `TransitionTable.svelte` — table per §3.7 with row/cell highlight and click
-  callbacks.
-- `layout.ts` — pure layout (`layoutAutomaton`) returning node positions and
-  edge geometry; unit-tested.
+  `highlight?: { active?, taken?, dim?, dimTransitions?, tone? }` (`taken` and
+  `dimTransitions` hold transition ids; `tone` maps a state to `'accept'`,
+  `'reject'` or `'info'`), `groups?: { id, label?, states, tone? }[]`
+  (fragment outlines, partition blocks; `tone` is a palette index 0–5),
+  `names?: NamedSet[]` for labels, `editable?`, `selected?` (bindable:
+  `{ kind: 'state', id } | { kind: 'edge', key } | null`), callbacks
+  `onchange(automaton, positions)`, `onstateclick(id)`,
+  `ontransitionclick(transitionIds, edgeKey)`, plus `height` (px or `'auto'`),
+  `ariaLabel` and `startLabel` (text on the start arrow, e.g. `start`).
+  Supports pan/zoom and "fit". Types are in `graph/types.ts`.
+- `TransitionTable.svelte` — table per §3.7: `automaton`, `classes?`, `names?`,
+  `highlight?: { state?, cell?: { state, column } }` (the ε column is index
+  `classes.length`), `onCellClick?(state, column)`, `compact?`.
+- `layout.ts` — pure layout (`layoutAutomaton(a, { positions?, names?,
+startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
+  `edgeKey`, the start arrow, and bounds; unit-tested. To keep states in place
+  while a construction grows, lay out the final machine once and pass its node
+  centers as `positions`.
+- `label-text.ts` — `parseLabelText` / `labelText`: the editable text form of a
+  transition label (`0,1`, `a-z`, `ε`, `' '`, `[^\n]`, named sets).
+- `edit.ts` — immutable editing operations used by the editor (add or remove
+  states with renumbering, set edge labels, …).
 
 ### 5.3 UI kit (`$lib/components/ui/`)
 
