@@ -45,7 +45,8 @@ src/
       types.ts                ToolMeta
       registry.ts             glob-imports catalog/*.ts
       catalog/<slug>.ts       one file per tool: `export const tool: ToolMeta`
-    url-state.ts              share-link state in the URL hash
+    url-state.ts              share-link state in the URL hash (re-exports url-state.svelte.ts,
+                              which holds the code because syncToHash uses runes)
   routes/
     +page.svelte              home: tools grouped by compiler stage
     notation/+page.svelte     notation reference
@@ -505,7 +506,16 @@ function longestMatchRun(
 
 Every tool page renders inside `ToolPage` (`$lib/components/ui/ToolPage.svelte`)
 with its `ToolMeta`, and keeps its user-editable state in the URL hash through
-`$lib/url-state.ts` so the "Copy link" button reproduces the exact view.
+`$lib/url-state.ts` so the "Copy link" button reproduces the exact view:
+
+```ts
+let state = $state({ regex: '(1 | 0)*1', input: '' }); // JSON-serializable
+syncToHash(() => state, { onLoad: (v) => Object.assign(state, v), validate });
+```
+
+The hash is read on mount and on `hashchange`, and written (debounced, hash
+only) when the state changes; an untouched page keeps a clean URL. Link to a
+tool with `toolHref(slug)` from `$lib/site`.
 
 ### 5.2 Graph components (`$lib/components/graph/`)
 

@@ -73,6 +73,24 @@
 	--edge: #5b5f69;
 	--dead: #9aa0a6;
 
+	/* Token palette: colors for rules/tokens in scanners (index mod 6) */
+	--tok-0: #2f64c4;
+	--tok-0-soft: #e7eefb;
+	--tok-1: #15805a;
+	--tok-1-soft: #dff2ea;
+	--tok-2: #b9540f;
+	--tok-2-soft: #fcebdd;
+	--tok-3: #8248bd;
+	--tok-3-soft: #f1e9fa;
+	--tok-4: #b92d69;
+	--tok-4-soft: #fbe5ee;
+	--tok-5: #6f6414;
+	--tok-5-soft: #f2eed7;
+
+	/* Overlays */
+	--backdrop: rgb(20 20 30 / 0.28);
+	--shadow-lg: 0 2px 6px rgb(20 20 30 / 0.08), 0 12px 32px rgb(20 20 30 / 0.14);
+
 	color-scheme: light;
 }
 
@@ -108,6 +126,20 @@
 		--state-stroke: #c9c7c1;
 		--edge: #9c9b96;
 		--dead: #6b6e75;
+		--tok-0: #86abf0;
+		--tok-0-soft: #1d2a45;
+		--tok-1: #5fcca3;
+		--tok-1-soft: #143128;
+		--tok-2: #f0a066;
+		--tok-2-soft: #3a2515;
+		--tok-3: #c4a2f0;
+		--tok-3-soft: #2c2340;
+		--tok-4: #f07fab;
+		--tok-4-soft: #3b1b29;
+		--tok-5: #d6c76e;
+		--tok-5-soft: #33301a;
+		--backdrop: rgb(0 0 0 / 0.55);
+		--shadow-lg: 0 2px 6px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.5);
 		color-scheme: dark;
 	}
 }
@@ -143,7 +175,36 @@
 	--state-stroke: #c9c7c1;
 	--edge: #9c9b96;
 	--dead: #6b6e75;
+	--tok-0: #86abf0;
+	--tok-0-soft: #1d2a45;
+	--tok-1: #5fcca3;
+	--tok-1-soft: #143128;
+	--tok-2: #f0a066;
+	--tok-2-soft: #3a2515;
+	--tok-3: #c4a2f0;
+	--tok-3-soft: #2c2340;
+	--tok-4: #f07fab;
+	--tok-4-soft: #3b1b29;
+	--tok-5: #d6c76e;
+	--tok-5-soft: #33301a;
+	--backdrop: rgb(0 0 0 / 0.55);
+	--shadow-lg: 0 2px 6px rgb(0 0 0 / 0.4), 0 12px 32px rgb(0 0 0 / 0.5);
 	color-scheme: dark;
+}
+
+/* Syntax colors. Aliases of the palette above, so they follow the theme. */
+:root {
+	--syn-literal: var(--accept);
+	--syn-string: var(--accept);
+	--syn-operator: var(--accent);
+	--syn-paren: var(--text-3);
+	--syn-special: var(--epsilon);
+	--syn-name: var(--tok-2);
+	--syn-keyword: var(--tok-3);
+	--syn-number: var(--tok-0);
+	--syn-escape: var(--tok-4);
+	--syn-comment: var(--text-3);
+	--syn-punct: var(--text-3);
 }
 
 /* ------------------------------------------------------------------ */
@@ -272,6 +333,11 @@ table {
 	font-variant-ligatures: none;
 }
 
+/* Keep in-page anchor targets clear of the sticky header. */
+html {
+	scroll-padding-top: calc(56px + var(--space-4));
+}
+
 @media (prefers-reduced-motion: reduce) {
 	*,
 	*::before,
@@ -281,4 +347,63 @@ table {
 		transition-duration: 0.01ms !important;
 		scroll-behavior: auto !important;
 	}
+}
+
+/* ------------------------------------------------------------------ */
+/* Highlight classes (CodeEditor / RegexField token coloring)           */
+/* ------------------------------------------------------------------ */
+
+.hl-literal {
+	color: var(--syn-literal);
+}
+.hl-string {
+	color: var(--syn-string);
+}
+.hl-operator {
+	color: var(--syn-operator);
+	font-weight: 600;
+}
+.hl-paren {
+	color: var(--syn-paren);
+}
+.hl-special {
+	color: var(--syn-special);
+}
+.hl-name {
+	color: var(--syn-name);
+}
+.hl-keyword {
+	color: var(--syn-keyword);
+	font-weight: 600;
+}
+.hl-number {
+	color: var(--syn-number);
+}
+.hl-escape {
+	color: var(--syn-escape);
+}
+.hl-comment {
+	color: var(--syn-comment);
+	font-style: italic;
+}
+.hl-punct {
+	color: var(--syn-punct);
+}
+.hl-tok-0 {
+	color: var(--tok-0);
+}
+.hl-tok-1 {
+	color: var(--tok-1);
+}
+.hl-tok-2 {
+	color: var(--tok-2);
+}
+.hl-tok-3 {
+	color: var(--tok-3);
+}
+.hl-tok-4 {
+	color: var(--tok-4);
+}
+.hl-tok-5 {
+	color: var(--tok-5);
 }
