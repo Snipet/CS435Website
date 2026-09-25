@@ -14,7 +14,6 @@
 		RegexField,
 		SegmentedControl,
 		StepControls,
-		Stepper,
 		Tabs,
 		Toggle,
 		ToolPage
@@ -33,14 +32,15 @@
 	import RunBoth from '$lib/tools/subset/RunBoth.svelte';
 	import StatePicker from '$lib/tools/subset/StatePicker.svelte';
 	import WorklistTable from '$lib/tools/subset/WorklistTable.svelte';
+	import { LimitedStepper } from '$lib/tools/subset/limited-stepper';
 	import {
 		MAX_DFA_STATES,
 		MAX_DRAWN_DFA,
 		MAX_DRAWN_NFA_AUTO,
 		MAX_DRAWN_NFA_GRID,
 		MAX_NFA_STATES,
+		MAX_WORKLIST_CELLS,
 		blowupNfaText,
-		buildNfa,
 		checkPicks,
 		classText,
 		construct,
@@ -51,7 +51,9 @@
 		nfaHighlight,
 		partialDfa,
 		powerOfTwoText,
+		predictionLimit,
 		predictionView,
+		rebuildNfa,
 		setText,
 		stateName,
 		superscript,
@@ -77,7 +79,9 @@
 	// NFA → DFA
 	// ------------------------------------------------------------------
 
-	const build = $derived(buildNfa(model));
+	/** The previous build (not reactive): an edit that leaves the machine as it was keeps its NFA. */
+	let previousBuild: NfaBuild | null = null;
+	const build = $derived.by(() => (previousBuild = rebuildNfa(model, previousBuild)));
 	/**
 	 * The last NFA built. While the input has problems (mid-edit), the page keeps
 	 * showing its construction, dimmed, instead of tearing the panels down.
@@ -110,7 +114,16 @@
 	const dfaFrame = $derived(dfaLayout?.bounds);
 
 	const total = $derived(result?.steps.length ?? 0);
-	const stepper = new Stepper(() => total, { index: Number.MAX_SAFE_INTEGER, speed: 1.2 });
+
+	let prediction = $state.raw<Prediction>(newPrediction());
+	/** While predicting, the stepper stops before the move of the target to predict. */
+	const limit = $derived(model.predict && result ? predictionLimit(result, prediction) : null);
+
+	const stepper = new LimitedStepper(
+		() => total,
+		() => limit,
+		{ index: Number.MAX_SAFE_INTEGER, speed: 1.2 }
+	);
 	const index = $derived(stepper.index);
 	const step = $derived(result?.steps[index]);
 	const shownDfa = $derived(dfa ? partialDfa(dfa, step) : null);
@@ -135,8 +148,6 @@
 	// ------------------------------------------------------------------
 	// Predictions
 	// ------------------------------------------------------------------
-
-	let prediction = $state.raw<Prediction>(newPrediction());
 
 	const pv = $derived(model.predict && result ? predictionView(result, index, prediction) : null);
 	const pending = $derived(pv?.pending ?? null);
@@ -235,12 +246,16 @@
 		else stepper.last();
 	}
 
-	/** Showing or hiding ∅ changes the steps; a view of the finished DFA stays on it. */
+	/**
+	 * Showing or hiding ∅ changes the steps: a view of the finished DFA stays on
+	 * it, and predictions start again from the first step.
+	 */
 	function setShowEmpty(on: boolean) {
-		const atEnd = stepper.atEnd;
+		const atEnd = stepper.index >= total - 1;
 		model.showEmpty = on;
 		resetPrediction();
-		if (atEnd) stepper.last();
+		if (model.predict) stepper.first();
+		else if (atEnd) stepper.last();
 	}
 
 	/** Narrow screens size diagrams to their drawing; wide ones line the two up. */
@@ -289,8 +304,9 @@
 			lastGood = build.nfa ? build : null;
 			defsOpen = model.defs !== '';
 			stepper.pause();
-			resetPrediction();
+			// Predictions go on from the saved step: the steps up to it are revealed.
 			const s = stepFromHash(v);
+			prediction = newPrediction(s ?? Number.MAX_SAFE_INTEGER);
 			if (s === null) stepper.last();
 			else stepper.set(s);
 		}
@@ -339,9 +355,9 @@
 	<span class="f nowrap">{from} →<sup>{symbol}</sup> {to}</span>
 {/snippet}
 
-{#snippet list(items: string[])}
-	{#each items.slice(0, MAX_LISTED) as item, j (j)}{j > 0 ? ', ' : ''}<span class="f">{item}</span
-		>{/each}{items.length > MAX_LISTED ? ', …' : ''}
+{#snippet list(items: string[], max: number = MAX_LISTED)}
+	{#each items.slice(0, max) as item, j (j)}{j > 0 ? ', ' : ''}<span class="f">{item}</span
+		>{/each}{items.length > max ? ', …' : ''}
 {/snippet}
 
 {#snippet stepText(s: SubsetTraceStep, i: number)}
@@ -357,7 +373,7 @@
 						nfaName(nfa.transitions[t].from),
 						sym,
 						nfaName(nfa.transitions[t].to)
-					)}{/each}{s.via.length > MAX_LISTED ? ', …' : ''}.
+					)}{/each}{s.via.length > MAX_LISTED ? ', …' : '.'}
 			{:else}; no state in it has a transition on <span class="f">{sym}</span>.
 			{/if}
 		{:else if s.kind === 'closure'}
@@ -481,7 +497,7 @@
 						<CitationTag cite={q.cite} />
 						<p class="prompt">{q.prompt}</p>
 						<Disclosure>
-							<p>{q.answer}</p>
+							{#if dfa}<p>{q.answer(dfa.states.map((s) => s.name))}</p>{/if}
 							{#if q.minimizeLink && minimizeHref}
 								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path -->
 								<a class="link-button" href={minimizeHref}
@@ -523,9 +539,12 @@
 			{/snippet}
 
 			{#if construction?.tooLarge}
+				{@const c = construction}
 				<Callout tone="warn" title="DFA too large">
-					The subset construction reaches more than {MAX_DFA_STATES} DFA states for this NFA; the page
-					stops at {MAX_DFA_STATES}. The NFA and its ε-closures are still shown.
+					The subset construction reaches more than {c.limit} DFA states for this NFA; the page stops
+					at {c.limit}{c.limit < MAX_DFA_STATES
+						? ` (with ${c.classes} symbol classes, a worklist of up to ${MAX_WORKLIST_CELLS.toLocaleString('en-US')} cells)`
+						: ''}. The NFA and its ε-closures are still shown.
 				</Callout>
 			{:else if result}
 				<StepControls {stepper} ariaLabel="Subset construction steps">
@@ -548,8 +567,14 @@
 								{:else}
 									<p class="verdict bad">
 										<Icon name="x" size={16} />
-										{#if c.missing.length}Missing: {@render list(c.missing.map(nfaName))}.{/if}
-										{#if c.extra.length}Not in the set: {@render list(c.extra.map(nfaName))}.{/if}
+										{#if c.missing.length}Missing: {@render list(
+												c.missing.map(nfaName),
+												Infinity
+											)}.{/if}
+										{#if c.extra.length}Not in the set: {@render list(
+												c.extra.map(nfaName),
+												Infinity
+											)}.{/if}
 										The set is <span class="f">{set(targetSet(result, verdict.target))}</span>.
 									</p>
 								{/if}
@@ -702,7 +727,7 @@
 					<div class="predict-tab">
 						<Toggle
 							label="Predict each target"
-							description="Before a target is revealed, pick the NFA states you expect in its ε-closure, then Check. Missing and extra states are listed, then the step is shown."
+							description="The steps stop before each target. Pick the NFA states you expect in its ε-closure, then Check: missing and extra states are listed, and the target is shown."
 							checked={model.predict}
 							onchange={setPredict}
 						/>

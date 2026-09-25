@@ -26,12 +26,16 @@ reached by `index` is shown; the current row and cell are highlighted.
 	const stage = $derived(step?.kind);
 	const dfa = $derived(result.dfa);
 
-	/** Sets longer than this (characters) wrap after a comma; shorter ones stay on one line. */
+	/** Sets and names longer than this (characters) wrap after a comma; shorter ones stay on one line. */
 	const WRAP = 22;
+	/** Largest share of the visible width the DFA-state column may take and still stay in place. */
+	const STICKY_SHARE = 0.45;
 	/** Set text that breaks only after a comma, never next to a brace. */
 	const set = (ids: readonly StateId[]) =>
 		setText(nfa, ids).replace(/^\{ /, '{\u00a0').replace(/ \}$/, '\u00a0}');
 	const long = (text: string) => text.length > WRAP;
+	/** A DFA state name that wraps (its column also holds the start and accepting marks). */
+	const longName = (name: string) => name.length + 3 > WRAP;
 
 	/**
 	 * Column widths (px) for the finished table, so columns keep their width
@@ -73,6 +77,14 @@ reached by `index` is shown; the current row and cell are highlighted.
 	);
 
 	let wrap: HTMLDivElement | undefined = $state();
+	let wrapWidth = $state(0);
+
+	/**
+	 * The DFA-state column stays in view while the table scrolls sideways, but
+	 * only while it is narrow next to the view: long names on a phone would
+	 * leave no room for the other columns.
+	 */
+	const sticky = $derived(wrapWidth === 0 || widths.name <= wrapWidth * STICKY_SHARE);
 
 	/** Keeps the current cell in view inside the table's own scroll area. */
 	$effect(() => {
@@ -84,7 +96,7 @@ reached by `index` is shown; the current row and cell are highlighted.
 		const b = box.getBoundingClientRect();
 		const c = cell.getBoundingClientRect();
 		const head = box.querySelector('thead')?.getBoundingClientRect().height ?? 0;
-		const stick = box.querySelector<HTMLElement>('tbody th')?.offsetWidth ?? 0;
+		const stick = sticky ? (box.querySelector<HTMLElement>('tbody th')?.offsetWidth ?? 0) : 0;
 		if (c.top < b.top + head) box.scrollTop -= b.top + head - c.top + 4;
 		else if (c.bottom > b.bottom) box.scrollTop += c.bottom - b.bottom + 4;
 		if (c.left < b.left + stick) box.scrollLeft -= b.left + stick - c.left + 4;
@@ -97,7 +109,14 @@ reached by `index` is shown; the current row and cell are highlighted.
 
 <!-- The table scrolls inside this box, so the box takes focus for keyboard scrolling. -->
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-<div class="table-wrap" bind:this={wrap} tabindex="0" role="region" aria-label="Worklist table">
+<div
+	class={['table-wrap', { sticky }]}
+	bind:this={wrap}
+	bind:clientWidth={wrapWidth}
+	tabindex="0"
+	role="region"
+	aria-label="Worklist table"
+>
 	<table class="worklist" style="min-width: {minWidth}px">
 		<caption class="visually-hidden">
 			Worklist: each DFA state, its NFA states, and for each input symbol the move set, its
@@ -134,9 +153,13 @@ reached by `index` is shown; the current row and cell are highlighted.
 			{#each shown as row (row.state)}
 				{@const s = dfa.states[row.state]}
 				{@const startRow = stage === 'start' && row.state === 0}
+				{@const current = at?.from === row.state || startRow}
+				<!-- Only the cells of the row being processed follow each step; the rest wait on these. -->
+				{@const complete = index >= row.complete}
+				{@const begun = index >= row.begins}
 				{@const members = set(s.subset ?? [])}
-				<tr class:current={at?.from === row.state || startRow}>
-					<th scope="row" class={['name', { now: startRow }]}>
+				<tr class:current>
+					<th scope="row" class={['name', { now: startRow, long: longName(s.name) }]}>
 						<span class="marks" aria-hidden="true"
 							>{row.state === dfa.start ? '→' : ''}{s.accepting ? '◎' : ''}</span
 						>
@@ -146,17 +169,34 @@ reached by `index` is shown; the current row and cell are highlighted.
 					</th>
 					<td class={['set', 'f', { now: startRow, long: long(members) }]}>{members}</td>
 					{#each row.cells as cell, k (k)}
-						{@const move = cell.move && cell.move.step <= index ? set(cell.move.targets) : ''}
+						{@const move =
+							cell.move && (complete || (begun && cell.move.step <= index))
+								? set(cell.move.targets)
+								: ''}
 						{@const closure =
-							cell.closure && cell.closure.step <= index ? set(cell.closure.order) : ''}
-						{@const target = cell.target && cell.target.step <= index ? cell.target : null}
-						<td class={['set', 'f', 'first', { now: isNow(row, k, 'move'), long: long(move) }]}
-							>{move}</td
+							cell.closure && (complete || (begun && cell.closure.step <= index))
+								? set(cell.closure.order)
+								: ''}
+						{@const target =
+							cell.target && (complete || (begun && cell.target.step <= index))
+								? cell.target
+								: null}
+						<td
+							class={[
+								'set',
+								'f',
+								'first',
+								{ now: current && isNow(row, k, 'move'), long: long(move) }
+							]}>{move}</td
 						>
-						<td class={['set', 'f', { now: isNow(row, k, 'closure'), long: long(closure) }]}
-							>{closure}</td
+						<td
+							class={[
+								'set',
+								'f',
+								{ now: current && isNow(row, k, 'closure'), long: long(closure) }
+							]}>{closure}</td
 						>
-						<td class={['target', { now: isNow(row, k, 'target') }]}>
+						<td class={['target', { now: current && isNow(row, k, 'target') }]}>
 							{#if target}
 								{#if target.to === null}
 									<span class="none" title="Empty set; the ∅ state is hidden">—</span>
@@ -224,8 +264,10 @@ reached by `index` is shown; the current row and cell are highlighted.
 		color: var(--text-3);
 	}
 	thead th.corner {
-		left: 0;
 		z-index: 3;
+	}
+	.sticky thead th.corner {
+		left: 0;
 	}
 	.group {
 		border-left: 1px solid var(--border);
@@ -247,12 +289,19 @@ reached by `index` is shown; the current row and cell are highlighted.
 		border-bottom: 0;
 	}
 	tbody th {
-		position: sticky;
-		left: 0;
-		z-index: 1;
 		background: var(--surface);
 		font-weight: 500;
 		white-space: nowrap;
+	}
+	.sticky tbody th {
+		position: sticky;
+		left: 0;
+		z-index: 1;
+	}
+	/* Long names (set notation) wrap after a comma; a name with no commas breaks anywhere. */
+	tbody th.long {
+		white-space: normal;
+		overflow-wrap: anywhere;
 	}
 	.marks {
 		display: inline-block;

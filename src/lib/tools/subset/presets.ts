@@ -14,7 +14,8 @@ export type SubsetPresetValue =
 export interface SlideQuestion {
 	cite: Citation;
 	prompt: string;
-	answer: string;
+	/** The answer, naming DFA states as the page currently names them (`dfa`, in creation order). */
+	answer: (dfa: readonly string[]) => string;
 	/** Offer "Minimize this DFA" next to the answer. */
 	minimizeLink?: boolean;
 }
@@ -34,13 +35,13 @@ export const PRESETS: readonly SubsetPreset[] = [
 		group: LECTURE_IV,
 		description:
 			'Thompson NFA A–J (slide 6); the construction gives ABCDHI, FGABCDHI and EJGABCDHI.',
-		cite: { deck: '08', slide: 10 },
+		cite: { deck: '08', slide: [6, 10] },
 		value: { from: 're', re: '(1 | 0)*1', input: '0101' },
 		question: {
 			cite: { deck: '08', slide: 11 },
 			prompt: 'Is the previous DFA minimal?',
-			answer:
-				'No. ABCDHI and FGABCDHI are both non-accepting, and on every symbol they go to the same state (0 → FGABCDHI, 1 → EJGABCDHI), so they can be merged. The minimal DFA has 2 states.',
+			answer: ([start, on0, on1]) =>
+				`No. ${start} and ${on0} are both non-accepting, and on every symbol they go to the same state (0 → ${on0}, 1 → ${on1}), so they can be merged. The minimal DFA has 2 states.`,
 			minimizeLink: true
 		}
 	},
@@ -74,8 +75,8 @@ export const PRESETS: readonly SubsetPreset[] = [
 		question: {
 			cite: { deck: '06', slide: 15 },
 			prompt: 'How many possible states in corresponding DFA?',
-			answer:
-				'The NFA has 3 states, so there are 2³ = 8 possible subsets of { A, B, C }. The subset construction reaches only 3 of them: A, AB and ABC.'
+			answer: ([a, b, c]) =>
+				`The NFA has 3 states, so there are 2³ = 8 possible subsets of { A, B, C }. The subset construction reaches only 3 of them: ${a}, ${b} and ${c}.`
 		}
 	},
 	{
@@ -108,7 +109,8 @@ export const PRESETS: readonly SubsetPreset[] = [
 
 export const DEFAULT_PRESET: SubsetPreset = PRESETS[0];
 
-const normalizeText = (t: string) =>
+/** Automaton text without surrounding spaces or blank lines, for comparisons. */
+export const normalizeText = (t: string) =>
 	t
 		.split('\n')
 		.map((l) => l.trim())

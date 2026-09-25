@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseDefinitions, parseRegex } from '$lib/theory/regex';
 import {
 	automatonFromText,
+	formatAutomatonText,
 	subsetConstruction,
 	thompson,
 	type Automaton
@@ -11,6 +12,7 @@ import {
 	BLOWUP_MAX_K,
 	MAX_DFA_STATES,
 	MAX_NFA_STATES,
+	MAX_WORKLIST_CELLS,
 	blowupNfaText,
 	blowupRows,
 	buildNfa,
@@ -20,13 +22,16 @@ import {
 	continuePrediction,
 	countSubsets,
 	dfaHighlight,
+	dfaStateLimit,
 	drawnDfa,
 	newPrediction,
 	nextTarget,
 	nfaHighlight,
 	partialDfa,
 	powerOfTwoText,
+	predictionLimit,
 	predictionView,
+	rebuildNfa,
 	runSideBySide,
 	sameSet,
 	setText,
@@ -151,6 +156,32 @@ describe('buildNfa', () => {
 		expect(bad.nfa).toBeNull();
 		expect(bad.textDiagnostics.length).toBeGreaterThan(0);
 	});
+
+	it('keeps the previous NFA when an edit leaves the machine as it was', () => {
+		const text = 'start: A\naccept: B\nA 1 A\nA 1 B\n';
+		const first = rebuildNfa(nfaSrc(text), null);
+		expect(first.key).not.toBeNull();
+		// Spaces and blank lines: the same NFA object, so the construction is not redone.
+		const spaced = rebuildNfa(nfaSrc(`\n  ${text.replace('A 1 B', 'A   1   B')}  \n\n`), first);
+		expect(spaced.nfa).toBe(first.nfa);
+		expect(spaced.positions).toBe(first.positions);
+		// A real change builds a new NFA.
+		const changed = rebuildNfa(nfaSrc(`${text}B 0 B\n`), spaced);
+		expect(changed.nfa).not.toBe(first.nfa);
+		expect(changed.nfa?.transitions).toHaveLength(3);
+		// Mid-edit problems drop the NFA; the diagnostics are the new source's.
+		const broken = rebuildNfa(nfaSrc(`${text}B 0`), changed);
+		expect(broken.nfa).toBeNull();
+		expect(broken.textDiagnostics.length).toBeGreaterThan(0);
+
+		const re = rebuildNfa(src('(1 | 0)*1'), null);
+		expect(rebuildNfa(src('(1|0)* 1'), re).nfa).toBe(re.nfa);
+		expect(rebuildNfa(src('(0 | 1)*1'), re).nfa).not.toBe(re.nfa);
+		// The same machine typed as text is drawn differently (no grid): a new build.
+		const typed = rebuildNfa(nfaSrc(formatAutomatonText(re.nfa!)), re);
+		expect(typed.nfa).not.toBe(re.nfa);
+		expect(typed.positions).toBeNull();
+	});
 });
 
 describe('countSubsets and construct', () => {
@@ -171,9 +202,37 @@ describe('countSubsets and construct', () => {
 		const huge = automatonFromText(blowupNfaText(9));
 		expect(construct(huge, { naming: 'discovery', includeEmpty: false })).toEqual({
 			result: null,
-			tooLarge: true
+			tooLarge: true,
+			limit: MAX_DFA_STATES,
+			classes: 2
 		});
 		expect(MAX_DFA_STATES).toBeLessThan(2 ** 10);
+	});
+
+	it('limits the worklist size too: many symbol classes lower the DFA state limit', () => {
+		expect(dfaStateLimit(2)).toBe(MAX_DFA_STATES);
+		expect(dfaStateLimit(0)).toBe(MAX_DFA_STATES);
+		expect(dfaStateLimit(36)).toBe(Math.floor(MAX_WORKLIST_CELLS / 36));
+		// A x A for every symbol of 0-9a-z, A 1 B, then B → C → … on every symbol: 36 classes.
+		const symbols = [...'0123456789abcdefghijklmnopqrstuvwxyz'];
+		const chain = (length: number) => {
+			const lines = ['start: A', `accept: ${String.fromCharCode(66 + length)}`, 'A 1 B'];
+			for (const x of symbols) lines.push(`A ${x} A`);
+			for (let i = 1; i <= length; i++)
+				for (const x of symbols)
+					lines.push(`${String.fromCharCode(65 + i)} ${x} ${String.fromCharCode(66 + i)}`);
+			return automatonFromText(lines.join('\n'));
+		};
+		// 2^8 = 256 DFA states × 36 classes is past the worklist limit, though under MAX_DFA_STATES.
+		const wide = chain(7);
+		expect(countSubsets(wide)).toBe(256);
+		const c = construct(wide, { naming: 'discovery', includeEmpty: false });
+		expect(c).toMatchObject({ result: null, tooLarge: true, classes: 36 });
+		expect(c.limit * c.classes).toBeLessThanOrEqual(MAX_WORKLIST_CELLS);
+		// 2^3 = 8 states × 36 classes is built.
+		const small = construct(chain(2), { naming: 'discovery', includeEmpty: false });
+		expect(small.tooLarge).toBe(false);
+		expect(small.result?.dfa.states).toHaveLength(8);
 	});
 });
 
@@ -189,6 +248,19 @@ describe('worklist', () => {
 			'EJGABCDHI'
 		]);
 		expect(rows.map((r) => r.created)).toEqual([0, 3, 6]);
+	});
+
+	it('knows the steps at which each row starts and is complete', () => {
+		// ABCDHI: steps 1–6; FGABCDHI: 7–12; EJGABCDHI: 13–18.
+		expect(rows.map((r) => [r.begins, r.complete])).toEqual([
+			[1, 6],
+			[7, 12],
+			[13, 18]
+		]);
+		for (const r of rows)
+			for (const c of r.cells)
+				for (const part of [c.move, c.closure, c.target])
+					expect(part!.step).toBeGreaterThanOrEqual(r.begins);
 	});
 
 	it('fills move → ε-closure → target per symbol', () => {
@@ -324,16 +396,37 @@ describe('predictions', () => {
 		p = togglePick(result, 0, p, 6);
 		p = togglePick(result, 0, p, 5);
 		expect(predictionView(result, 0, p).picked).toEqual([6]);
-		// Stepping past the target drops its picks.
-		expect(predictionView(result, 4, p).picked).toEqual([]);
 		const last = result.steps.length - 1;
-		expect(predictionView(result, last, p)).toMatchObject({
+		const all = { ...p, revealed: last };
+		expect(predictionView(result, last, all)).toMatchObject({
 			phase: 'done',
 			pending: null,
+			picked: [],
 			canPick: false
 		});
-		expect(togglePick(result, last, p, 1)).toBe(p);
-		expect(checkPicks(result, last, p)).toBeNull();
+		expect(togglePick(result, last, all, 1)).toBe(all);
+		expect(checkPicks(result, last, all)).toBeNull();
+	});
+
+	it('holds the stepper before the move of the target to predict', () => {
+		// Nothing revealed: only the start step (the first target's move is step 1).
+		let p = newPrediction();
+		expect(predictionLimit(result, p)).toBe(0);
+		// The pending target does not depend on where the stepper is.
+		expect(predictionView(result, 0, p).pending).toBe(3);
+		expect(predictionView(result, 5, p).pending).toBe(3);
+		// Check reveals the target: the stepper may show it, but not the next move.
+		const c = checkPicks(result, 0, p)!;
+		p = c.prediction;
+		expect(p.revealed).toBe(3);
+		expect(predictionLimit(result, p)).toBe(c.reveal);
+		expect(result.steps[c.reveal + 1].kind).toBe('move');
+		// A saved step reveals the steps up to it; mid-cell, the stepper stops before that cell.
+		expect(predictionLimit(result, newPrediction(4))).toBe(3);
+		expect(predictionLimit(result, newPrediction(6))).toBe(6);
+		// Every target revealed: no limit.
+		expect(predictionLimit(result, newPrediction(result.steps.length))).toBeNull();
+		expect(predictionView(result, 0, newPrediction(Number.MAX_SAFE_INTEGER)).phase).toBe('done');
 	});
 
 	it('an empty prediction can be right (the ∅ target)', () => {

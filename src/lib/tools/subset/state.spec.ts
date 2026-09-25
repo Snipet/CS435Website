@@ -11,6 +11,7 @@ import {
 	stateFromHash,
 	stepFromHash,
 	switchSource,
+	thompsonText,
 	type SubsetHash
 } from './state';
 
@@ -105,6 +106,11 @@ describe('stateFromHash', () => {
 		expect(s.input).toHaveLength(MAX_RUN_INPUT);
 	});
 
+	it('drops repeated seeds, keeping the order they were first picked', () => {
+		const s = stateFromHash(base, { from: 're', re: '(1 | 0)*1', seeds: [0, 0, 3, 0, 1] });
+		expect(s.seeds).toEqual([0, 3, 1]);
+	});
+
 	it('reads the step, or null for the finished construction', () => {
 		expect(stepFromHash({ from: 're', re: 'a', step: 3 })).toBe(3);
 		expect(stepFromHash({ from: 're', re: 'a' })).toBeNull();
@@ -142,6 +148,37 @@ describe('presetFields and switchSource', () => {
 		// Definitions typed earlier stay.
 		const d = switchSource({ from: 'nfa', re: ' ', defs: 'd = 0', text: '' }, 're', null);
 		expect(d).toMatchObject({ re: '(1 | 0)*1', defs: 'd = 0' });
+	});
+
+	it('an NFA filled in from the regular expression follows later edits to it', () => {
+		const start = presetFields(DEFAULT_PRESET.value);
+		// "From an NFA" starts from the Thompson NFA shown (10 states).
+		const shown = thompsonText(start);
+		expect(shown).not.toBeNull();
+		const onNfa = switchSource(start, 'nfa', shown);
+		expect(buildNfa(onNfa).nfa?.states).toHaveLength(10);
+		// Back on the regular expression, the generated text is dropped …
+		const back = switchSource(onNfa, 're', null);
+		expect(back).toMatchObject({ from: 're', re: '(1 | 0)*1', text: '' });
+		// … so after typing `ab`, "From an NFA" shows the 4-state NFA of `ab`.
+		const edited = { ...back, re: 'ab' };
+		const again = switchSource(edited, 'nfa', thompsonText(edited));
+		expect(buildNfa(again).nfa?.states).toHaveLength(4);
+		// Spacing changes to the generated text do not make it hand-written.
+		const spaced = { ...onNfa, text: `\n${shown!.replace(/\n/g, '\n  ')}\n` };
+		expect(switchSource(spaced, 're', null).text).toBe('');
+	});
+
+	it('an NFA written by hand stays when the regular expression changes', () => {
+		const start = presetFields(DEFAULT_PRESET.value);
+		const own = { ...switchSource(start, 'nfa', thompsonText(start)), text: 'start: A\nA 0 B\n' };
+		const back = switchSource(own, 're', null);
+		expect(back.text).toBe('start: A\nA 0 B\n');
+		const again = switchSource({ ...back, re: 'ab' }, 'nfa', 'start: X\n');
+		expect(again.text).toBe('start: A\nA 0 B\n');
+		// An edited copy of the generated text is hand-written too.
+		const edited = { ...own, text: `${thompsonText(start)}J 0 J\n` };
+		expect(switchSource(edited, 're', null).text).toBe(edited.text);
 	});
 
 	it('switching to the current source changes nothing', () => {

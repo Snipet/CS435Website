@@ -29,7 +29,7 @@ follow, skip) and read off the ordered result.
 
 	let { nfa, positions, drawable, seeds, onseedschange }: Props = $props();
 
-	const picked = $derived(seeds.filter((id) => id < nfa.states.length));
+	const picked = $derived([...new Set(seeds)].filter((id) => id < nfa.states.length));
 
 	interface Run {
 		nfa: Automaton;

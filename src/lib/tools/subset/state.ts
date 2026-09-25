@@ -2,10 +2,10 @@
  * The page's URL-hash state. The hash also accepts the cross-tool link shape
  * `LinkStates['subset']` ({ from: 're', re, defs? } or { from: 'nfa', text }).
  */
-import type { SubsetNaming } from '$lib/theory/automata';
+import { formatAutomatonText, type SubsetNaming } from '$lib/theory/automata';
 import type { LinkStates } from '$lib/tools/links';
-import { BLOWUP_MAX_K, BLOWUP_MIN_K, MAX_RUN_INPUT } from './logic';
-import { DEFAULT_PRESET, type SubsetPresetValue } from './presets';
+import { BLOWUP_MAX_K, BLOWUP_MIN_K, MAX_RUN_INPUT, buildNfa } from './logic';
+import { DEFAULT_PRESET, normalizeText, type SubsetPresetValue } from './presets';
 
 export type TabId = 'closure' | 'predict' | 'run' | 'blowup';
 export const TAB_IDS: readonly TabId[] = ['closure', 'predict', 'run', 'blowup'];
@@ -58,18 +58,30 @@ export function presetFields(
 		: { from: 'nfa', re: keep.re, defs: keep.defs, text: v.text };
 }
 
+/** The text format of the regular expression's Thompson NFA, or null when it does not build. */
+export function thompsonText(s: Pick<SubsetState, 're' | 'defs'>): string | null {
+	const nfa = buildNfa({ from: 're', re: s.re, defs: s.defs, text: '' }).nfa;
+	return nfa ? formatAutomatonText(nfa) : null;
+}
+
 /**
- * The source after switching to `from`. "From an NFA" with no text starts
- * from `nfaText` (the NFA shown); "From a regular expression" with none
- * starts from the default preset's.
+ * The source after switching to `from`.
+ * - "From an NFA" with no text starts from `nfaText` (the NFA shown).
+ * - "From a regular expression": NFA text that is only the regular
+ *   expression's own Thompson NFA is dropped, so the next switch back starts
+ *   from the NFA shown then, not from an older regular expression's. Text
+ *   written by hand stays. An empty regular expression starts from the
+ *   default preset's.
  */
 export function switchSource(s: Source, from: 're' | 'nfa', nfaText: string | null): Source {
 	if (from === s.from) return s;
 	if (from === 'nfa')
 		return { ...s, from, text: s.text.trim() === '' && nfaText !== null ? nfaText : s.text };
-	if (s.re.trim() !== '') return { ...s, from };
+	const own = s.text.trim() === '' ? null : thompsonText(s);
+	const text = own !== null && normalizeText(s.text) === normalizeText(own) ? '' : s.text;
+	if (s.re.trim() !== '') return { ...s, from, text };
 	const d = defaultRe();
-	return { ...s, from, re: d.re, defs: s.defs.trim() === '' ? d.defs : s.defs };
+	return { ...s, from, text, re: d.re, defs: s.defs.trim() === '' ? d.defs : s.defs };
 }
 
 export function defaultState(): SubsetState {
@@ -116,7 +128,7 @@ export function stateFromHash(base: SubsetState, v: SubsetHash): SubsetState {
 	if (Number.isInteger(v.k) && (v.k as number) >= BLOWUP_MIN_K && (v.k as number) <= BLOWUP_MAX_K)
 		next.k = v.k as number;
 	if (Array.isArray(v.seeds))
-		next.seeds = v.seeds.filter((s): s is number => Number.isInteger(s) && s >= 0);
+		next.seeds = [...new Set(v.seeds.filter((s): s is number => Number.isInteger(s) && s >= 0))];
 	return next;
 }
 

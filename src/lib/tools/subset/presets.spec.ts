@@ -48,9 +48,11 @@ describe('presets', () => {
 
 	it('cite existing decks, and slide questions render as citations', () => {
 		for (const p of PRESETS) {
-			if (p.cite) expect(formatCitation(p.cite)).toMatch(/slide \d+/);
-			if (p.question) expect(formatCitation(p.question.cite)).toMatch(/slide \d+/);
+			if (p.cite) expect(formatCitation(p.cite)).toMatch(/slides? \d+/);
+			if (p.question) expect(formatCitation(p.question.cite)).toMatch(/slides? \d+/);
 		}
+		// The NFA (slide 6) through the DFA (slide 10).
+		expect(formatCitation(byId('l08-ones').cite!)).toBe('Lexical Analysis IV · slides 6–10');
 		expect(formatCitation(byId('l08-ones').question!.cite)).toBe('Lexical Analysis IV · slide 11');
 	});
 
@@ -100,7 +102,31 @@ describe('Lexical Analysis IV, slides 6–11: (1 | 0)*1', () => {
 		const m = minimize(result.dfa);
 		expect(m.dfa.states).toHaveLength(2);
 		expect(m.blockOf.get(0)).toBe(m.blockOf.get(1));
-		expect(q.answer).toMatch(/2 states/);
+		expect(q.answer(names(result.dfa))).toBe(
+			'No. ABCDHI and FGABCDHI are both non-accepting, and on every symbol they go to the same state (0 → FGABCDHI, 1 → EJGABCDHI), so they can be merged. The minimal DFA has 2 states.'
+		);
+	});
+
+	it('answers slide 11 with the DFA state names in use, and the answer holds', () => {
+		const q = byId('l08-ones').question!;
+		const nfa = load(byId('l08-ones')).nfa;
+		for (const naming of ['discovery', 'sorted-set', 'numbered'] as const) {
+			for (const includeEmpty of [false, true]) {
+				const { dfa } = construct(nfa, { naming, includeEmpty }).result!;
+				const [start, on0, on1] = names(dfa);
+				const answer = q.answer(names(dfa));
+				expect(answer, naming).toContain(`${start} and ${on0} are both non-accepting`);
+				expect(answer, naming).toContain(`(0 → ${on0}, 1 → ${on1})`);
+				// What it says: states 0 and 1 reject and go to the same states on 0 and on 1.
+				expect(dfa.states.map((s) => s.accepting)).toEqual([false, false, true]);
+				// Targets on 0, then on 1 (transitions are added in symbol order).
+				const out = (id: number) =>
+					dfa.transitions.filter((t) => t.from === id).map((t) => dfa.states[t.to].name);
+				expect(out(0)).toEqual([on0, on1]);
+				expect(out(1)).toEqual([on0, on1]);
+			}
+		}
+		expect(q.answer(['D0', 'D1', 'D2'])).toContain('D0 and D1');
 	});
 });
 
@@ -138,8 +164,11 @@ describe('Lexical Analysis III NFAs', () => {
 		expect(2 ** nfa.states.length).toBe(8);
 		expect(names(result.dfa)).toEqual(['A', 'AB', 'ABC']);
 		expect(p.question!.prompt).toBe('How many possible states in corresponding DFA?');
-		expect(p.question!.answer).toContain('2³ = 8');
-		expect(p.question!.answer).toContain('3 of them');
+		const answer = p.question!.answer(names(result.dfa));
+		expect(answer).toContain('2³ = 8');
+		expect(answer).toContain('3 of them: A, AB and ABC.');
+		const numbered = construct(nfa, { naming: 'numbered', includeEmpty: true }).result!.dfa;
+		expect(p.question!.answer(names(numbered))).toContain('3 of them: D0, D1 and D2.');
 	});
 
 	it('slide 16: (0 | 1)* 1 (0|1)² has 4 NFA states and 8 DFA states, already minimal', () => {

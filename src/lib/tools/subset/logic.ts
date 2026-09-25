@@ -10,6 +10,7 @@ import type { Diagnostic } from '$lib/theory/diagnostics';
 import { parseDefinitions, parseRegex, type Regex } from '$lib/theory/regex';
 import {
 	ClosureIndex,
+	formatAutomatonText,
 	letterName,
 	parseAutomatonText,
 	runDfa,
@@ -30,6 +31,11 @@ import {
 export const MAX_NFA_STATES = 300;
 /** Largest DFA the page constructs; beyond it the construction stops. */
 export const MAX_DFA_STATES = 300;
+/**
+ * Largest worklist the page constructs, in DFA states × symbol classes (each
+ * is three table cells); many symbol classes lower the DFA state limit.
+ */
+export const MAX_WORKLIST_CELLS = 3000;
 /** Largest DFA drawn as a diagram (automatic layout gets slow past this). */
 export const MAX_DRAWN_DFA = 24;
 /** Largest NFA drawn when it needs automatic layout (typed NFAs). */
@@ -169,6 +175,14 @@ export interface NfaBuild {
 	textDiagnostics: Diagnostic[];
 	/** The NFA would have more than MAX_NFA_STATES states (it is not built). */
 	tooLarge: number | null;
+	/** Equal for two builds exactly when they give the same machine, drawn the same way; null without an NFA. */
+	key: string | null;
+}
+
+/** A key for an NFA and its pinned positions: the same machine drawn the same way gives the same key. */
+export function machineKey(nfa: Automaton, positions: Positions | null): string {
+	const grid = positions ? [...positions].map(([id, p]) => `${id}:${p.x},${p.y}`).join(' ') : '';
+	return `${formatAutomatonText(nfa)}\n${grid}`;
 }
 
 /** The NFA for the current source, or diagnostics explaining why there is none. */
@@ -179,7 +193,8 @@ export function buildNfa(src: NfaSource): NfaBuild {
 		reDiagnostics: [],
 		defsDiagnostics: [],
 		textDiagnostics: [],
-		tooLarge: null
+		tooLarge: null,
+		key: null
 	};
 	if (src.from === 're') {
 		const d = parseDefinitions(src.defs);
@@ -189,14 +204,26 @@ export function buildNfa(src: NfaSource): NfaBuild {
 		const size = thompsonSize(r.regex);
 		if (size > MAX_NFA_STATES) return { ...base, tooLarge: size };
 		const t = thompson(r.regex);
-		return { ...base, nfa: t.nfa, positions: t.positions };
+		return { ...base, nfa: t.nfa, positions: t.positions, key: machineKey(t.nfa, t.positions) };
 	}
 	const p = parseAutomatonText(src.text);
 	const base = { ...empty, textDiagnostics: p.diagnostics };
 	if (!p.automaton) return base;
 	if (p.automaton.states.length > MAX_NFA_STATES)
 		return { ...base, tooLarge: p.automaton.states.length };
-	return { ...base, nfa: p.automaton };
+	return { ...base, nfa: p.automaton, key: machineKey(p.automaton, null) };
+}
+
+/**
+ * `buildNfa`, keeping the previous build's NFA and positions when the machine
+ * is unchanged (an edit to spaces or comments), so what is derived from them
+ * is not redone. Diagnostics always come from the new source.
+ */
+export function rebuildNfa(src: NfaSource, previous: NfaBuild | null): NfaBuild {
+	const next = buildNfa(src);
+	if (previous?.nfa && next.nfa && previous.key === next.key)
+		return { ...next, nfa: previous.nfa, positions: previous.positions };
+	return next;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,17 +261,28 @@ export function countSubsets(
 
 export interface Construction {
 	result: SubsetResult | null;
-	/** The DFA would pass MAX_DFA_STATES (the construction is not run). */
+	/** The DFA would pass `limit` states (the construction is not run). */
 	tooLarge: boolean;
+	/** Most DFA states constructed: MAX_DFA_STATES, or fewer when there are many symbol classes. */
+	limit: number;
+	/** Number of symbol classes (worklist columns). */
+	classes: number;
+}
+
+/** Most DFA states constructed with `classes` symbol classes, so the worklist stays within MAX_WORKLIST_CELLS. */
+export function dfaStateLimit(classes: number): number {
+	return Math.min(MAX_DFA_STATES, Math.floor(MAX_WORKLIST_CELLS / Math.max(1, classes)));
 }
 
 export function construct(
 	nfa: Automaton,
 	opts: { naming: SubsetNaming; includeEmpty: boolean }
 ): Construction {
-	if (countSubsets(nfa, { includeEmpty: opts.includeEmpty }) === null)
-		return { result: null, tooLarge: true };
-	return { result: subsetConstruction(nfa, opts), tooLarge: false };
+	const classes = symbolClasses(nfa).length;
+	const limit = dfaStateLimit(classes);
+	if (countSubsets(nfa, { limit, includeEmpty: opts.includeEmpty }) === null)
+		return { result: null, tooLarge: true, limit, classes };
+	return { result: subsetConstruction(nfa, opts), tooLarge: false, limit, classes };
 }
 
 /**
@@ -285,6 +323,10 @@ export interface WorkRow {
 	state: StateId;
 	/** Step at which the state was created. */
 	created: number;
+	/** Step at which the row's first cell starts (its first move; its creation when there are no classes). */
+	begins: number;
+	/** Step at which every cell of the row is filled (its last target; its creation when there are no classes). */
+	complete: number;
 	/** One cell per symbol class. */
 	cells: WorkCell[];
 }
@@ -306,17 +348,26 @@ export function worklist(result: SubsetResult): WorkRow[] {
 	const rows: WorkRow[] = result.dfa.states.map((s) => ({
 		state: s.id,
 		created: 0,
+		begins: 0,
+		complete: 0,
 		cells: result.classes.map(() => ({ move: null, closure: null, target: null }))
 	}));
 	result.steps.forEach((step, i) => {
 		const at = stepCell(result, step);
 		if (!at || at.column < 0) return;
-		const cell = rows[at.from].cells[at.column];
-		if (step.kind === 'move') cell.move = { step: i, targets: step.targets, via: step.via };
-		else if (step.kind === 'closure') cell.closure = { step: i, order: step.order };
+		const row = rows[at.from];
+		const cell = row.cells[at.column];
+		if (step.kind === 'move') {
+			cell.move = { step: i, targets: step.targets, via: step.via };
+			if (at.column === 0) row.begins = i;
+		} else if (step.kind === 'closure') cell.closure = { step: i, order: step.order };
 		else if (step.kind === 'target') {
 			cell.target = { step: i, to: step.to, isNew: step.isNew };
-			if (step.isNew && step.to !== null) rows[step.to].created = i;
+			row.complete = i;
+			if (step.isNew && step.to !== null) {
+				const made = rows[step.to];
+				made.created = made.begins = made.complete = i;
+			}
 		}
 	});
 	return rows;
@@ -426,16 +477,40 @@ export function checkPrediction(
 	return { correct: missing.length === 0 && extra.length === 0, hits, missing, extra };
 }
 
-/** Predictions made so far: the states picked for the next target, the last verdict, the score. */
+/**
+ * Predictions made so far: how far the construction is revealed, the states
+ * picked for the next target, the last verdict, the score.
+ */
 export interface Prediction {
+	/** Steps up to this one are revealed; the next target after it is the one to predict. */
+	revealed: number;
 	picks: { target: number | null; ids: StateId[] };
 	/** The last check, shown while the stepper stays on its target step. */
 	verdict: { target: number; check: PredictionCheck } | null;
 	score: { right: number; total: number };
 }
 
-export function newPrediction(): Prediction {
-	return { picks: { target: null, ids: [] }, verdict: null, score: { right: 0, total: 0 } };
+/** A fresh prediction with the steps up to `revealed` already shown (none by default). */
+export function newPrediction(revealed = -1): Prediction {
+	return {
+		revealed,
+		picks: { target: null, ids: [] },
+		verdict: null,
+		score: { right: 0, total: 0 }
+	};
+}
+
+/**
+ * The last step the stepper may show while predicting: the step before the
+ * pending target's move, so neither its move set nor its ε-closure appears
+ * before Check. Null when every target is revealed.
+ */
+export function predictionLimit(result: SubsetResult, p: Prediction): number | null {
+	const pending = nextTarget(result, p.revealed);
+	if (pending === null) return null;
+	let move = pending;
+	while (move > 0 && result.steps[move].kind !== 'move') move--;
+	return Math.max(0, move - 1);
 }
 
 /**
@@ -446,7 +521,7 @@ export function newPrediction(): Prediction {
  */
 export interface PredictionView {
 	phase: 'pick' | 'verdict' | 'done';
-	/** The target step to predict next; null when every target is revealed. */
+	/** The first target not yet revealed; null when every target is revealed. */
 	pending: number | null;
 	/** States picked for `pending`, in the order picked. */
 	picked: StateId[];
@@ -457,7 +532,7 @@ export interface PredictionView {
 }
 
 export function predictionView(result: SubsetResult, index: number, p: Prediction): PredictionView {
-	const pending = nextTarget(result, index);
+	const pending = nextTarget(result, p.revealed);
 	const picked = pending !== null && p.picks.target === pending ? p.picks.ids : [];
 	const showVerdict = p.verdict !== null && p.verdict.target === index;
 	const phase = pending === null ? 'done' : showVerdict ? 'verdict' : 'pick';
@@ -491,6 +566,7 @@ export function checkPicks(
 	const check = checkPrediction(picked, targetSet(result, pending));
 	return {
 		prediction: {
+			revealed: pending,
 			picks: { target: null, ids: [] },
 			verdict: { target: pending, check },
 			score: { right: p.score.right + (check.correct ? 1 : 0), total: p.score.total + 1 }
