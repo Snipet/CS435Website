@@ -81,7 +81,14 @@
 		class={[
 			'cell',
 			c.kind,
-			{ hl: c.tone !== null, s: c.edgeStart, e: c.edgeEnd, cursor: c.cursor, la: c.lookahead }
+			{
+				hl: c.tone !== null,
+				muted: c.muted,
+				s: c.edgeStart,
+				e: c.edgeEnd,
+				cursor: c.cursor,
+				la: c.lookahead
+			}
 		]}
 		style={c.tone !== null ? toneStyle(c.tone) : undefined}
 		data-index={c.index}
@@ -192,6 +199,14 @@
 	.interactive .hl:hover {
 		background: var(--tone-bg);
 		box-shadow: inset 0 -2px 0 var(--tone-fg);
+	}
+	/* Muted ranges (e.g. consumed input): quiet text, the tone only as the underline. */
+	.hl.muted,
+	.interactive .hl.muted:hover {
+		background: transparent;
+	}
+	.hl.muted .g {
+		color: var(--text-3);
 	}
 	.hl.s {
 		margin-left: 1px;
