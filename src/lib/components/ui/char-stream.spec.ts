@@ -76,6 +76,23 @@ describe('layoutStream', () => {
 		expect(layoutStream('', { showEnd: true }).length).toBe(1);
 	});
 
+	it('carries the muted flag of the highlight that colors a cell', () => {
+		const items = layoutStream('abc', {
+			highlights: [
+				{ start: 0, end: 2, tone: 1, label: 'ID', muted: true },
+				{ start: 1, end: 2, tone: 'active' }
+			]
+		});
+		const cells = items.flatMap((it) =>
+			it.kind === 'cell' ? [it.cell] : it.kind === 'run' ? it.cells : []
+		);
+		expect(cells.map((c) => [c.tone, c.muted])).toEqual([
+			[1, true],
+			['active', false],
+			[null, false]
+		]);
+	});
+
 	it('ignores highlights outside the text', () => {
 		const items = layoutStream('ab', { highlights: [{ start: 5, end: 9, tone: 'reject' }] });
 		expect(items.every((it) => it.kind === 'cell' && it.cell.tone === null)).toBe(true);

@@ -34,6 +34,18 @@ describe('groupShapes', () => {
 		}
 	});
 
+	it('marks faint groups and leaves the rest normal', () => {
+		expect(shapes.map((s) => s.faint)).toEqual([false, false, false]);
+		const [one, alt] = groupShapes(thompson, [
+			{ id: 'one', label: "'1'", states: [2, 4], faint: true },
+			{ id: 'alt', label: '1 | 0', states: [1, 2, 3, 4, 5, 6] }
+		]);
+		expect(one.faint).toBe(true);
+		expect(alt.faint).toBe(false);
+		// Faintness changes the look only, not the outline.
+		expect(one.d).toBe(shapes[0].d);
+	});
+
 	it('falls back to halos when members are not next to each other', () => {
 		const row = layoutAutomaton(dfaEndsIn00, {
 			positions: new Map([
