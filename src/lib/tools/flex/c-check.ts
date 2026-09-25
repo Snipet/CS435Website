@@ -463,6 +463,14 @@ const NO_SCANNER: FlexHooks = {
 	yyStart: () => 0
 };
 
+/**
+ * Elements of array, malloc() / calloc(), and strdup() memory the scratch
+ * evaluation of the globals may allocate in total (see MachineOptions.memoryLimit). The spec is compiled on every edit, so a global whose
+ * memory does not fit (with the ones before it) is left to the run, like one
+ * that is not evaluable; its size is still checked.
+ */
+export const GLOBAL_CHECK_MEMORY = 100_000;
+
 export interface GlobalScope extends CheckScope {
 	/** Start condition names in declaration order (their values are 1, 2, …). */
 	startConditions: readonly string[];
@@ -481,12 +489,18 @@ export interface GlobalScope extends CheckScope {
  *   which reports what the runtime would (a pointer used as a number, a string
  *   too long for its array, too many initializers, division by zero, …). An
  *   initializer that reads a value not evaluated here, or a variable an earlier
- *   initializer with side effects may have changed, is left to the runtime.
+ *   initializer with side effects may have changed, is left to the runtime, and
+ *   so is an array or malloc() buffer past GLOBAL_CHECK_MEMORY elements in total.
  */
 export function checkGlobals(globals: readonly Stmt[], scope: GlobalScope): Diagnostic[] {
 	const c = new Checker(scope, false, false, true);
 	c.push();
-	const machine = new CMachine({ budget: 100_000, outputLimit: 10_000, hooks: NO_SCANNER });
+	const machine = new CMachine({
+		budget: 100_000,
+		outputLimit: 10_000,
+		memoryLimit: GLOBAL_CHECK_MEMORY,
+		hooks: NO_SCANNER
+	});
 	machine.defineConstant('INITIAL', 0);
 	scope.startConditions.forEach((name, k) => machine.defineConstant(name, k + 1));
 	/** Names whose value at run time is not known here. */

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { CLimitError, CMachine, CRuntimeError, type FlexHooks } from './c';
+import { GLOBAL_CHECK_MEMORY } from './c-check';
 import { formatC, type FormatArg } from './c-format';
 import { hasCurlyQuotes, straightenQuotes } from './c-lexer';
 import { compileSpec } from './program';
@@ -427,6 +429,99 @@ describe('C errors', () => {
 		expect(
 			compileErrors('int start = yylineno;\nFILE *out = stdout;\nchar *none = NULL;\n')
 		).toEqual([]);
+	});
+
+	it('leaves global arrays and malloc() memory past the check limit to the run', () => {
+		const n = GLOBAL_CHECK_MEMORY;
+		// Within the limit the array is evaluated, so an initializer that reads it is too.
+		expect(compileErrors(`int a[${n}];\nint z = sizeof(a) / 0;\n`)).toEqual(['division by zero']);
+		// The limit is a total: b does not fit after a, so b (and z, which reads it) is left
+		// to the run, which reports the error.
+		const code = `int a[${n / 2 + 1}];\nint b[${n / 2}];\nint z = sizeof(b) / 0;\nint main() { return 0; }\n`;
+		expect(compileErrors(code)).toEqual([]);
+		expect(runC(code).stopped).toMatch(/division by zero/);
+		expect(
+			compileErrors('#include <stdlib.h>\nchar *p = malloc(1000000);\nint z = (p != NULL) / 0;\n')
+		).toEqual([]);
+		// Globals after a skipped one are still checked, and sizes are checked before the limit.
+		expect(
+			compileErrors(
+				'#include <stdlib.h>\nint big[1000000];\nchar *p = calloc(1000, 1000);\nchar s[2] = "abc";\n' +
+					'int huge[1000001];\nchar *q = malloc(0);\nint d[0];\n'
+			)
+		).toEqual([
+			'the string is too long for s[2]',
+			'array huge has a bad size (1000001)',
+			'malloc(0): bad size',
+			'array d has a bad size (0)'
+		]);
+		expect(
+			compileErrors(
+				'#include <stdlib.h>\n' +
+					Array.from(
+						{ length: 40 },
+						(_, k) => `int a${k}[1000000];\nchar *p${k} = malloc(1000000);\n`
+					).join('')
+			)
+		).toEqual([]);
+		// The run itself has no such limit.
+		expect(
+			out(
+				'#include <stdlib.h>\nint big[1000000];\nchar *p = malloc(1000000);\n' +
+					main('big[999999] = 7; p[999999] = 8; printf("%d %d", big[999999], p[999999]);')
+			)
+		).toBe('7 8');
+	});
+
+	it('stops a machine at its memory limit before allocating', () => {
+		const noScanner: FlexHooks = {
+			yylex: () => 0,
+			input: () => -1,
+			yyless: () => {},
+			begin: () => {},
+			echo: () => {},
+			terminate: () => {
+				throw new Error('yyterminate');
+			},
+			yyStart: () => 0
+		};
+		const globals = compileSpec(
+			'%%\n%%\n#include <stdlib.h>\nint a[60];\nchar *p = malloc(30);\nchar *q = strdup("abcdefghi");\n' +
+				'int b[1];\nint c[0];\nint d[2000000];\n'
+		).globals;
+		const [a, p, q, b, c, d] = globals;
+		const machine = new CMachine({
+			budget: 1000,
+			outputLimit: 1000,
+			memoryLimit: 100,
+			hooks: noScanner
+		});
+		for (const s of [a, p, q]) machine.exec(s, machine.globals);
+		expect(machine.allocated).toBe(100);
+		const thrown = (s: (typeof globals)[number]) => {
+			try {
+				machine.exec(s, machine.globals);
+			} catch (e) {
+				return e;
+			}
+			return null;
+		};
+		const full = thrown(b);
+		expect(full).toBeInstanceOf(CLimitError);
+		expect((full as CLimitError).message).toBe(
+			'stopped: the program needs more than 100 elements of memory'
+		);
+		expect(machine.allocated).toBe(100);
+		// Bad sizes are reported as themselves, not as the limit.
+		for (const s of [c, d]) {
+			const e = thrown(s);
+			expect(e).toBeInstanceOf(CRuntimeError);
+			expect(e).not.toBeInstanceOf(CLimitError);
+		}
+		// Without a limit nothing is counted against one.
+		const free = new CMachine({ budget: 1000, outputLimit: 1000, hooks: noScanner });
+		for (const s of globals.slice(0, 4)) free.exec(s, free.globals);
+		expect(free.globals.get('b')?.arr?.data.length).toBe(1);
 	});
 
 	it('reports unsupported features clearly', () => {

@@ -76,7 +76,7 @@ export class CRuntimeError extends Error {
 	}
 }
 
-/** The step budget or the output limit ran out. */
+/** The step budget, the output limit, or the memory limit ran out. */
 export class CLimitError extends CRuntimeError {}
 
 /** exit(status) */
@@ -237,6 +237,12 @@ export interface MachineOptions {
 	budget: number;
 	/** Characters of output before the run stops. */
 	outputLimit: number;
+	/**
+	 * Elements of array, malloc() / calloc(), and strdup() memory the program may
+	 * allocate in total; a larger request stops it (a CLimitError) before anything
+	 * is allocated. No limit when omitted.
+	 */
+	memoryLimit?: number;
 	hooks: FlexHooks;
 }
 
@@ -247,6 +253,8 @@ export class CMachine {
 	readonly warnings: Diagnostic[] = [];
 	private readonly warned = new Set<string>();
 	private outputSize = 0;
+	/** Elements allocated so far, counted against `memoryLimit`. */
+	allocated = 0;
 	steps = 0;
 	/** Output attribution, set by the runtime. */
 	at = -1;
@@ -358,6 +366,19 @@ export class CMachine {
 				loc
 			);
 		}
+	}
+
+	/** Counts `n` elements about to be allocated against the memory limit. */
+	private reserve(n: number, loc?: Loc): void {
+		const limit = this.opts.memoryLimit;
+		if (limit === undefined) return;
+		if (n > limit - this.allocated) {
+			throw new CLimitError(
+				`stopped: the program needs more than ${limit.toLocaleString('en-US')} elements of memory`,
+				loc
+			);
+		}
+		this.allocated += n;
 	}
 
 	/** Runs top-level declarations and registers functions. */
@@ -553,6 +574,7 @@ export class CMachine {
 		if (len === null) throw new CRuntimeError(`array ${decl.name} needs a size`, decl.loc);
 		if (len <= 0 || len > MAX_ARRAY)
 			throw new CRuntimeError(`array ${decl.name} has a bad size (${len})`, decl.loc);
+		this.reserve(len, decl.loc);
 		const elem = decl.type;
 		const data: (number | Val)[] = new Array(len);
 		const zero = this.zero(elem);
@@ -1095,7 +1117,9 @@ export class CMachine {
 			}
 			case 'strdup': {
 				this.need(name, args, 1, loc);
-				return { t: 'p', m: this.chars(str(args[0]), 'a strdup() copy'), o: 0 };
+				const s = str(args[0]);
+				this.reserve([...s].length + 1, loc);
+				return { t: 'p', m: this.chars(s, 'a strdup() copy'), o: 0 };
 			}
 			case 'strchr':
 			case 'strrchr': {
@@ -1177,6 +1201,7 @@ export class CMachine {
 						? this.toInt(args[0] ?? i(0), loc)
 						: this.toInt(args[0] ?? i(0), loc) * this.toInt(args[1] ?? i(0), loc);
 				if (n <= 0 || n > MAX_ARRAY) throw new CRuntimeError(`${name}(${n}): bad size`, loc);
+				this.reserve(n, loc);
 				const data: number[] = new Array(n).fill(0);
 				return {
 					t: 'p',
