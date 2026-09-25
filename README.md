@@ -20,13 +20,14 @@ npm run preview      # serve the production build locally
 
 ## Deployment
 
-Deploys use wrangler's direct upload to the `cs435` Cloudflare Pages project (configured in
-`wrangler.jsonc`).
+The `cs435` Cloudflare Pages project (cs435.seanfunk.xyz) is connected to this GitHub repository:
 
-```sh
-npm run deploy:preview   # preview deployment for the current git branch
-npm run deploy           # production deployment (run from an up-to-date main)
-```
+- every branch and pull request gets a preview deployment, and
+- every push to `main` deploys to production.
+
+Build settings: command `npm run build`, output directory `build` (also set by
+`pages_build_output_dir` in `wrangler.jsonc`, which Pages reads during builds). The Node
+version comes from `.node-version`.
 
 ## Workflow
 
@@ -34,7 +35,7 @@ npm run deploy           # production deployment (run from an up-to-date main)
   requests.
 - CI (`.github/workflows/ci.yml`) runs lint, type-check, unit tests, and a production build on every
   PR.
-- Each PR gets a preview deployment; `main` is deployed to production after merge.
+- Each PR gets a Cloudflare Pages preview deployment; merging to `main` deploys production.
 
 ## Project layout
 
