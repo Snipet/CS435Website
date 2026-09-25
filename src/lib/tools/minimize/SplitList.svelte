@@ -61,7 +61,16 @@ a string that tells the two states apart.
 	<p class="note">
 		No block splits: within each block, every state goes to the same blocks on every symbol. P<sub
 			>{round.index}</sub
-		> is final, and each block becomes one state of the minimal DFA.
+		>
+		is final, and each block
+		{#if view.droppedTrap}
+			except block <BlockChip
+				id={view.droppedTrap.id}
+				tone={view.droppedTrap.tone}
+				prefix={false}
+			/>, which holds only the trap,
+		{/if}
+		becomes one state of the minimal DFA.
 	</p>
 {:else}
 	<ul class="splits">
@@ -116,7 +125,9 @@ a string that tells the two states apart.
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);
 		color: var(--text);
-		white-space: pre;
+		/* Spaces stay visible; a long string wraps instead of widening the page. */
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 	}
 	.splits {
 		display: flex;

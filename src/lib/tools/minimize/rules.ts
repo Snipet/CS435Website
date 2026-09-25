@@ -12,6 +12,8 @@ const RULE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export interface RulesResult {
 	rules: TokenRule[];
+	/** offsets[i]: where the RE of rules[i] starts in the rules text (its spans are relative to it). */
+	offsets: number[];
 	/** Spans index into the rules text (source null). */
 	diagnostics: Diagnostic[];
 }
@@ -36,6 +38,7 @@ export function parseRules(
 	defs: Pick<DefinitionsResult, 'defs' | 'invalid'>
 ): RulesResult {
 	const rules: TokenRule[] = [];
+	const offsets: number[] = [];
 	const diagnostics: Diagnostic[] = [];
 	const at = (start: number, end: number) => ({ start, end, source: null });
 	let offset = 0;
@@ -78,7 +81,10 @@ export function parseRules(
 		const whole = { start: exprStart, end: Math.max(exprEnd, exprStart + 1) };
 		const parsed = parseRegex(expr, { defs: defs.defs, invalid: defs.invalid });
 		for (const d of parsed.diagnostics) diagnostics.push(shift(d, exprStart, whole));
-		if (parsed.ok) rules.push({ name, regex: parsed.regex });
+		if (parsed.ok) {
+			rules.push({ name, regex: parsed.regex });
+			offsets.push(exprStart);
+		}
 	}
 	if (rules.length === 0 && !diagnostics.some((d) => d.severity === 'error'))
 		diagnostics.push({
@@ -86,5 +92,5 @@ export function parseRules(
 			message: 'Add a rule such as Integer = digit+',
 			span: at(0, 0)
 		});
-	return { rules, diagnostics };
+	return { rules, offsets, diagnostics };
 }

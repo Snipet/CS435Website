@@ -169,6 +169,42 @@ describe('refinementView: other machines', () => {
 		});
 	});
 
+	it('the final summary counts the states of the minimal DFA, not the blocks', () => {
+		const summary = (view: RefinementView) => roundSummary(view, view.rounds.length - 1);
+		// 06 slide 7: the lone trap block is dropped.
+		const partial = presets.find((p) => p.id === 'one-star-zero')!;
+		const result = minimize(buildInput(fromSaved(partial.value)).dfa!);
+		const view = refinementView(result);
+		expect(result.dfa.states).toHaveLength(2);
+		expect(view.droppedTrap?.states).toEqual([result.trap]);
+		expect(view.droppedTrap?.id).toBe(3);
+		expect(summary(view)).toBe(
+			'Round 2: no block splits, so the partition is final: 3 blocks. Block 3 holds only the trap and is dropped, so the minimal DFA has 2 states.'
+		);
+		// A trap that merges with a state is not dropped.
+		const merged = viewOf('start: A\naccept: B\nA a B\nB b D\nD a D\nD b D');
+		expect(merged.droppedTrap).toBeNull();
+		expect(summary(merged)).toMatch(/final: 3 blocks, 3 states in the minimal DFA\.$/);
+		// Missing transitions on a symbol that only the alphabet line declares.
+		const declared = viewOf('alphabet: 0,1,2\nstart: A\naccept: B\nA 0 B\nB 0 A\nA 1 A\nB 1 B');
+		expect(summary(declared)).toMatch(/final: 3 blocks\. .* the minimal DFA has 2 states\.$/);
+		// Every preset, with and without tokens: the stated count is the result's.
+		for (const preset of presets)
+			for (const byToken of [true, false]) {
+				const r = minimize(buildInput(fromSaved(preset.value)).dfa!, { splitByToken: byToken });
+				const v = refinementView(r);
+				const n = r.dfa.states.length;
+				const stated = summary(v).match(/(\d+) states? in the minimal DFA|has (\d+) states?\.$/);
+				expect(Number(stated?.[1] ?? stated?.[2]), `${preset.id} ${byToken}`).toBe(n);
+				expect(v.resultBlocks).toHaveLength(n);
+			}
+		const scanner = presets.find((p) => p.id === 'scanner')!;
+		const tokens = refinementView(minimize(buildInput(fromSaved(scanner.value)).dfa!));
+		expect(summary(tokens)).toBe(
+			'Round 2: no block splits, so the partition is final: 6 blocks. Block 6 holds only the trap and is dropped, so the minimal DFA has 5 states.'
+		);
+	});
+
 	it('the trap is a state of the partitioned machine', () => {
 		const view = viewOf('start: q0\naccept: q1\nq0 1 q0\nq0 0 q1');
 		expect(view.input.states.map((s) => s.name)).toEqual(['q0', 'q1', 'trap']);

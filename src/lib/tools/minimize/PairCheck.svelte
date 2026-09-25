@@ -162,7 +162,9 @@ shortest string that tells them apart, with the run from each state.
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		background: var(--surface);
-		white-space: pre;
+		/* Spaces stay visible; a long string wraps instead of widening the page. */
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
 	}
 	.runs {
 		display: flex;

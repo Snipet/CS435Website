@@ -139,6 +139,12 @@ export interface RefinementView {
 	rounds: RoundView[];
 	/** Minimal DFA state → the final block it stands for. */
 	resultBlocks: Block[];
+	/**
+	 * The final block that holds only the added trap state. The minimal DFA
+	 * drops it (its missing transitions mean the trap), so it is the one final
+	 * block without a state in `resultBlocks`; null when every block is kept.
+	 */
+	droppedTrap: Block | null;
 	/** True when some accepting state reports a token. */
 	hasTokens: boolean;
 }
@@ -263,8 +269,9 @@ export function refinementView(result: MinimizeResult): RefinementView {
 
 	const final = partitions[partitions.length - 1];
 	const resultBlocks = result.dfa.states.map((_, i) => final.blocks[i]);
+	const droppedTrap = final.blocks.find((b) => !resultBlocks.includes(b)) ?? null;
 	const hasTokens = input.states.some((s) => s.accepting && s.accept !== undefined);
-	return { input, classes, delta, rounds, resultBlocks, hasTokens };
+	return { input, classes, delta, rounds, resultBlocks, droppedTrap, hasTokens };
 }
 
 /**
@@ -302,7 +309,12 @@ export function roundSummary(view: RefinementView, r: number): string {
 	}
 	if (round.splits.length === 0) {
 		const n = blocks.length;
-		return `Round ${r}: no block splits, so the partition is final: ${n} ${n === 1 ? 'block' : 'blocks'}, ${n} ${n === 1 ? 'state' : 'states'} in the minimal DFA.`;
+		const blockText = `${n} ${n === 1 ? 'block' : 'blocks'}`;
+		const states = view.resultBlocks.length;
+		const stateText = `${states} ${states === 1 ? 'state' : 'states'}`;
+		if (view.droppedTrap)
+			return `Round ${r}: no block splits, so the partition is final: ${blockText}. Block ${view.droppedTrap.id} holds only the trap and is dropped, so the minimal DFA has ${stateText}.`;
+		return `Round ${r}: no block splits, so the partition is final: ${blockText}, ${stateText} in the minimal DFA.`;
 	}
 	const parts = round.splits.map(
 		(s) => `block ${s.block?.id} splits into blocks ${listText(s.parts.map(String))}`

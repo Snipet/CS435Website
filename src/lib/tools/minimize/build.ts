@@ -15,9 +15,18 @@ import {
 	type Automaton,
 	type StateId
 } from '$lib/theory/automata';
+import { CharSet } from '$lib/theory/charset';
 import { formatLabel } from '$lib/theory/chars';
 import type { Diagnostic } from '$lib/theory/diagnostics';
-import { parseDefinitions, parseRegex, type Regex } from '$lib/theory/regex';
+import {
+	children,
+	containsAny,
+	parseDefinitions,
+	parseRegex,
+	symbolsOf,
+	type Regex,
+	type Span
+} from '$lib/theory/regex';
 import { parseRules } from './rules';
 import type { MinimizeState } from './state';
 
@@ -51,8 +60,10 @@ export interface BuildResult {
 const hasError = (ds: readonly Diagnostic[]) => ds.some((d) => d.severity === 'error');
 
 /**
- * Upper bound on the number of states of Thompson's NFA for `r` (derived forms
- * make fresh copies, so repetition multiplies). Saturates instead of overflowing.
+ * Number of states of Thompson's NFA for `r`, following `thompson` case by
+ * case (derived forms make fresh copies of their operand, so repetition
+ * multiplies). Computed without building the NFA; saturates instead of
+ * overflowing.
  */
 export function thompsonSize(r: Regex): number {
 	const cap = (n: number) => Math.min(n, Number.MAX_SAFE_INTEGER);
@@ -72,20 +83,30 @@ export function thompsonSize(r: Regex): number {
 				out = n.parts.reduce((s, p) => cap(s + size(p)), 0);
 				break;
 			case 'alt':
-				out = n.options.reduce((s, p) => cap(s + size(p) + 2), 0);
+				// Options are joined two at a time; each join adds a start and a final.
+				out = cap(n.options.reduce((s, p) => cap(s + size(p)), 0) + 2 * (n.options.length - 1));
 				break;
 			case 'star':
 				out = cap(size(n.body) + 2);
 				break;
 			case 'plus':
+				// A A*
 				out = cap(2 * size(n.body) + 2);
 				break;
 			case 'optional':
+				// A | ε
 				out = cap(size(n.body) + 4);
 				break;
 			case 'repeat': {
-				const copies = (n.max ?? n.min + 1) + 1;
-				out = cap(copies * (size(n.body) + 4));
+				const { min, max } = n;
+				if ((max ?? min + 1) <= 0) {
+					out = 2; // the fragment for ε
+					break;
+				}
+				const body = size(n.body);
+				// min copies of A, then A* (no max) or max − min copies of A | ε.
+				const rest = max === null ? body + 2 : Math.max(0, max - min) * (body + 4);
+				out = cap(cap(min * body) + rest);
 				break;
 			}
 			case 'ref':
@@ -130,6 +151,55 @@ function determinize(nfa: Automaton, out: BuildResult): BuildResult {
 	}
 	out.dfa = subsetConstruction(nfa).dfa;
 	return out;
+}
+
+/** Span of the first Σ written in the expression itself (not inside a definition). */
+function anySpan(r: Regex): Span | undefined {
+	const seen = new Set<Regex>();
+	const stack = [r];
+	while (stack.length > 0) {
+		const n = stack.pop()!;
+		if (seen.has(n)) continue;
+		seen.add(n);
+		if (n.kind === 'any' && n.span?.source === null) return n.span;
+		// Definition bodies are spanned in the other editor.
+		if (n.kind !== 'ref') stack.push(...[...children(n)].reverse());
+	}
+	return undefined;
+}
+
+/**
+ * The page has no alphabet of its own, so Σ stands for the symbols the input
+ * uses (as in `thompson` and `scannerDfa`). Says which set that is, and warns
+ * when it is empty.
+ */
+export function sigmaNote(
+	regexes: readonly { regex: Regex; offset: number }[],
+	what: 'the RE' | 'the rules'
+): Diagnostic | null {
+	const users = regexes.filter((r) => containsAny(r.regex));
+	if (users.length === 0) return null;
+	const sigma = CharSet.fromRanges(regexes.flatMap((r) => symbolsOf(r.regex).ranges));
+	let span: Span | undefined;
+	for (const r of users) {
+		const at = anySpan(r.regex);
+		if (at) {
+			span = { start: at.start + r.offset, end: at.end + r.offset, source: null };
+			break;
+		}
+	}
+	const uses = what === 'the RE' ? 'uses' : 'use';
+	return sigma.isEmpty
+		? {
+				severity: 'warning',
+				message: `Σ is empty here: ${what} ${uses} no other symbols, so Σ matches nothing.`,
+				...(span ? { span } : {})
+			}
+		: {
+				severity: 'info',
+				message: `Σ = { ${formatLabel(sigma, { separator: ', ' })} } here: the symbols ${what} ${uses}.`,
+				...(span ? { span } : {})
+			};
 }
 
 function nfaReasons(a: Automaton): string[] {
@@ -185,6 +255,8 @@ export function buildInput(
 		const parsed = parseRegex(state.re, { defs: defs.defs, invalid: defs.invalid });
 		out.diagnostics.re = parsed.diagnostics;
 		if (!parsed.ok || hasError(defs.diagnostics)) return invalid();
+		const sigma = sigmaNote([{ regex: parsed.regex, offset: 0 }], 'the RE');
+		if (sigma) out.diagnostics.re = [...out.diagnostics.re, sigma];
 		if (thompsonSize(parsed.regex) > MAX_NFA_STATES) {
 			out.problem = { kind: 'too-big', what: 'nfa', limit: MAX_NFA_STATES };
 			return out;
@@ -195,6 +267,11 @@ export function buildInput(
 	const rules = parseRules(state.rules, defs);
 	out.diagnostics.rules = rules.diagnostics;
 	if (hasError(rules.diagnostics) || hasError(defs.diagnostics)) return invalid();
+	const sigma = sigmaNote(
+		rules.rules.map((r, i) => ({ regex: r.regex, offset: rules.offsets[i] })),
+		'the rules'
+	);
+	if (sigma) out.diagnostics.rules = [...out.diagnostics.rules, sigma];
 	const size = rules.rules.reduce((n, r) => n + thompsonSize(r.regex), 1);
 	if (size > MAX_NFA_STATES) {
 		out.problem = { kind: 'too-big', what: 'nfa', limit: MAX_NFA_STATES };

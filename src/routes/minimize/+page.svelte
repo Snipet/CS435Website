@@ -52,8 +52,11 @@
 	const stepper = new Stepper(() => view?.rounds.length ?? 0, { index: model.round });
 	const round = $derived(view ? view.rounds[stepper.index] : null);
 
-	// The current step is part of the shared link.
+	// The current step is part of the shared link. While the input has errors
+	// there are no rounds; reading the index then would clamp it to 0 and lose
+	// the step, so the effect waits for the next valid machine.
 	$effect(() => {
+		if (!view) return;
 		const i = stepper.index;
 		untrack(() => {
 			if (model.round !== i) model.round = i;
@@ -67,6 +70,9 @@
 				? model.rules.trim() === ''
 				: model.text.trim() === ''
 	);
+
+	// Rounds count from 0 like the partitions P0, P1, …: "Round 2 of 2" is the last one.
+	const roundCounter = (index: number, total: number) => `Round ${index} of ${total - 1}`;
 
 	const nameOf = (s: StateId): string => {
 		const st = view?.input.states[s];
@@ -123,7 +129,8 @@
 				}))
 			: []
 	);
-	// Every state of the given DFA is reachable and none merges with another.
+	// Every state of the given DFA is reachable and none merges with another
+	// (an added trap may still merge with a state that rejects everything).
 	const alreadyMinimal = $derived(
 		result !== null &&
 			built.dfa !== null &&
@@ -340,7 +347,13 @@
 		>
 			{#if view && round}
 				<div class="stack">
-					<StepControls {stepper} noun="Step" ariaLabel="Refinement rounds" label={caption} />
+					<StepControls
+						{stepper}
+						noun="Round"
+						counter={roundCounter}
+						ariaLabel="Refinement rounds"
+						label={caption}
+					/>
 
 					{#if drawn}
 						<figure class="figure">
@@ -441,7 +454,9 @@
 							<AutomatonView
 								automaton={result.dfa}
 								height="auto"
-								ariaLabel="The minimal DFA, one state per block of the final partition"
+								ariaLabel={view.droppedTrap
+									? 'The minimal DFA, one state per block of the final partition except the trap’s block'
+									: 'The minimal DFA, one state per block of the final partition'}
 							/>
 						{:else}
 							<Callout tone="info">
@@ -466,7 +481,7 @@
 						</div>
 						{#if alreadyMinimal}
 							<p class="verdict">
-								<Icon name="check" size={16} /> Already minimal: no two states are equivalent.
+								<Icon name="check" size={16} /> Already minimal: no two states of the given DFA are equivalent.
 							</p>
 						{/if}
 
