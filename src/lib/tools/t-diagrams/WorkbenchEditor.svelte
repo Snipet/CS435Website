@@ -80,7 +80,14 @@
 	}
 </script>
 
-{#snippet tFields(t: TDiagram, name: string, list: readonly WorkbenchIssue[], errId: string)}
+{#snippet tFields(
+	t: TDiagram,
+	name: string,
+	list: readonly WorkbenchIssue[],
+	errId: string,
+	removeLabel: string,
+	onremove: () => void
+)}
 	<div class="t-fields" role="group" aria-label={name}>
 		{#each FIELDS as field, k (field)}
 			<!-- A field keeps its punctuation when the row wraps. -->
@@ -96,6 +103,10 @@
 				<span class="sym" aria-hidden="true">{k === 0 ? '→' : k === 1 ? '/' : ')'}</span>
 			</span>
 		{/each}
+		<!-- In the fields' flow, not a column of its own, so the fields can take the whole row. -->
+		<span class="remove">
+			<IconButton icon="x" size="sm" label={removeLabel} onclick={onremove} />
+		</span>
 	</div>
 {/snippet}
 
@@ -115,13 +126,14 @@
 				{@const list = diagramIssues(i)}
 				<li class="row">
 					<span class="num" aria-hidden="true">{i + 1}</span>
-					{@render tFields(item, `Diagram ${i + 1}`, list, `${uid}-d${i}-err`)}
-					<IconButton
-						icon="x"
-						size="sm"
-						label="Remove diagram {i + 1}"
-						onclick={() => onremove(item.id)}
-					/>
+					{@render tFields(
+						item,
+						`Diagram ${i + 1}`,
+						list,
+						`${uid}-d${i}-err`,
+						`Remove diagram ${i + 1}`,
+						() => onremove(item.id)
+					)}
 					{#if list.length}
 						<p class="row-msg {list[0].severity}" id="{uid}-d{i}-err">{list[0].message}</p>
 					{/if}
@@ -171,12 +183,14 @@
 								/>
 							</span>
 						</div>
-						<IconButton
-							icon="x"
-							size="sm"
-							label="Remove subset {i + 1}"
-							onclick={() => subsets.splice(i, 1)}
-						/>
+						<span class="remove">
+							<IconButton
+								icon="x"
+								size="sm"
+								label="Remove subset {i + 1}"
+								onclick={() => subsets.splice(i, 1)}
+							/>
+						</span>
 						{#if list.length}
 							<p class="row-msg {list[0].severity}" id={errId}>{list[0].message}</p>
 						{/if}
@@ -219,8 +233,14 @@
 				<span class="num want" aria-hidden="true">
 					<Icon name="arrow-right" size={14} />
 				</span>
-				{@render tFields(goal, 'Goal', goalIssues, `${uid}-goal-err`)}
-				<IconButton icon="x" size="sm" label="Remove the goal" onclick={() => (goal = null)} />
+				{@render tFields(
+					goal,
+					'Goal',
+					goalIssues,
+					`${uid}-goal-err`,
+					'Remove the goal',
+					() => (goal = null)
+				)}
 				{#if goalIssues.length}
 					<p class="row-msg {goalIssues[0].severity}" id="{uid}-goal-err">
 						{goalIssues[0].message}
@@ -287,14 +307,24 @@
 		padding: 0;
 		list-style: none;
 	}
+	/*
+		A row: a diagram's number and fields, or a subset's fields, with the remove
+		button at the end of their line. The fields are never narrower than their
+		widest part (a name of MAX_LABEL characters with its punctuation) unless
+		the row itself is: when that part does not fit beside the number or the
+		button, the fields or the button go to the next line instead of the name
+		being cut off.
+	*/
 	.row {
-		display: grid;
-		grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-1) var(--space-2);
 		min-width: 0;
 	}
 	.num {
+		flex: none;
+		width: 1.25rem;
 		color: var(--text-3);
 		font-size: var(--text-xs);
 		font-weight: 600;
@@ -310,10 +340,14 @@
 	.t-fields,
 	.subset-fields {
 		display: flex;
+		flex: 1 1 0;
 		flex-wrap: wrap;
 		align-items: center;
 		gap: 4px;
-		min-width: 0;
+		max-width: 100%;
+	}
+	.subset-fields {
+		max-width: min(16rem, 100%);
 	}
 	.part {
 		display: flex;
@@ -322,9 +356,13 @@
 		gap: 4px;
 		min-width: 0;
 	}
-	.subset-fields {
-		grid-column: 1 / 3;
-		max-width: 16rem;
+	.remove {
+		display: flex;
+		flex: none;
+		margin-left: auto;
+	}
+	.t-fields > .remove {
+		padding-left: 4px;
 	}
 	.sym {
 		flex: none;
@@ -333,8 +371,9 @@
 		font-size: var(--text-sm);
 	}
 	.row-msg {
-		grid-column: 2 / -1;
+		flex: 1 0 100%;
 		margin: 0;
+		padding-left: calc(1.25rem + var(--space-2));
 		font-size: var(--text-xs);
 		line-height: 1.4;
 	}

@@ -9,8 +9,10 @@ import Bench from './Bench.svelte';
 import BootstrapFigure from './BootstrapFigure.svelte';
 import { BENCH_METRICS, equationLayout, minFitWidth, tGeometry } from './geometry';
 import LangInput from './LangInput.svelte';
+import { MAX_LABEL, MONO_ADVANCE } from './labels';
 import { compose } from './model';
 import Tray from './Tray.svelte';
+import WorkbenchEditor from './WorkbenchEditor.svelte';
 import {
 	BOOTSTRAP_FACTS,
 	bootstrapFigure,
@@ -41,6 +43,73 @@ describe('LangInput', () => {
 		expect(css).toMatch(
 			/@supports \(field-sizing: content\)\s*{\s*\.lang-input\s*{\s*width: auto;/
 		);
+	});
+});
+
+describe('WorkbenchEditor', () => {
+	const long = 'ABCDEFGHIJKLMNOPQRSTUVWX';
+	const { body } = render(WorkbenchEditor, {
+		props: {
+			toolbox: [{ id: 't1', source: long, target: long, host: long }],
+			subsets: [{ sub: long, sup: long }],
+			runnable: 'M',
+			goal: { source: long, target: 'M', host: long },
+			issues: [],
+			onadd: () => {},
+			onremove: () => {}
+		}
+	});
+	const css = source('./WorkbenchEditor.svelte');
+	/** The declarations of the rule whose selector list is exactly `selector`. */
+	const rule = (selector: string) => {
+		const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+		const m = new RegExp(`(?<!,)\\n\\t${escaped} {([^}]*)}`).exec(css);
+		expect(m, selector).not.toBeNull();
+		return m![1];
+	};
+	/** The markup of the field group named `name` (it holds no nested div). */
+	const group = (name: string) => {
+		const start = body.indexOf(`role="group" aria-label="${name}"`);
+		expect(start, name).toBeGreaterThan(-1);
+		return body.slice(start, body.indexOf('</div>', start));
+	};
+
+	it('ends a diagram’s and the goal’s fields with the remove button, not a column of its own', () => {
+		expect(group('Diagram 1')).toContain('aria-label="Remove diagram 1"');
+		expect(group('Goal')).toContain('aria-label="Remove the goal"');
+		// A subset's fields are at most 16rem wide; its button stays at the end of the row.
+		expect(group('Subset 1')).not.toContain('Remove subset 1');
+		expect(body).toContain('aria-label="Remove subset 1"');
+	});
+
+	it('wraps a row instead of making its fields narrower than their widest part', () => {
+		expect(rule('.row')).toMatch(/display: flex;\s*flex-wrap: wrap;/);
+		const fields = rule('.t-fields,\n\t.subset-fields');
+		expect(fields).toContain('flex: 1 1 0;');
+		expect(fields).toContain('max-width: 100%;');
+		// min-width stays auto: the group is as wide as its widest field and punctuation.
+		expect(fields).not.toContain('min-width');
+		expect(rule('.subset-fields')).toContain('max-width: min(16rem, 100%);');
+		expect(rule('.remove')).toContain('margin-left: auto;');
+	});
+
+	it('fits a name of MAX_LABEL characters beside the number in a 360 px row', () => {
+		const rem = 16;
+		// 360 px less the page gutter (16 px), the panel's border (1 px) and its padding
+		// (12 px under 480 px) on each side.
+		const row = 360 - 2 * (16 + 1 + 12);
+		// The fields' font: monospace at --text-sm (0.875rem).
+		const ch = MONO_ADVANCE * 0.875 * rem;
+		const pad = /width: calc\(var\(--chars, 1\) \* 1ch \+ (\d+)px\)/.exec(
+			source('./LangInput.svelte')
+		);
+		const field = MAX_LABEL * ch + Number(pad![1]);
+		const num = Number(/width: ([\d.]+)rem;/.exec(rule('.num'))![1]) * rem;
+		const gap = Number(/gap: (\d+)px;/.exec(rule('.part'))![1]);
+		const beside = num + 0.5 * rem; // the number and --space-2
+		// The widest parts: `T(` name `→` for a diagram, name `⊆` for a subset.
+		expect(beside + 2 * ch + gap + field + gap + ch).toBeLessThanOrEqual(row);
+		expect(field + gap + ch).toBeLessThanOrEqual(Math.min(16 * rem, row));
 	});
 });
 
