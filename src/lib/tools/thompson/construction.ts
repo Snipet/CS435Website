@@ -147,6 +147,21 @@ export function buildConstruction(re: string, defs: string): BuildOutcome {
 	};
 }
 
+/**
+ * What the page draws for `outcome`, given what it drew before (`last`): the
+ * new construction when it builds; while the input has errors (often
+ * mid-typing), `last`, shown faded; nothing when the expression is too large
+ * to draw, so a later error cannot bring back an older machine. The result is
+ * the next call's `last`. A freshly loaded link starts from `last = null`.
+ */
+export function drawnConstruction(
+	outcome: BuildOutcome,
+	last: Construction | null
+): Construction | null {
+	if (outcome.status === 'ok') return outcome.construction;
+	return outcome.status === 'invalid' ? last : null;
+}
+
 // ---------------------------------------------------------------------------
 // One step as drawn
 // ---------------------------------------------------------------------------
@@ -187,7 +202,11 @@ export interface StepView {
 	groups: AutomatonGroup[];
 }
 
-const shorten = (text: string, max = 32) =>
+/** Operand outlines are drawn for steps with at most this many operands. */
+export const MAX_PART_OUTLINES = 6;
+
+/** `text`, cut to at most `max` characters with a trailing "…". */
+export const shorten = (text: string, max = 32): string =>
 	[...text].length <= max ? text : `${[...text].slice(0, max - 1).join('')}…`;
 
 /**
@@ -220,7 +239,9 @@ export function stepView(c: Construction, index: number): StepView {
 	const groups: AutomatonGroup[] = [
 		{ id: 'current', label: shorten(texts[index]), states: step.fragment.states.map(view), tone: 0 }
 	];
-	for (const j of childSteps(c, index)) {
+	const parts = childSteps(c, index);
+	// A long row of operands (a 20-symbol string) gets only the current outline.
+	for (const j of parts.length <= MAX_PART_OUTLINES ? parts : []) {
 		const states = result.steps[j].fragment.states;
 		// A definition use or A¹ is its operand: the outline would coincide.
 		if (states.length === own.size && states.every((s) => own.has(s))) continue;
@@ -294,7 +315,8 @@ const listFormat = new Intl.ListFormat('en', { style: 'long', type: 'conjunction
 /** "E", "E and F", "B, D, and F". */
 export const andList = (items: readonly string[]): string => listFormat.format(items);
 
-const sup = (n: number) =>
+/** Superscript digits: 12 → "¹²". */
+export const sup = (n: number): string =>
 	String(n)
 		.split('')
 		.map((d) => '⁰¹²³⁴⁵⁶⁷⁸⁹'[Number(d)])

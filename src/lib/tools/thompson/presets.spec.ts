@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { decks } from '$lib/lectures';
+import { decks, formatCitation } from '$lib/lectures';
 import { formatLabel } from '$lib/theory/chars';
 import { parseDefinitions, parseRegex } from '$lib/theory/regex';
 import { accepts, enumerate, type Automaton } from '$lib/theory/automata';
@@ -154,6 +154,13 @@ describe('lecture examples', () => {
 		const c = load('lecture-number');
 		expect(c.result.nfa.states).toHaveLength(6);
 		expect(edges(c.result.nfa).filter((e) => e.includes('0–9'))).toHaveLength(2);
+	});
+
+	it('digit digit* cites both slides it uses: number (27) and the … spelling of digit (29)', () => {
+		const p = presets.find((x) => x.id === 'lecture-number')!;
+		expect(p.value.defs).toBe("digit = '0' | '1' | '2' | … | '9'");
+		expect(p.cite).toEqual({ deck: '04', slide: [27, 29] });
+		expect(formatCitation(p.cite!)).toBe('Lexical Analysis · slides 27–29');
 	});
 
 	it('every expression built from symbols, |, * and concatenation meets 2 × (symbols + | + *)', () => {

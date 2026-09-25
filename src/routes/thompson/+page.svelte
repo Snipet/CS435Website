@@ -26,10 +26,12 @@
 		buildConstruction,
 		constructionExtent,
 		describeStep,
+		drawnConstruction,
 		formulaText,
 		sizeStats,
 		sourceMarks,
 		stepView,
+		type BuildOutcome,
 		type Construction
 	} from '$lib/tools/thompson/construction';
 	import { presetFor, presets, type ThompsonPreset } from '$lib/tools/thompson/presets';
@@ -48,10 +50,18 @@
 	let form = $state<ThompsonState>({ ...DEFAULT_STATE });
 	let defsOpen = $state(false);
 
+	/** Whether the last change was typed (the drawing then waits for a pause). */
+	let typing = false;
+	/** The last construction that built, shown faded while the input has errors. */
+	let lastBuilt: Construction | null = null;
+
 	syncToHash(() => form, {
 		validate: isThompsonHash,
 		onLoad: (value) => {
 			const next = stateFromHash(value);
+			// A loaded link starts afresh: no fallback to a machine the link does not describe.
+			typing = false;
+			lastBuilt = null;
 			form.re = next.re;
 			form.defs = next.defs;
 			form.step = next.step;
@@ -59,16 +69,36 @@
 		}
 	});
 
+	/** Parse results for the fields, on every keystroke. */
 	const outcome = $derived(buildConstruction(form.re, form.defs));
+
+	/**
+	 * What the drawing shows. Typed edits reach it after a short pause, so a
+	 * large machine is laid out once instead of on every keystroke; presets and
+	 * links apply at once.
+	 */
+	const SETTLE_MS = 160;
+	let settled = $state.raw<BuildOutcome>(untrack(() => outcome));
+	$effect(() => {
+		const next = outcome;
+		if (!typing) {
+			settled = next;
+			return;
+		}
+		const timer = setTimeout(() => {
+			typing = false;
+			settled = next;
+		}, SETTLE_MS);
+		return () => clearTimeout(timer);
+	});
 
 	// While the expression has errors (often mid-typing), keep showing the last
 	// construction that built, faded, instead of emptying the page.
-	let lastBuilt: Construction | null = null;
 	const shown = $derived.by(() => {
-		if (outcome.status === 'ok') return (lastBuilt = outcome.construction);
-		return outcome.status === 'invalid' ? lastBuilt : null;
+		lastBuilt = drawnConstruction(settled, lastBuilt);
+		return lastBuilt;
 	});
-	const stale = $derived(shown !== null && outcome.status !== 'ok');
+	const stale = $derived(shown !== null && settled.status !== 'ok');
 	const total = $derived(shown?.result.steps.length ?? 0);
 
 	const stepper = new Stepper(() => total, { index: untrack(() => Math.max(0, total - 1)) });
@@ -95,6 +125,13 @@
 	const description = $derived(shown && total ? describeStep(shown, index) : null);
 	const rule = $derived(shown && total ? ruleCard(shown, index) : null);
 	const marks = $derived(shown && total ? sourceMarks(shown, index) : null);
+	/** The current step's span in the input; none for the whole expression or a stale drawing. */
+	const inputMark = $derived.by(() => {
+		const m = marks?.main;
+		if (!m || !shown || stale || shown.re !== form.re) return null;
+		const lead = form.re.length - form.re.trimStart().length;
+		return m.start <= lead && m.end >= form.re.trimEnd().length ? null : m;
+	});
 	const tree = $derived(shown ? layoutTree(shown.regex, shown.stepByPath) : null);
 	const extent = $derived(shown ? constructionExtent(shown) : undefined);
 	const stats = $derived(shown ? sizeStats(shown) : null);
@@ -102,6 +139,40 @@
 	const viewKey = $derived(shown ? `${shown.re}\n${shown.defs}` : '');
 	/** Narrowest the drawing gets on small screens (about 0.6 px per layout unit). */
 	const nfaMinWidth = $derived(extent ? Math.round(Math.min(1000, extent.width * 0.6)) : 0);
+
+	// On small screens the drawing keeps that width and its box scrolls sideways.
+	let nfaScroller: HTMLDivElement | undefined = $state();
+	let nfaScrollerWidth = $state(0);
+	let nfaOverflows = $state(false);
+	$effect(() => {
+		void nfaScrollerWidth;
+		void nfaMinWidth;
+		const el = nfaScroller;
+		nfaOverflows = !!el && el.scrollWidth > el.clientWidth + 1;
+	});
+	// Stepping scrolls the box to the step's new states (or its fragment) when
+	// they are out of view and fit in it.
+	$effect(() => {
+		const el = nfaScroller;
+		const v = view;
+		if (!el || !v || !nfaOverflows) return;
+		const svg = el.querySelector<SVGSVGElement>('svg.drawing');
+		const vb = svg?.viewBox.baseVal;
+		if (!svg || !vb || vb.width <= 0) return;
+		const ids = v.newStates.length ? v.newStates : [...v.groups[0].states];
+		const xs = ids.flatMap((id) => v.positions.get(id)?.x ?? []);
+		if (!xs.length) return;
+		const r = svg.getBoundingClientRect();
+		const scale = r.width / vb.width;
+		const origin = r.left - el.getBoundingClientRect().left + el.scrollLeft;
+		const left = origin + (Math.min(...xs) - 44 - vb.x) * scale;
+		const right = origin + (Math.max(...xs) + 44 - vb.x) * scale;
+		const width = el.clientWidth;
+		if (right - left > width) return;
+		if (left >= el.scrollLeft && right <= el.scrollLeft + width) return;
+		const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+		el.scrollTo({ left: (left + right) / 2 - width / 2, behavior: reduce ? 'auto' : 'smooth' });
+	});
 
 	const activePreset = $derived(presetFor(form.re, form.defs));
 	const defCount = $derived(
@@ -125,6 +196,7 @@
 
 	function loadPreset(p: ThompsonPreset) {
 		stepper.pause();
+		typing = false;
 		form.re = p.value.re;
 		form.defs = p.value.defs ?? '';
 		form.step = p.value.step ?? null;
@@ -134,6 +206,7 @@
 	/** Typing shows the finished NFA of the new expression. */
 	function edited() {
 		stepper.pause();
+		typing = true;
 		form.step = null;
 	}
 
@@ -168,6 +241,7 @@
 					bind:value={form.re}
 					oninput={edited}
 					diagnostics={outcome.diagnostics}
+					highlight={inputMark}
 					placeholder="(1 | 0)*1"
 				/>
 				<Disclosure variant="boxed" bind:open={defsOpen}>
@@ -220,11 +294,11 @@
 		</div>
 	</Panel>
 
-	{#if outcome.status === 'too-big'}
+	{#if settled.status === 'too-big'}
 		<Callout tone="warn" title="Too large to draw">
 			<p>
-				This expression needs {count.format(outcome.size.states)} states and {count.format(
-					outcome.size.nodes
+				This expression needs {count.format(settled.size.states)} states and {count.format(
+					settled.size.nodes
 				)} syntax-tree nodes. The tool draws machines of up to {MAX_STATES} states and {MAX_NODES}
 				nodes.
 			</p>
@@ -276,7 +350,12 @@
 					class="nfa-panel"
 				>
 					<!-- On phones the drawing keeps a readable scale and scrolls sideways. -->
-					<div class="nfa-scroll" style="--nfa-min: {nfaMinWidth}px">
+					<div
+						class="nfa-scroll"
+						style="--nfa-min: {nfaMinWidth}px"
+						bind:this={nfaScroller}
+						bind:clientWidth={nfaScrollerWidth}
+					>
 						<AutomatonView
 							automaton={view.automaton}
 							positions={view.positions}
@@ -287,6 +366,12 @@
 							{extent}
 						/>
 					</div>
+					{#if nfaOverflows}
+						<p class="scroll-hint">
+							<Icon name="arrow-right" size={14} />
+							The drawing scrolls sideways.
+						</p>
+					{/if}
 					<ul class="legend" aria-label="Legend">
 						<li>
 							<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"
@@ -523,11 +608,32 @@
 	@media (max-width: 720px) {
 		.nfa-scroll > :global(.automaton-view) {
 			min-width: var(--nfa-min);
+			/* Clips like hidden without becoming the zoom bar's scroll container. */
+			overflow: clip;
+		}
+		/* The zoom bar stays at the right edge of the part in view. */
+		.nfa-scroll :global(.automaton-view .zoom) {
+			position: sticky;
+			top: auto;
+			right: 8px;
+			width: max-content;
+			margin: 8px 8px 0 auto;
 		}
 		/* Let a sideways swipe scroll the box instead of panning the view. */
 		.nfa-scroll :global(.drawing) {
 			touch-action: pan-x pan-y;
 		}
+	}
+	.scroll-hint {
+		display: flex;
+		align-items: center;
+		gap: var(--space-1);
+		margin: var(--space-2) 0 0;
+		color: var(--text-3);
+		font-size: var(--text-xs);
+	}
+	.scroll-hint :global(.icon) {
+		flex: none;
 	}
 
 	.legend {

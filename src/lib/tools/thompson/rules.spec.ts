@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { buildConstruction, type Construction } from './construction';
 import { presets } from './presets';
 import {
+	ELIDED,
 	atomFigure,
 	chainFigure,
 	plusFigure,
+	repeatExpansion,
 	ruleCard,
 	starFigure,
 	unionFigure,
@@ -59,14 +61,11 @@ describe('rule cards for (1 | 0)*1', () => {
 	});
 
 	it('say what the letters stand for', () => {
-		expect(cards.map((r) => r.bindings.map((b) => `${b.name} = ${b.text}`).join(', '))).toEqual([
-			'a = 1',
-			'a = 0',
-			'A = 1, B = 0',
-			'A = (1 | 0)',
-			'a = 1',
-			'A = (1 | 0)*, B = 1'
-		]);
+		expect(
+			cards.map((r) =>
+				r.bindings.map((b) => (b === ELIDED ? b : `${b.name} = ${b.text}`)).join(', ')
+			)
+		).toEqual(['a = 1', 'a = 0', 'A = 1, B = 0', 'A = (1 | 0)', 'a = 1', 'A = (1 | 0)*, B = 1']);
 	});
 
 	it('list the transitions each rule adds', () => {
@@ -163,9 +162,88 @@ describe('derived forms and other clauses', () => {
 		const three = card('a | b | c', 3);
 		expect(three.formula).toBe('A | B | C');
 		expect(three.figure.boxes.map((b) => b.label)).toEqual(['A | B', 'C']);
-		expect(three.bindings.map((b) => b.text)).toEqual(['a', 'b', 'c']);
+		expect(three.bindings.map((b) => (b === ELIDED ? b : b.text))).toEqual(['a', 'b', 'c']);
 		const ref = card('digit', 1, "digit = '0' | … | '9'");
 		expect(ref.formula).toBe('digit');
 		expect(ref.bindings).toEqual([{ name: 'digit', text: "'0' | … | '9'" }]);
+	});
+});
+
+describe('long rules stay short', () => {
+	const last = (re: string) => {
+		const c = build(re);
+		return ruleCard(c, c.result.steps.length - 1);
+	};
+	const bindingText = (m: ReturnType<typeof last>) =>
+		m.bindings.map((b) => (b === ELIDED ? b : `${b.name} = ${b.text}`)).join(', ');
+
+	it('write out up to five operands and elide longer rows', () => {
+		expect(last('a b c d e').formula).toBe('A B C D E');
+		expect(last('a b c d e f').formula).toBe('A B … F');
+		expect(last('a | b | c | d | e').formula).toBe('A | B | C | D | E');
+		const hex = last(
+			"'0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | 'a' | 'b' | 'c' | 'd' | 'e' | 'f'"
+		);
+		expect(hex.formula).toBe('A | B | … | P');
+		expect(bindingText(hex)).toBe("A = '0', B = '1', …, P = 'f'");
+	});
+
+	it('elide the moves of a long concatenation', () => {
+		const m = last('a b c d e f g');
+		expect(m.adds).toEqual([
+			['A.final', 'ε', 'B.start'],
+			['B.final', 'ε', 'C.start'],
+			ELIDED,
+			['F.final', 'ε', 'G.start']
+		]);
+		expect(bindingText(m)).toBe('A = a, B = b, …, G = g');
+	});
+
+	it('name operands after Z as AA, AB, … (letterName)', () => {
+		const m = last('0110100111010011011101001110');
+		expect(m.formula).toBe('A B … AB');
+		expect(bindingText(m)).toBe('A = 0, B = 1, …, AB = 0');
+		expect(m.adds.at(-1)).toEqual(['AA.final', 'ε', 'AB.start']);
+		expect(m.formula).not.toMatch(/\d/);
+	});
+
+	it('write long repeats with powers', () => {
+		expect(repeatExpansion(5, 5)).toBe('A A A A A');
+		expect(repeatExpansion(12, 12)).toBe('A A … A');
+		expect(repeatExpansion(12, 20)).toBe('A¹² (A?)⁸');
+		expect(repeatExpansion(0, 24)).toBe('(A?)²⁴');
+		expect(repeatExpansion(2, 6)).toBe('A A (A?)⁴');
+		expect(repeatExpansion(5, null)).toBe('A⁵ A*');
+		expect(repeatExpansion(1, 6)).toBe('A (A?)⁵');
+		expect(last('a^{12,20}').formula).toBe('A{12,20} = A¹² (A?)⁸');
+		expect(last('a^12').formula).toBe('A¹² = A A … A');
+	});
+
+	it('shorten long sub-expressions in the bindings', () => {
+		const m = last("('0' | '1' | '2' | '3' | '4' | '5' | '6' | '7')* x");
+		const [a] = m.bindings;
+		expect(a).not.toBe(ELIDED);
+		if (a === ELIDED) return;
+		expect(a.name).toBe('A');
+		expect([...a.text]).toHaveLength(24);
+		expect(a.text.endsWith('…')).toBe(true);
+	});
+
+	it('keep every formula of a long expression within a few dozen characters', () => {
+		for (const re of [
+			'a^{12,20}',
+			'(a|b)^{0,24}',
+			'0110100111010011011101001110',
+			"'0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' | 'a' | 'b' | 'c' | 'd' | 'e' | 'f'"
+		]) {
+			const c = build(re);
+			c.result.steps.forEach((_, i) => {
+				const m = ruleCard(c, i);
+				expect([...m.formula].length).toBeLessThanOrEqual(24);
+				for (const b of m.bindings)
+					if (b !== ELIDED) expect([...b.text].length).toBeLessThanOrEqual(24);
+				expect(m.adds.length).toBeLessThanOrEqual(5);
+			});
+		}
 	});
 });

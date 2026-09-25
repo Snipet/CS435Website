@@ -7,7 +7,7 @@ on the left edge and their final state inside; new states as circles.
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import CitationTag from '$lib/components/ui/CitationTag.svelte';
-	import type { RuleCardModel, RuleEdge } from './rules';
+	import { ELIDED, type Elided, type RuleCardModel, type RuleEdge } from './rules';
 
 	interface Props {
 		model: RuleCardModel;
@@ -22,7 +22,7 @@ on the left edge and their final state inside; new states as circles.
 	const LABEL_H = 14;
 	const labelWidth = (s: string) => [...s].length * 7.4 + 6;
 
-	const edgeText = ([from, sym, to]: RuleEdge) => `${from} →${sym} ${to}`;
+	const edgeText = (e: RuleEdge | Elided) => (e === ELIDED ? ELIDED : `${e[0]} →${e[1]} ${e[2]}`);
 	const summary = $derived(
 		[
 			`Rule for ${model.formula}.`,
@@ -115,10 +115,10 @@ on the left edge and their final state inside; new states as circles.
 						? ', '
 						: ''}{/each}{#if model.adds.length}<span class="sep">·</span>{/if}
 			{/if}
-			{#each model.adds as [from, sym, to], i (i)}
-				<span class="f move">{from} →<sup>{sym}</sup> {to}</span>{i < model.adds.length - 1
-					? ', '
-					: ''}
+			{#each model.adds as e, i (i)}
+				{#if e === ELIDED}<span class="gap-text">…</span>{:else}<span class="f move"
+						>{e[0]} →<sup>{e[1]}</sup> {e[2]}</span
+					>{/if}{i < model.adds.length - 1 ? ', ' : ''}
 			{/each}
 		</p>
 	{/if}
@@ -131,8 +131,9 @@ on the left edge and their final state inside; new states as circles.
 		<p class="bindings">
 			<span class="lead">Here</span>
 			{#each model.bindings as b, i (i)}
-				<span class="binding"><span class="f name">{b.name}</span> = <code>{b.text}</code></span
-				>{i < model.bindings.length - 1 ? ', ' : ''}
+				{#if b === ELIDED}<span class="gap-text">…</span>{:else}<span class="binding"
+						><span class="f name">{b.name}</span> = <code>{b.text}</code></span
+					>{/if}{i < model.bindings.length - 1 ? ', ' : ''}
 			{/each}
 		</p>
 	{/if}
@@ -167,11 +168,12 @@ on the left edge and their final state inside; new states as circles.
 		font-weight: 500;
 	}
 	.formula {
+		min-width: 0;
 		font-family: var(--font-serif);
 		font-size: 1.125rem;
 		font-style: italic;
 		font-weight: 600;
-		white-space: nowrap;
+		overflow-wrap: anywhere;
 	}
 	.formula.mono {
 		font-family: var(--font-mono);
@@ -298,8 +300,16 @@ on the left edge and their final state inside; new states as circles.
 		font-weight: 600;
 		font-size: 1em;
 	}
+	/* "A =" stays together; a long sub-expression wraps. */
 	.binding {
 		white-space: nowrap;
+	}
+	.binding code {
+		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+	.gap-text {
+		color: var(--text-3);
 	}
 	.note {
 		color: var(--text-2);

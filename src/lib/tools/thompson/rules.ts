@@ -9,9 +9,10 @@
  * unit-tested; RuleCard.svelte only renders it.
  */
 import type { Citation } from '$lib/lectures';
+import { letterName } from '$lib/theory/automata';
 import { formatClass, formatLabel } from '$lib/theory/chars';
 import type { Regex } from '$lib/theory/regex';
-import { childSteps, exprText, repeatText, type Construction } from './construction';
+import { childSteps, exprText, repeatText, shorten, sup, type Construction } from './construction';
 
 export interface Pt {
 	x: number;
@@ -55,6 +56,16 @@ export interface RuleFigure {
 /** A transition in slide notation: from →symbol to. */
 export type RuleEdge = readonly [from: string, symbol: string, to: string];
 
+/** What one of the rule's letters stands for in this step, e.g. A = (1 | 0). */
+export interface RuleBinding {
+	name: string;
+	text: string;
+}
+
+/** Stands for the entries left out of a long list (the middle of a row of operands). */
+export const ELIDED = '…';
+export type Elided = typeof ELIDED;
+
 export interface RuleCardModel {
 	/** Clause name, as on the slides. */
 	clause: string;
@@ -65,11 +76,11 @@ export interface RuleCardModel {
 	figure: RuleFigure;
 	/** New states the rule makes (s, f), if any. */
 	fresh: string[];
-	/** Transitions the rule adds, in the order it adds them. */
-	adds: RuleEdge[];
+	/** Transitions the rule adds, in the order it adds them; long rows keep the first two and the last. */
+	adds: (RuleEdge | Elided)[];
 	notes: string[];
-	/** What the rule's letters stand for in this step, e.g. A = (1 | 0), B = 1. */
-	bindings: { name: string; text: string }[];
+	/** What the rule's letters stand for in this step, e.g. A = (1 | 0), B = 1; long lists are elided like `adds`. */
+	bindings: (RuleBinding | Elided)[];
 	/** Slide that states the rule; derived forms have none. */
 	cite?: Citation;
 }
@@ -318,12 +329,40 @@ export function plusFigure(): RuleFigure {
 // Rule cards
 // ---------------------------------------------------------------------------
 
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const letter = (i: number) => LETTERS[i] ?? `A${i}`;
+/** Operand letters: A, B, …, Z, then AA, AB, … (the site's letter names). */
+const letter = letterName;
 
-/** At most four operands are drawn; longer rows keep the first two and the last. */
-function elide(labels: string[]): string[] {
-	return labels.length <= 4 ? labels : [labels[0], labels[1], '…', labels[labels.length - 1]];
+/** Longer lists keep their first two entries and their last, with ELIDED between. */
+export function elide<T>(items: readonly T[], max: number): (T | Elided)[] {
+	return items.length <= max ? [...items] : [items[0], items[1], ELIDED, items[items.length - 1]];
+}
+
+/** At most four operands are drawn. */
+const FIGURE_MAX = 4;
+/** At most five operands, moves or bindings are written out. */
+const TEXT_MAX = 5;
+/** Longest sub-expression written in a binding. */
+const BINDING_MAX = 24;
+
+/** The formula's operands, elided like the figure: "A B … F", "A | B | … | P". */
+const row = (letters: readonly string[], sep: string) => elide(letters, TEXT_MAX).join(sep);
+
+/**
+ * The expansion of A{min,max}, written out when short (A³ = A A A) and with
+ * powers when long: A¹² = A A … A, A{12,20} = A¹² (A?)⁸, A{5,} = A⁵ A*.
+ */
+export function repeatExpansion(min: number, max: number | null): string {
+	const labels = repeatLabels(min, max);
+	if (labels.length <= TEXT_MAX) return labels.join(' ');
+	if (max === min) return 'A A … A';
+	const parts: string[] = [];
+	if (min > 0) parts.push(min <= 2 ? Array(min).fill('A').join(' ') : `A${sup(min)}`);
+	if (max === null) parts.push('A*');
+	else {
+		const k = max - min;
+		parts.push(k <= 2 ? Array(k).fill('A?').join(' ') : `(A?)${sup(k)}`);
+	}
+	return parts.join(' ');
 }
 
 function repeatLabels(min: number, max: number | null): string[] {
@@ -387,10 +426,13 @@ function modelFor(
 			const n = node.parts.length;
 			const letters = Array.from({ length: n }, (_, i) => letter(i));
 			return {
-				formula: letters.join(' '),
-				figure: chainFigure(elide(letters)),
+				formula: row(letters, ' '),
+				figure: chainFigure(elide(letters, FIGURE_MAX)),
 				fresh: [],
-				adds: letters.slice(1).map((l, i) => [`${letters[i]}.final`, 'ε', `${l}.start`] as const),
+				adds: elide(
+					letters.slice(1).map((l, i) => [`${letters[i]}.final`, 'ε', `${l}.start`] as const),
+					TEXT_MAX
+				),
 				notes: [
 					n === 2
 						? 'No new states. A’s final is no longer accepting; only B’s final is.'
@@ -405,7 +447,7 @@ function modelFor(
 			const top =
 				k === 2 ? 'A' : k <= 4 ? letters.slice(0, -1).join(' | ') : `A | … | ${letters[k - 2]}`;
 			return {
-				formula: letters.join(' | '),
+				formula: row(letters, ' | '),
 				figure: unionFigure(top, letters[k - 1]),
 				fresh: ['s', 'f'],
 				adds: [
@@ -471,9 +513,8 @@ function modelFor(
 				};
 			const labels = repeatLabels(min, max);
 			return {
-				formula:
-					labels.length === 1 && max === min ? `${head} = A` : `${head} = ${labels.join(' ')}`,
-				figure: chainFigure(elide(labels)),
+				formula: `${head} = ${repeatExpansion(min, max)}`,
+				figure: chainFigure(elide(labels, FIGURE_MAX)),
 				fresh: [],
 				adds: [],
 				notes: [
@@ -507,19 +548,17 @@ export function ruleCard(c: Construction, index: number): RuleCardModel {
 	const model = modelFor(node, firstLabel ? formatLabel(firstLabel) : null);
 
 	const kids = childSteps(c, index);
-	const bindings: { name: string; text: string }[] = [];
-	if (node.kind === 'chars' && node.set.isSingleton)
-		bindings.push({ name: 'a', text: c.texts[index] });
+	const bindings: RuleBinding[] = [];
+	const bind = (name: string, text: string) =>
+		bindings.push({ name, text: shorten(text, BINDING_MAX) });
+	if (node.kind === 'chars' && node.set.isSingleton) bind('a', c.texts[index]);
 	else if (node.kind === 'any' && firstLabel)
-		bindings.push({ name: 'Σ', text: `{ ${formatLabel(firstLabel, { separator: ', ' })} }` });
+		bind('Σ', `{ ${formatLabel(firstLabel, { separator: ', ' })} }`);
 	else if (node.kind === 'ref') {
-		if (kids.length) bindings.push({ name: node.name, text: c.texts[kids[0]] });
+		if (kids.length) bind(node.name, c.texts[kids[0]]);
 	} else if (node.kind === 'repeat' && kids.length === 0)
 		// A⁰: the operand is never built, so it has no step of its own.
-		bindings.push({ name: 'A', text: exprText(node.body, c.re, c.defs) });
-	else
-		kids.forEach((j, i) => {
-			bindings.push({ name: letter(i), text: c.texts[j] });
-		});
-	return { clause: step.clause, bindings, ...model };
+		bind('A', exprText(node.body, c.re, c.defs));
+	else kids.forEach((j, i) => bind(letter(i), c.texts[j]));
+	return { clause: step.clause, bindings: elide(bindings, TEXT_MAX), ...model };
 }

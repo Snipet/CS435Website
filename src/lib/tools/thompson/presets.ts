@@ -135,8 +135,9 @@ export const presets: readonly ThompsonPreset[] = [
 		label: 'digit digit*',
 		group: LECTURE,
 		description:
-			'number = digit digit*, with digit written using … as on slide 29: one transition on 0–9 for each use.',
-		cite: { deck: '04', slide: 27 },
+			'number = digit digit* (slide 27), with digit written using … as on slide 29. The … makes digit the range 0–9: one transition on 0–9 for each use.',
+		// number = digit digit* is on slide 27; this spelling of digit is slide 29's.
+		cite: { deck: '04', slide: [27, 29] },
 		value: { re: 'digit digit*', defs: "digit = '0' | '1' | '2' | … | '9'" }
 	},
 	{

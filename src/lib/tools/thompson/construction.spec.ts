@@ -3,6 +3,7 @@ import { formatLabel } from '$lib/theory/chars';
 import { parseDefinitions, parseRegex } from '$lib/theory/regex';
 import { accepts, thompson, type Automaton } from '$lib/theory/automata';
 import {
+	MAX_PART_OUTLINES,
 	MAX_STATES,
 	acceptingThrough,
 	andList,
@@ -10,6 +11,7 @@ import {
 	childSteps,
 	constructionExtent,
 	describeStep,
+	drawnConstruction,
 	formulaText,
 	formulaTotal,
 	repeatText,
@@ -142,6 +144,19 @@ describe('(1 | 0)*1, step by step (Lexical Analysis IV, slide 6)', () => {
 		expect(childSteps(c, 5)).toEqual([3, 4]);
 	});
 
+	it('outlines operands only for short rows', () => {
+		const at = (re: string) => {
+			const built = build(re);
+			return stepView(built, built.result.steps.length - 1).groups;
+		};
+		expect(at('a b c d e f')).toHaveLength(1 + MAX_PART_OUTLINES);
+		expect(at('a b c d e f g')).toHaveLength(1);
+		// A 140-symbol string: one outline instead of 141 (each outline is costly to route).
+		const long = 'ab'.repeat(70);
+		expect(at(long)).toHaveLength(1);
+		expect(at('(a|b|c|d|e|f|g)').map((g) => !!g.faint)).toEqual([false]);
+	});
+
 	it('knows which finals are still accepting', () => {
 		const acc = (i: number) => names(nfa, acceptingThrough(c.result, i)).sort().join('');
 		expect([0, 1, 2, 3, 4, 5].map(acc)).toEqual(['E', 'EF', 'G', 'H', 'HJ', 'J']);
@@ -233,6 +248,37 @@ describe('buildConstruction', () => {
 		const o = buildConstruction('digit', 'digit = (');
 		expect(o.defDiagnostics.some((d) => d.severity === 'error')).toBe(true);
 		expect(o.status).toBe('invalid');
+	});
+});
+
+describe('drawnConstruction', () => {
+	/** What the page draws after each input, starting from `start`. */
+	const drawn = (inputs: string[], start: Construction | null = null) => {
+		let last = start;
+		return inputs.map((re) => {
+			last = drawnConstruction(buildConstruction(re, ''), last);
+			return last?.re ?? null;
+		});
+	};
+
+	it('keeps the last construction while the input has errors', () => {
+		expect(drawn(['(1 | 0)*1', '(1 | 0)*1 (', '(1 | 0)*1 (a', 'a'])).toEqual([
+			'(1 | 0)*1',
+			'(1 | 0)*1',
+			'(1 | 0)*1',
+			'a'
+		]);
+	});
+
+	it('drops it once an expression is too large to draw', () => {
+		// b a^400 has no errors; typing "(" after it must not bring back (1 | 0)*1.
+		expect(drawn(['(1 | 0)*1', 'b a^400', 'b a^400 ('])).toEqual(['(1 | 0)*1', null, null]);
+	});
+
+	it('shows nothing for a link that does not parse', () => {
+		// The page starts over (last = null) when it loads a link.
+		expect(drawn(['(a|b'])).toEqual([null]);
+		expect(drawn(['(a|b'], build('(1 | 0)*1'))).toEqual(['(1 | 0)*1']);
 	});
 });
 
