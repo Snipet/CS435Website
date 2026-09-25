@@ -4,9 +4,12 @@
 	the compiler's stem, then "=" and the result. A pair that does not compose
 	is drawn pulled apart, with the mismatched parts marked. Without a pair, one
 	diagram is drawn with its three parts named.
+	In a narrow box (a phone) "=" and the result go below the pair, so the
+	labels keep their size; a drawing that still does not fit at MIN_LABEL_PX
+	scrolls instead of shrinking further.
 -->
 <script lang="ts">
-	import { BENCH_METRICS, equationLayout, tGeometry } from './geometry';
+	import { BENCH_METRICS, fitEquation, minFitWidth, tGeometry } from './geometry';
 	import { describeT, formatT, type Composition, type TDiagram } from './model';
 	import TShape, { type MarkTone, type Region } from './TShape.svelte';
 
@@ -23,6 +26,10 @@
 	let { program, translator, composition, sample, goalHit = false }: Props = $props();
 
 	const M = BENCH_METRICS;
+	const PAD = 10;
+
+	/** Width of the box the drawing is fitted to (0 until measured). */
+	let width = $state(0);
 
 	const pair = $derived.by(() => {
 		if (!program || !translator || !composition) return null;
@@ -30,7 +37,14 @@
 		const tg = tGeometry(translator, M);
 		const result = composition.result;
 		const rg = result ? tGeometry(result, M) : null;
-		const layout = equationLayout(pg, tg, rg, { snapped: composition.legal, apart: 40, gap: 20 });
+		const layout = fitEquation(
+			pg,
+			tg,
+			rg,
+			{ snapped: composition.legal, apart: 40, gap: 20 },
+			width,
+			PAD
+		);
 		const reads = composition.checks.find((c) => c.rule === 'reads');
 		const runs = composition.checks.find((c) => c.rule === 'runs');
 		const meet: MarkTone | undefined = reads ? (reads.ok ? 'accept' : 'reject') : undefined;
@@ -58,74 +72,80 @@
 			: `${head}: does not compose.`;
 	});
 
-	const PAD = 10;
+	/** Scales down to fit, but never below MIN_LABEL_PX (the box scrolls instead). */
+	const fitStyle = (w: number) => `max-width: ${w}px; min-width: ${minFitWidth(w, M.font)}px`;
 </script>
 
-{#if pair}
-	{@const { layout } = pair}
-	<svg
-		class="figure"
-		viewBox="{-PAD} {-PAD} {layout.width + 2 * PAD} {layout.height + 2 * PAD}"
-		style="max-width: {layout.width + 2 * PAD}px"
-		role="img"
-		aria-label={pairLabel}
-	>
-		<TShape
-			t={translator!}
-			geom={pair.tg}
-			x={layout.translator.x}
-			y={layout.translator.y}
-			marks={pair.translatorMarks}
-		/>
-		<TShape
-			t={program!}
-			geom={pair.pg}
-			x={layout.program.x}
-			y={layout.program.y}
-			marks={pair.programMarks}
-		/>
-		{#if pair.result && pair.rg && layout.result && layout.equals}
-			<text class="equals" x={layout.equals.x} y={layout.equals.y} dy="0.34em">=</text>
+<div class="bench-fit" bind:clientWidth={width}>
+	{#if pair}
+		{@const { layout } = pair}
+		<svg
+			class="figure"
+			viewBox="{-PAD} {-PAD} {layout.width + 2 * PAD} {layout.height + 2 * PAD}"
+			style={fitStyle(layout.width + 2 * PAD)}
+			role="img"
+			aria-label={pairLabel}
+		>
 			<TShape
-				t={pair.result}
-				geom={pair.rg}
-				x={layout.result.x}
-				y={layout.result.y}
-				tone={goalHit ? 'accept' : 'plain'}
-				marks={{ stem: 'active' }}
+				t={translator!}
+				geom={pair.tg}
+				x={layout.translator.x}
+				y={layout.translator.y}
+				marks={pair.translatorMarks}
 			/>
-		{/if}
-	</svg>
-{:else if anatomy}
-	{@const { g, left } = anatomy}
-	{@const mid = g.unit / 2}
-	{@const stemMid = g.unit * 1.5}
-	<svg
-		class="figure"
-		viewBox="{-PAD} {-PAD} {anatomy.width + 2 * PAD} {anatomy.height + 2 * PAD}"
-		style="max-width: {anatomy.width + 2 * PAD}px"
-		role="img"
-		aria-label="T-diagram of a compiler {describeT(
-			sample!
-		)}: source at the top-left, target at the top-right, host in the stem."
-	>
-		<text class="note" x={left - 14} y={mid} dy="0.34em" text-anchor="end">source</text>
-		<line class="leader" x1={left - 10} y1={mid} x2={left - 3} y2={mid} />
-		<line class="leader" x1={left + g.width + 3} y1={mid} x2={left + g.width + 10} y2={mid} />
-		<text class="note" x={left + g.width + 14} y={mid} dy="0.34em">target</text>
-		<line
-			class="leader"
-			x1={left + g.stemX + g.stemW + 3}
-			y1={stemMid}
-			x2={left + g.stemX + g.stemW + 10}
-			y2={stemMid}
-		/>
-		<text class="note" x={left + g.stemX + g.stemW + 14} y={stemMid} dy="0.34em">host</text>
-		<TShape t={sample!} geom={g} x={left} />
-	</svg>
-{/if}
+			<TShape
+				t={program!}
+				geom={pair.pg}
+				x={layout.program.x}
+				y={layout.program.y}
+				marks={pair.programMarks}
+			/>
+			{#if pair.result && pair.rg && layout.result && layout.equals}
+				<text class="equals" x={layout.equals.x} y={layout.equals.y} dy="0.34em">=</text>
+				<TShape
+					t={pair.result}
+					geom={pair.rg}
+					x={layout.result.x}
+					y={layout.result.y}
+					tone={goalHit ? 'accept' : 'plain'}
+					marks={{ stem: 'active' }}
+				/>
+			{/if}
+		</svg>
+	{:else if anatomy}
+		{@const { g, left } = anatomy}
+		{@const mid = g.unit / 2}
+		{@const stemMid = g.unit * 1.5}
+		<svg
+			class="figure"
+			viewBox="{-PAD} {-PAD} {anatomy.width + 2 * PAD} {anatomy.height + 2 * PAD}"
+			style={fitStyle(anatomy.width + 2 * PAD)}
+			role="img"
+			aria-label="T-diagram of a compiler {describeT(
+				sample!
+			)}: source at the top-left, target at the top-right, host in the stem."
+		>
+			<text class="note" x={left - 14} y={mid} dy="0.34em" text-anchor="end">source</text>
+			<line class="leader" x1={left - 10} y1={mid} x2={left - 3} y2={mid} />
+			<line class="leader" x1={left + g.width + 3} y1={mid} x2={left + g.width + 10} y2={mid} />
+			<text class="note" x={left + g.width + 14} y={mid} dy="0.34em">target</text>
+			<line
+				class="leader"
+				x1={left + g.stemX + g.stemW + 3}
+				y1={stemMid}
+				x2={left + g.stemX + g.stemW + 10}
+				y2={stemMid}
+			/>
+			<text class="note" x={left + g.stemX + g.stemW + 14} y={stemMid} dy="0.34em">host</text>
+			<TShape t={sample!} geom={g} x={left} />
+		</svg>
+	{/if}
+</div>
 
 <style>
+	.bench-fit {
+		min-width: 0;
+	}
 	.figure {
 		display: block;
 		width: 100%;

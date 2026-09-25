@@ -6,6 +6,7 @@
 	import { tick } from 'svelte';
 	import { Button, Icon, IconButton, TextField } from '$lib/components/ui';
 	import LangInput from './LangInput.svelte';
+	import { normalizePrimes } from './labels';
 	import LangText from './LangText.svelte';
 	import type { SubsetDecl, TDiagram, TField, WorkbenchIssue } from './model';
 	import { MAX_RUNNABLE_TEXT, MAX_SUBSETS, MAX_TOOLBOX, type ToolboxItem } from './state';
@@ -81,16 +82,19 @@
 
 {#snippet tFields(t: TDiagram, name: string, list: readonly WorkbenchIssue[], errId: string)}
 	<div class="t-fields" role="group" aria-label={name}>
-		<span class="sym" aria-hidden="true">T(</span>
 		{#each FIELDS as field, k (field)}
-			<LangInput
-				bind:value={t[field]}
-				label="{name}: {FIELD_LABEL[field]}"
-				placeholder={PLACEHOLDER[field]}
-				invalid={badField(list, field)}
-				describedby={list.length ? errId : undefined}
-			/>
-			<span class="sym" aria-hidden="true">{k === 0 ? '→' : k === 1 ? '/' : ')'}</span>
+			<!-- A field keeps its punctuation when the row wraps. -->
+			<span class="part">
+				{#if k === 0}<span class="sym" aria-hidden="true">T(</span>{/if}
+				<LangInput
+					bind:value={t[field]}
+					label="{name}: {FIELD_LABEL[field]}"
+					placeholder={PLACEHOLDER[field]}
+					invalid={badField(list, field)}
+					describedby={list.length ? errId : undefined}
+				/>
+				<span class="sym" aria-hidden="true">{k === 0 ? '→' : k === 1 ? '/' : ')'}</span>
+			</span>
 		{/each}
 	</div>
 {/snippet}
@@ -98,9 +102,9 @@
 <div class="editor">
 	<p class="hint">
 		<span class="mono">T(S → T / H)</span> translates S to T and is written in H. Type
-		<kbd>'</kbd> for a prime (<LangText text="L′" />) and <kbd>_</kbd> for a subscript (<span
-			class="mono">M_OTHER</span
-		>
+		<kbd>'</kbd> for a prime (<span class="mono">L'</span> → <LangText text="L′" />,
+		<span class="mono">L''</span> → <LangText text="L″" />) and
+		<kbd>_</kbd> for a subscript (<span class="mono">M_OTHER</span>
 		→ <LangText text="M_OTHER" />).
 	</p>
 
@@ -147,21 +151,25 @@
 					{@const errId = `${uid}-s${i}-err`}
 					<li class="row">
 						<div class="subset-fields" role="group" aria-label="Subset {i + 1}">
-							<LangInput
-								bind:value={d.sub}
-								label="Subset {i + 1}: smaller language"
-								placeholder="L′"
-								invalid={blankSide(list, 'sub')}
-								describedby={list.length ? errId : undefined}
-							/>
-							<span class="sym" aria-hidden="true">⊆</span>
-							<LangInput
-								bind:value={d.sup}
-								label="Subset {i + 1}: larger language"
-								placeholder="L"
-								invalid={blankSide(list, 'sup')}
-								describedby={list.length ? errId : undefined}
-							/>
+							<span class="part">
+								<LangInput
+									bind:value={d.sub}
+									label="Subset {i + 1}: smaller language"
+									placeholder="L′"
+									invalid={blankSide(list, 'sub')}
+									describedby={list.length ? errId : undefined}
+								/>
+								<span class="sym" aria-hidden="true">⊆</span>
+							</span>
+							<span class="part">
+								<LangInput
+									bind:value={d.sup}
+									label="Subset {i + 1}: larger language"
+									placeholder="L"
+									invalid={blankSide(list, 'sup')}
+									describedby={list.length ? errId : undefined}
+								/>
+							</span>
 						</div>
 						<IconButton
 							icon="x"
@@ -200,7 +208,7 @@
 			size="sm"
 			maxlength={MAX_RUNNABLE_TEXT}
 			placeholder="M, M′"
-			onchange={() => (runnable = runnable.replace(/['’]/g, '′'))}
+			onchange={() => (runnable = normalizePrimes(runnable))}
 		/>
 	</section>
 
@@ -298,9 +306,18 @@
 		justify-content: flex-end;
 		color: var(--accept);
 	}
+	/* Long names wrap onto a second line (on a phone) instead of being cut off. */
 	.t-fields,
 	.subset-fields {
 		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 4px;
+		min-width: 0;
+	}
+	.part {
+		display: flex;
+		flex: 1 1 auto;
 		align-items: center;
 		gap: 4px;
 		min-width: 0;

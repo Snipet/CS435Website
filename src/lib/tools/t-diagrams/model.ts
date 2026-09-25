@@ -58,7 +58,7 @@ export function piecesText(pieces: readonly Piece[]): string {
 export function richText(text: string): Piece[] {
 	const out: Piece[] = [];
 	let at = 0;
-	for (const m of text.matchAll(/[A-Za-z][A-Za-z0-9+]*′*_[A-Za-z0-9]+/g)) {
+	for (const m of text.matchAll(/[A-Za-z][A-Za-z0-9+]*[′″‴]*_[A-Za-z0-9]+/g)) {
 		if (m.index > at) out.push(text.slice(at, m.index));
 		out.push({ lang: m[0] });
 		at = m.index + m[0].length;
