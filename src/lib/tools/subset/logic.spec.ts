@@ -17,6 +17,7 @@ import {
 	blowupRows,
 	buildNfa,
 	checkPicks,
+	checkSource,
 	checkPrediction,
 	construct,
 	continuePrediction,
@@ -31,7 +32,6 @@ import {
 	powerOfTwoText,
 	predictionLimit,
 	predictionView,
-	rebuildNfa,
 	runSideBySide,
 	sameSet,
 	setText,
@@ -157,30 +157,60 @@ describe('buildNfa', () => {
 		expect(bad.textDiagnostics.length).toBeGreaterThan(0);
 	});
 
-	it('keeps the previous NFA when an edit leaves the machine as it was', () => {
+	it('gives the same key exactly when an edit leaves the machine as it was', () => {
 		const text = 'start: A\naccept: B\nA 1 A\nA 1 B\n';
-		const first = rebuildNfa(nfaSrc(text), null);
+		const first = buildNfa(nfaSrc(text));
 		expect(first.key).not.toBeNull();
-		// Spaces and blank lines: the same NFA object, so the construction is not redone.
-		const spaced = rebuildNfa(nfaSrc(`\n  ${text.replace('A 1 B', 'A   1   B')}  \n\n`), first);
-		expect(spaced.nfa).toBe(first.nfa);
-		expect(spaced.positions).toBe(first.positions);
-		// A real change builds a new NFA.
-		const changed = rebuildNfa(nfaSrc(`${text}B 0 B\n`), spaced);
-		expect(changed.nfa).not.toBe(first.nfa);
+		// Spaces and blank lines: the same machine.
+		const spaced = buildNfa(nfaSrc(`\n  ${text.replace('A 1 B', 'A   1   B')}  \n\n`));
+		expect(spaced.key).toBe(first.key);
+		// A real change is another machine.
+		const changed = buildNfa(nfaSrc(`${text}B 0 B\n`));
+		expect(changed.key).not.toBe(first.key);
 		expect(changed.nfa?.transitions).toHaveLength(3);
-		// Mid-edit problems drop the NFA; the diagnostics are the new source's.
-		const broken = rebuildNfa(nfaSrc(`${text}B 0`), changed);
-		expect(broken.nfa).toBeNull();
+		// Mid-edit problems: no NFA, and the diagnostics are the new source's.
+		const broken = buildNfa(nfaSrc(`${text}B 0`));
+		expect(broken.key).toBeNull();
 		expect(broken.textDiagnostics.length).toBeGreaterThan(0);
 
-		const re = rebuildNfa(src('(1 | 0)*1'), null);
-		expect(rebuildNfa(src('(1|0)* 1'), re).nfa).toBe(re.nfa);
-		expect(rebuildNfa(src('(0 | 1)*1'), re).nfa).not.toBe(re.nfa);
-		// The same machine typed as text is drawn differently (no grid): a new build.
-		const typed = rebuildNfa(nfaSrc(formatAutomatonText(re.nfa!)), re);
-		expect(typed.nfa).not.toBe(re.nfa);
+		const re = buildNfa(src('(1 | 0)*1'));
+		expect(buildNfa(src('(1|0)* 1')).key).toBe(re.key);
+		expect(buildNfa(src('(0 | 1)*1')).key).not.toBe(re.key);
+		// The same machine typed as text is drawn differently (no grid): another key.
+		const typed = buildNfa(nfaSrc(formatAutomatonText(re.nfa!)));
+		expect(typed.key).not.toBe(re.key);
 		expect(typed.positions).toBeNull();
+	});
+});
+
+describe('checkSource', () => {
+	it('reports what buildNfa reports, without building', () => {
+		for (const s of [
+			src('(1 | 0)*1'),
+			src('(1 | 0'),
+			src('d d', 'd = 0 |'),
+			src('(a|b)^100'),
+			nfaSrc('start: A\naccept: B\nA 1 B'),
+			nfaSrc('A 1')
+		]) {
+			const b = buildNfa(s);
+			expect(checkSource(s)).toEqual({
+				reDiagnostics: b.reDiagnostics,
+				defsDiagnostics: b.defsDiagnostics,
+				textDiagnostics: b.textDiagnostics,
+				tooLarge: b.tooLarge,
+				ok: b.nfa !== null
+			});
+		}
+	});
+
+	it('refuses a typed NFA over the size limit', () => {
+		const lines = ['start: S0', `accept: S${MAX_NFA_STATES}`];
+		for (let i = 0; i < MAX_NFA_STATES; i++) lines.push(`S${i} a S${i + 1}`);
+		expect(checkSource(nfaSrc(lines.join('\n')))).toMatchObject({
+			ok: false,
+			tooLarge: MAX_NFA_STATES + 1
+		});
 	});
 });
 

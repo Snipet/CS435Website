@@ -2,15 +2,16 @@
 	The syntax tree of R, top-down: one row per node with its sub-expression,
 	clause name, and set-builder rule. Arrow keys move between rows (the
 	selection follows focus); → and ← open and close nodes. The selected row
-	also lists strings of its language.
+	also lists strings of its language (computed by the page, `sample`).
 -->
 <script lang="ts">
 	import { tick, untrack } from 'svelte';
 	import { SvelteMap } from 'svelte/reactivity';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import StringSetView from '$lib/components/ui/StringSetView.svelte';
+	import Updating from '$lib/components/ui/Updating.svelte';
 	import { clauseName, type PrintOptions, type Regex } from '$lib/theory/regex';
-	import { sampleOf, type Sigma } from './analysis';
+	import type { Sample } from './analysis';
 	import type { Dialect } from './state';
 	import { expandedByDefault, nodeText, pathKey, ruleFor, visibleRows, type TreeRow } from './tree';
 
@@ -23,10 +24,25 @@
 		dialect: Dialect;
 		/** A definition's text as written, for the rule of a definition use. */
 		definition: (name: string) => string | undefined;
-		sigma: Sigma | null;
+		/** Strings of the selected node's language; null while they are computed (or not computed). */
+		sample: Sample | null;
+		/** `sample` is for an earlier R (a newer one is being computed). */
+		sampleStale?: boolean;
+		/** Shown instead of the strings when there is no sample: why it was not computed. */
+		sampleNote?: string | null;
 	}
 
-	let { root, selected, onselect, print, dialect, definition, sigma }: Props = $props();
+	let {
+		root,
+		selected,
+		onselect,
+		print,
+		dialect,
+		definition,
+		sample,
+		sampleStale = false,
+		sampleNote = null
+	}: Props = $props();
 
 	const uid = $props.id();
 	const rowId = (key: string) => `${uid}-row${key ? `-${key}` : ''}`;
@@ -60,9 +76,6 @@
 
 	const text = (node: Regex) => nodeText(node, print);
 	const rule = (node: Regex) => ruleFor(node, { dialect, text, definition });
-
-	const selectedRow = $derived(tree.rows.find((r) => r.key === selectedKey) ?? null);
-	const sample = $derived(selectedRow ? sampleOf(selectedRow.node, sigma) : null);
 
 	function focusRow(key: string) {
 		tick().then(() => document.getElementById(rowId(key))?.focus());
@@ -136,7 +149,7 @@
 			aria-selected={isSelected}
 			aria-expanded={row.hasChildren ? row.expanded : undefined}
 			aria-label="{expr}, {clause}"
-			aria-describedby={isSelected && sample ? `${id}-rule ${id}-detail` : `${id}-rule`}
+			aria-describedby={isSelected ? `${id}-rule ${id}-detail` : `${id}-rule`}
 			tabindex={row.key === focusKey ? 0 : -1}
 			onclick={() => onselect(row.path)}
 			onkeydown={(e) => onkeydown(e, row, i)}
@@ -161,18 +174,30 @@
 					<span class="clause">{clause}</span>
 				</span>
 				<span class="rule" id="{id}-rule">{rule(row.node)}</span>
-				{#if isSelected && sample}
-					<span class="detail" id="{id}-detail">
-						{#if sample.ok}
-							<StringSetView
-								prefix={setPrefix(row.node)}
-								strings={sample.strings}
-								more={sample.truncated}
-							/>
+				{#if isSelected}
+					<span class="detail" id="{id}-detail" aria-busy={sampleStale || !sample}>
+						{#if !sample}
+							{#if sampleNote}
+								<span class="note">{sampleNote}</span>
+							{:else}
+								<span class="note"><Updating label="Listing strings…" /></span>
+							{/if}
+						{:else if sample.ok}
+							<span class={['strings', { 'stale-data': sampleStale }]}>
+								<StringSetView
+									prefix={setPrefix(row.node)}
+									strings={sample.strings}
+									more={sample.truncated}
+								/>
+							</span>
 						{:else if sample.reason === 'sigma'}
-							<span class="note">Σ is needed to list these strings.</span>
+							<span class={['note', { 'stale-data': sampleStale }]}
+								>Σ is needed to list these strings.</span
+							>
 						{:else}
-							<span class="note">This node's automaton is too large to list its strings.</span>
+							<span class={['note', { 'stale-data': sampleStale }]}
+								>This node's automaton is too large to list its strings.</span
+							>
 						{/if}
 						{#if row.node.span?.source}
 							<span class="note">Written in the definition of {row.node.span.source}.</span>
@@ -284,6 +309,10 @@
 		padding-top: 6px;
 		border-top: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
 		cursor: auto;
+	}
+	.strings {
+		display: block;
+		min-width: 0;
 	}
 	.note {
 		color: var(--text-2);

@@ -5,21 +5,27 @@
 <script lang="ts">
 	import Callout from '$lib/components/ui/Callout.svelte';
 	import StringSetView from '$lib/components/ui/StringSetView.svelte';
+	import Updating from '$lib/components/ui/Updating.svelte';
 	import RegexField, { type PaletteSymbol } from '$lib/components/ui/RegexField.svelte';
 	import { formatString } from '$lib/theory/chars';
 	import type { Diagnostic } from '$lib/theory/diagnostics';
-	import { COUNT_LENGTH, EXAMPLE_LIMIT, groupDigits, type CompareAnalysis } from './analysis';
+	import { COUNT_LENGTH, EXAMPLE_LIMIT, groupDigits } from './analysis';
 	import { MAX_PRODUCT } from './machines';
 	import { sizeMessage } from './messages';
+	import type { CompareSummary } from './views';
 
 	interface Props {
 		value: string;
-		/** The comparison for the settled R₂ (it may lag behind typing). */
-		result: CompareAnalysis | null;
+		/** The last comparison computed (it may lag behind typing). */
+		result: CompareSummary | null;
+		/** `result` is for an earlier R or R₂ (a newer one is being computed). */
+		stale?: boolean;
 		/** Problems in R₂ as typed. */
 		diagnostics: readonly Diagnostic[];
 		/** Why R itself cannot be compared, if so. */
 		blocked: string | null;
+		/** Why the comparison did not finish (it ran out of time), if so. */
+		failure?: string | null;
 		symbols: readonly PaletteSymbol[];
 		aliases: Readonly<Record<string, string>> | false | undefined;
 		placeholder: string;
@@ -28,8 +34,10 @@
 	let {
 		value = $bindable(),
 		result,
+		stale = false,
 		diagnostics,
 		blocked,
+		failure = null,
 		symbols,
 		aliases,
 		placeholder
@@ -52,9 +60,21 @@
 
 	{#if blocked}
 		<p class="note">{blocked}</p>
-	{:else if !result}
+	{:else if value.trim() === ''}
 		<p class="note">Enter R₂ to compare L(R) with L(R₂).</p>
-	{:else if result.language && !result.language.ok}
+	{:else if failure}
+		<Callout tone="warn">{failure}</Callout>
+	{:else if !result}
+		<p class="note"><Updating label="Comparing…" /></p>
+	{:else}
+		<div class={['result', { 'stale-data': stale }]} aria-busy={stale}>
+			{@render comparison(result)}
+		</div>
+	{/if}
+</div>
+
+{#snippet comparison(result: CompareSummary)}
+	{#if result.language && !result.language.ok}
 		<Callout tone="warn">{sizeMessage(result.language, 'R₂')}</Callout>
 	{:else if result.tooLarge}
 		<Callout tone="warn">
@@ -62,7 +82,10 @@
 			DFAs, so they are not compared.
 		</Callout>
 	{:else if cmp}
-		<div class={['verdict', cmp.equivalent ? 'same' : 'differ']} aria-live="polite">
+		<div
+			class={['verdict', cmp.equivalent ? 'same' : 'differ']}
+			aria-live={stale ? 'off' : 'polite'}
+		>
 			<span class="formal">{cmp.equivalent ? 'L(R) = L(R₂)' : 'L(R) ≠ L(R₂)'}</span>
 			<span class="sub"
 				>{cmp.equivalent
@@ -94,10 +117,16 @@
 			Examples of up to {COUNT_LENGTH} symbols in shortlex order, at most {EXAMPLE_LIMIT} per column.
 		</p>
 	{/if}
-</div>
+{/snippet}
 
 <style>
 	.compare {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-4);
+		min-width: 0;
+	}
+	.result {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-4);
