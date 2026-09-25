@@ -76,12 +76,19 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		 * so a stepper can swap machines without losing the user's zoom.
 		 */
 		viewKey?: unknown;
+		/** Draw states without their names (unlabeled slide drawings); names stay in labels for screen readers. */
+		hideNames?: boolean;
 		/**
-		 * An area (layout units) that "fit" always shows, e.g. the bounds of the
-		 * finished machine while a construction grows with pinned positions, so the
-		 * drawing does not shift as states appear.
+		 * Buttons for the selected state or edge in the bar under the drawing
+		 * (default true). Turn off when the page shows its own inspector.
 		 */
-		frame?: Box;
+		selectionActions?: boolean;
+		/**
+		 * An area (user units) that "fit" always includes, e.g. the finished
+		 * machine's bounds while a construction is drawn one step at a time, so the
+		 * drawing keeps its scale and place as states are added.
+		 */
+		extent?: Box;
 	}
 
 	let {
@@ -99,7 +106,9 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		ariaLabel,
 		startLabel,
 		viewKey,
-		frame
+		hideNames = false,
+		selectionActions = true,
+		extent
 	}: Props = $props();
 
 	const PAD = 18;
@@ -130,7 +139,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 	const layout = $derived(layoutAutomaton(current, { positions: pinned, names, startLabel }));
 	const shapes = $derived(groups && groups.length > 0 ? groupShapes(layout, groups) : []);
 	const content = $derived(
-		unionBox([layout.bounds, ...shapes.map((s) => s.bounds), ...(frame ? [frame] : [])])
+		unionBox([layout.bounds, ...shapes.map((s) => s.bounds), ...(extent ? [extent] : [])])
 	);
 
 	// ------------------------------------------------------------------
@@ -994,7 +1003,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		<ellipse class="ring" cx={n.x} cy={n.y} rx={n.outerRx} ry={n.outerRy} />
 	{/if}
 	<ellipse class="shape" cx={n.x} cy={n.y} rx={n.rx} ry={n.ry} />
-	{#if s.name}
+	{#if s.name && !hideNames}
 		<text class="name" x={n.x} y={n.y}>{s.name}</text>
 	{/if}
 	{#if n.retract}
@@ -1022,7 +1031,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 			{#if shapes.length > 0}
 				<g class="groups" aria-hidden="true">
 					{#each shapes as g (g.id)}
-						<g class="group t{g.tone} {g.kind}">
+						<g class="group t{g.tone} {g.kind}" class:faint={g.faint}>
 							<path d={g.d} />
 							{#if g.label}
 								<text
@@ -1252,7 +1261,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 					>.</span
 				>
 				<button type="button" onclick={() => (linkFrom = null)}>Cancel</button>
-			{:else if selectedState !== null}
+			{:else if selectionActions && selectedState !== null}
 				{@const s = current.states[selectedState]}
 				<span class="status">State <b class="mono">{nameOf(s)}</b></span>
 				<button type="button" aria-pressed={current.start === s.id} onclick={() => makeStart(s.id)}
@@ -1264,7 +1273,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 				<button type="button" onclick={() => (linkFrom = s.id)}>Add transition</button>
 				<button type="button" onclick={() => openNameEditor(s.id)}>Rename</button>
 				<button type="button" class="danger" onclick={deleteSelection}>Delete</button>
-			{:else if selectedEdge}
+			{:else if selectionActions && selectedEdge}
 				{@const e = selectedEdge}
 				<span class="status"
 					><b class="mono">{nameOf(current.states[e.from])}</b> →
@@ -1362,6 +1371,15 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 	}
 	.group.halo path {
 		fill: color-mix(in srgb, var(--g) 16%, transparent);
+	}
+	.group.faint path {
+		fill: color-mix(in srgb, var(--g) 3%, transparent);
+		stroke: color-mix(in srgb, var(--g) 30%, transparent);
+		stroke-dasharray: 4 3;
+	}
+	.group.faint .group-label {
+		font-weight: 500;
+		fill: color-mix(in srgb, var(--g) 45%, var(--text-3));
 	}
 	.group-label {
 		font-family: var(--font-mono);

@@ -158,7 +158,7 @@ state's NFA states equal the NFA's active set.
 				<AutomatonView
 					automaton={dfa}
 					positions={dfaPositions}
-					frame={dfaFrame}
+					extent={dfaFrame}
 					highlight={dfaHighlight}
 					height={diagramHeight}
 					ariaLabel="DFA with its current state marked"

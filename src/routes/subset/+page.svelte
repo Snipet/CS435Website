@@ -672,7 +672,7 @@
 						<AutomatonView
 							automaton={shownDfa}
 							positions={dfaPositions}
-							frame={dfaFrame}
+							extent={dfaFrame}
 							viewKey={dfa}
 							highlight={dfaView}
 							height={diagramHeight}

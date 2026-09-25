@@ -28,7 +28,12 @@ and comes last.
 		 * Row and/or cell to emphasize. Columns count from 0 as shown; the ε
 		 * column, when shown, comes last.
 		 */
-		highlight?: { state?: StateId; cell?: { state: StateId; column: number } };
+		highlight?: {
+			state?: StateId;
+			/** Several rows at once, e.g. the active set of an NFA run. */
+			states?: Iterable<StateId>;
+			cell?: { state: StateId; column: number };
+		};
 		/** `symbols` is the column's class, or null for the ε column. */
 		onCellClick?: (state: StateId, column: number, symbols: CharSet | null) => void;
 		compact?: boolean;
@@ -80,6 +85,8 @@ and comes last.
 		return deterministic ? list[0] : `{${list.join(', ')}}`;
 	}
 
+	const currentRows = $derived(new Set(highlight?.states ?? []));
+
 	const isCell = (state: StateId, column: number) =>
 		highlight?.cell?.state === state && highlight.cell.column === column;
 </script>
@@ -103,7 +110,7 @@ and comes last.
 		</thead>
 		<tbody>
 			{#each automaton.states as s (s.id)}
-				<tr class:trap={s.trap} class:current={highlight?.state === s.id}>
+				<tr class:trap={s.trap} class:current={highlight?.state === s.id || currentRows.has(s.id)}>
 					<th scope="row">
 						<span class="marks">
 							<span
