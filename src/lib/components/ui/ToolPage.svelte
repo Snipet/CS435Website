@@ -105,7 +105,7 @@
 		padding: 0;
 		list-style: none;
 	}
-	/* A citation longer than the line shrinks (its text ends in an ellipsis). */
+	/* Long citations (the Intro decks) shrink with an ellipsis instead of overflowing at 360 px. */
 	.cites li {
 		min-width: 0;
 		max-width: 100%;

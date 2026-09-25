@@ -553,13 +553,18 @@ interface ScanResult {
 	tokens: ScanToken[];
 	steps: MatchMatrix[];
 	stuck: number | null;
+	cutoff?: number; // set only when opts.maxReads stopped the scan: offset of the next, unscanned token
 }
 // Σ in a rule means any symbol of opts.alphabet; all three default to scannerAlphabet(rules).
 function scannerAlphabet(rules: TokenRule[], extra?: CharSet): CharSet; // symbols the rules use ∪ extra
 function scan(
 	rules: TokenRule[],
 	input: string,
-	opts?: { errorRule?: boolean; alphabet?: CharSet }
+	opts?: {
+		errorRule?: boolean;
+		alphabet?: CharSet;
+		maxReads?: number; /* total of the steps' maxLen */
+	}
 ): ScanResult;
 function scannerNfa(
 	rules: TokenRule[],
@@ -632,14 +637,19 @@ saved state must accept its `LinkStates` shape (extra fields are allowed).
   `positions?` (pinned; otherwise automatic left-to-right layout),
   `highlight?: { active?, taken?, dim?, dimTransitions?, tone? }` (`taken` and
   `dimTransitions` hold transition ids; `tone` maps a state to `'accept'`,
-  `'reject'` or `'info'`), `groups?: { id, label?, states, tone? }[]`
-  (fragment outlines, partition blocks; `tone` is a palette index 0–5),
+  `'reject'` or `'info'`), `groups?: { id, label?, states, tone?, faint? }[]`
+  (fragment outlines, partition blocks; `tone` is a palette index 0–5; `faint`
+  draws a lighter, dashed outline), `extent?` (a box, in user units, that
+  "fit" always includes, so a machine drawn step by step keeps its scale),
   `names?: NamedSet[]` for labels, `editable?`, `selected?` (bindable:
   `{ kind: 'state', id } | { kind: 'edge', key } | null`), callbacks
   `onchange(automaton, positions)`, `onstateclick(id)`,
   `ontransitionclick(transitionIds, edgeKey)`, plus `height` (px or `'auto'`),
-  `ariaLabel`, `startLabel` (text on the start arrow, e.g. `start`) and
-  `viewKey?`. Supports pan/zoom (arrow keys pan from the drawing or the zoom
+  `ariaLabel`, `startLabel` (text on the start arrow, e.g. `start`),
+  `viewKey?`, `hideNames?` (draw states without names, as on unlabeled slide
+  drawings) and `selectionActions?` (default true; false keeps only "Add state"
+  and the hints in the bar under an editable drawing, for pages with their own
+  inspector). Supports pan/zoom (arrow keys pan from the drawing or the zoom
   buttons) and "fit"; `fit()` is also a component export (`bind:this`).
   Passing a machine the view did not just report through `onchange` (compared
   by object, then by `layoutKey`) refits the view, clears the selection and
@@ -648,8 +658,9 @@ saved state must accept its `LinkStates` shape (extra fields are allowed).
   `viewKey` refits (a stepper passes a constant key to keep the user's zoom).
   Types are in `graph/types.ts`.
 - `TransitionTable.svelte` — table per §3.7: `automaton`, `classes?` (used as
-  given), `names?`, `highlight?: { state?, cell?: { state, column } }` (the ε
-  column comes last), `onCellClick?(state, column, symbols)` (`symbols` is null
+  given), `names?`, `highlight?: { state?, states?, cell?: { state, column } }`
+  (`states` marks several rows, e.g. an NFA's active set; the ε column comes
+  last), `onCellClick?(state, column, symbols)` (`symbols` is null
   for ε), `compact?`, `caption?` (visually hidden). Default columns come from
   `tableColumns` in `table.ts`: classes of Σ and every label, one per symbol
   when there are at most 16 symbols, and a class only reached through
@@ -677,8 +688,8 @@ startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
 `Button`, `IconButton`, `Toggle`, `SegmentedControl`, `Tabs`, `Panel`,
 `Callout`, `Badge`, `Kbd`, `Select`, `NumberField`, `TextField`,
 `CodeEditor` (monospace textarea with line numbers and diagnostic markers),
-`RegexField` (single-line RE input with ε/ɸ/Σ/|/*/+ palette and inline
-diagnostics), `StepControls` + `Stepper` class (`stepper.svelte.ts`),
+`RegexField` (single-line RE input with ε/ɸ/Σ/|/*/+ palette, inline
+diagnostics, and an optional `highlight` range), `StepControls` + `Stepper` class (`stepper.svelte.ts`),
 `PresetMenu` (grouped presets with citations), `CitationTag`, `CharStream`
 (input characters with visible whitespace and highlight ranges), `StringSetView`,
 `TokenPairs` (token output in either lecture format), `CopyLinkButton`,

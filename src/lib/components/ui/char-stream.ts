@@ -19,6 +19,8 @@ export interface StreamCell {
 	kind: CellKind;
 	/** Tone of the last highlight covering the cell. */
 	tone: Tone | null;
+	/** That highlight is muted: quiet text, the tone only as an underline. */
+	muted: boolean;
 	/** First / last cell of its highlight range (for rounded ends). */
 	edgeStart: boolean;
 	edgeEnd: boolean;
@@ -72,6 +74,7 @@ export function layoutStream(text: string, opts: StreamOptions = {}): StreamItem
 			char,
 			...glyphFor(char),
 			tone: null,
+			muted: false,
 			edgeStart: false,
 			edgeEnd: false,
 			cursor: cursor === i,
@@ -88,6 +91,7 @@ export function layoutStream(text: string, opts: StreamOptions = {}): StreamItem
 			glyph: '',
 			kind: 'end',
 			tone: null,
+			muted: false,
 			edgeStart: false,
 			edgeEnd: false,
 			cursor: cursor === text.length,
@@ -117,6 +121,7 @@ export function layoutStream(text: string, opts: StreamOptions = {}): StreamItem
 		const r = toneRange[k];
 		if (r === -1) return;
 		c.tone = highlights[r].tone;
+		c.muted = highlights[r].muted ?? false;
 		c.edgeStart = k === 0 || toneRange[k - 1] !== r || cells[k - 1].kind === 'newline';
 		c.edgeEnd = k === cells.length - 1 || toneRange[k + 1] !== r || c.kind === 'newline';
 	});
