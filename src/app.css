@@ -333,6 +333,16 @@ table {
 	font-variant-ligatures: none;
 }
 
+/*
+ * Results for earlier inputs, shown while newer ones are computed (WorkerTask):
+ * dimmed after a short pause so quick updates do not flicker, restored at once.
+ * Pair with <Updating /> and aria-busy.
+ */
+.stale-data {
+	opacity: 0.5;
+	transition: opacity var(--duration) var(--ease) 250ms;
+}
+
 /* Keep in-page anchor targets clear of the sticky header. */
 html {
 	scroll-padding-top: calc(56px + var(--space-4));

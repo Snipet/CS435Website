@@ -1,6 +1,8 @@
 <!--
 	Test strings: one row per string with its membership in L(R). Members show a
-	derivation; other strings show how far they get and what goes wrong.
+	derivation; other strings show how far they get and what goes wrong. A row
+	whose result is for an earlier string or R shows that result dimmed, drawn
+	with the string it is for, until the new one arrives.
 -->
 <script lang="ts">
 	import { tick } from 'svelte';
@@ -12,7 +14,7 @@
 	import type { HighlightRange } from '$lib/components/ui/types';
 	import { formatString, showChar, type NamedSet } from '$lib/theory/chars';
 	import type { CharSet } from '$lib/theory/charset';
-	import type { TestResult } from './analysis';
+	import type { TestRow } from './views';
 	import DerivationView from './DerivationView.svelte';
 	import { brackets, type Bracket } from './derive';
 	import { describeSymbols, type Rejection } from './explain';
@@ -20,8 +22,8 @@
 
 	interface Props {
 		tests: string[];
-		/** One per test; null when L(R) could not be built. */
-		results: (TestResult | null)[];
+		/** One per test; null when L(R) could not be built (or the row has no result yet). */
+		results: (TestRow | null)[];
 		/** Sub-expression text for derivation brackets. */
 		label: (b: Bracket) => string;
 		/** Definitions that name a set of symbols (digit, letter), for "Allowed next: digit". */
@@ -67,14 +69,15 @@
 	const sym = (c: string) => `'${showChar(c, 'quoted')}'`;
 	const symbols = (set: CharSet) => describeSymbols(set, names);
 
-	const status = (r: TestResult) => (r.member ? 'in L(R)' : 'not in L(R)');
+	const status = (r: TestRow) => (r.result.member ? 'in L(R)' : 'not in L(R)');
 	/**
 	 * One live region for all rows: it follows the row being typed in, so a
-	 * change to R does not announce every row at once.
+	 * change to R does not announce every row at once. Results still being
+	 * computed are not announced.
 	 */
 	const live = $derived.by(() => {
 		const r = typing === null ? null : results[typing];
-		return typing !== null && r ? `Test string ${typing + 1}: ${status(r)}` : '';
+		return typing !== null && r && !r.stale ? `Test string ${typing + 1}: ${status(r)}` : '';
 	});
 
 	function highlights(s: string, r: Rejection): HighlightRange[] {
@@ -142,8 +145,9 @@
 	{:else}
 		<ol class="rows">
 			{#each tests as s, i (i)}
-				{@const r = results[i]}
-				<li class="row">
+				{@const row = results[i]}
+				{@const r = row?.result}
+				<li class="row" aria-busy={row?.stale ?? false}>
 					<div class="line">
 						<span class="field">
 							<input
@@ -153,7 +157,7 @@
 								value={shown(i)}
 								placeholder="empty string &quot;&quot;"
 								aria-label="Test string {i + 1}"
-								aria-describedby={r ? `${inputId(i)}-status` : undefined}
+								aria-describedby={row ? `${inputId(i)}-status` : undefined}
 								spellcheck="false"
 								autocomplete="off"
 								autocapitalize="off"
@@ -171,11 +175,15 @@
 								}}
 							/>
 						</span>
-						{#if r}
-							<Badge tone={r.member ? 'accept' : 'reject'} mono aria-hidden="true">
-								{r.member ? '∈ L(R)' : '∉ L(R)'}
-							</Badge>
-							<span class="visually-hidden" id="{inputId(i)}-status">{status(r)}</span>
+						{#if row && r}
+							<span class={['badge', { 'stale-data': row.stale }]}>
+								<Badge tone={r.member ? 'accept' : 'reject'} mono aria-hidden="true">
+									{r.member ? '∈ L(R)' : '∉ L(R)'}
+								</Badge>
+							</span>
+							<span class="visually-hidden" id="{inputId(i)}-status"
+								>{row.stale ? 'updating' : status(row)}</span
+							>
 						{/if}
 						<IconButton
 							icon="x"
@@ -184,17 +192,13 @@
 							onclick={() => remove(i)}
 						/>
 					</div>
-					{#if r}
-						<div class="detail">
+					{#if row && r}
+						{@const text = row.text}
+						<div class={['detail', { 'stale-data': row.stale }]}>
 							{#if r.member && r.derivation}
 								{#if r.derivation.status === 'match'}
-									{#if s !== ''}
-										<DerivationView
-											text={s}
-											root={brackets(r.derivation.tree)}
-											{label}
-											{onselect}
-										/>
+									{#if text !== ''}
+										<DerivationView {text} root={brackets(r.derivation.tree)} {label} {onselect} />
 									{/if}
 								{:else if r.derivation.status === 'too-long'}
 									<p class="why">
@@ -204,7 +208,7 @@
 									<p class="why">This string has too many ways to split; no derivation is drawn.</p>
 								{/if}
 							{:else if r.rejection}
-								{@render rejection(s, r.rejection, r.outside)}
+								{@render rejection(text, r.rejection, r.outside)}
 							{/if}
 						</div>
 					{/if}
@@ -254,6 +258,9 @@
 	}
 	.row:first-child {
 		padding-top: 0;
+	}
+	.badge {
+		display: inline-flex;
 	}
 	.line {
 		display: flex;

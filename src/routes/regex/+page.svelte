@@ -2,6 +2,7 @@
 	import { onMount, tick, untrack } from 'svelte';
 	import {
 		Button,
+		Callout,
 		CitationTag,
 		CodeEditor,
 		Disclosure,
@@ -12,6 +13,8 @@
 		SegmentedControl,
 		Toggle,
 		ToolPage,
+		Updating,
+		WorkerTask,
 		DEFAULT_SYMBOLS,
 		type HighlightToken,
 		type PaletteSymbol
@@ -23,19 +26,14 @@
 	import { syncToHash } from '$lib/url-state';
 	import { ALPHABET_SOURCE, formatAlphabet } from '$lib/tools/regex/alphabet';
 	import {
-		analyzeCompare,
 		analyzeExpression,
-		automataState,
 		convertDialect,
-		evaluateTest,
-		listLanguage,
 		namedSymbolSets,
 		parseCompare,
 		thompsonState
 	} from '$lib/tools/regex/analysis';
 	import type { Bracket } from '$lib/tools/regex/derive';
-	import { withoutTrap } from '$lib/tools/regex/machines';
-	import { languageBlocked, structureBlocked } from '$lib/tools/regex/messages';
+	import { analysisFailed, languageBlocked, structureBlocked } from '$lib/tools/regex/messages';
 	import {
 		applyPreset,
 		DEFAULT_PRESET_ID,
@@ -54,6 +52,17 @@
 		type ViewId
 	} from '$lib/tools/regex/state';
 	import { nodeText } from '$lib/tools/regex/tree';
+	import {
+		languageNote,
+		sameExpression,
+		selectedSample,
+		testRows,
+		viewsComputer,
+		type CompareSummary,
+		type ViewsData,
+		type ViewsRequest
+	} from '$lib/tools/regex/views';
+	import { createViewsWorker } from '$lib/tools/regex/worker';
 	import CompareView from '$lib/tools/regex/CompareView.svelte';
 	import LanguageView from '$lib/tools/regex/LanguageView.svelte';
 	import SyntaxTree from '$lib/tools/regex/SyntaxTree.svelte';
@@ -110,7 +119,6 @@
 	function replaced() {
 		defsOpen = false;
 		loads++;
-		settleNow();
 	}
 
 	function load(preset: RegexPreset) {
@@ -125,63 +133,15 @@
 			dialect: to,
 			node: []
 		});
-		settleNow();
 	}
 
 	// ---- Analysis --------------------------------------------------------------
-	// Parsing is cheap and follows every keystroke (the fields' diagnostics). The
-	// views build automata, which takes longer for large expressions, so they
-	// follow a settled copy of the inputs: at once while builds are quick, and
-	// SETTLE_MS after typing stops once a build was slow.
+	// Parsing is cheap and follows every keystroke: the fields' diagnostics and
+	// the syntax tree. The views built on automata (L(R), the test strings, the
+	// comparison, a node's strings) are computed in a worker (views.ts); each
+	// shows the last finished result, dimmed while a newer one is computed.
 
-	interface Inputs {
-		re: string;
-		defs: string;
-		dialect: Dialect;
-		alphabet: string;
-		compare: string;
-	}
-	const inputsOf = (m: Inputs): Inputs => ({
-		re: m.re,
-		defs: m.defs,
-		dialect: m.dialect,
-		alphabet: m.alphabet,
-		compare: m.compare
-	});
-	const sameInputs = (a: Inputs, b: Inputs) =>
-		a.re === b.re &&
-		a.defs === b.defs &&
-		a.dialect === b.dialect &&
-		a.alphabet === b.alphabet &&
-		a.compare === b.compare;
-
-	/** A build that took longer than this (ms) makes the views wait for a pause in typing. */
-	const SLOW_MS = 25;
-	const SETTLE_MS = 150;
-	/** Time the views' last builds took (ms): L(R) and the comparison. */
-	const cost = { expression: 0, compare: 0 };
-	const now = () => (typeof performance === 'undefined' ? 0 : performance.now());
-
-	let settled = $state.raw<Inputs>(inputsOf(initial));
-
-	function settleNow() {
-		settled = inputsOf(model);
-	}
-
-	$effect(() => {
-		const next = inputsOf(model);
-		const last = untrack(() => settled);
-		if (sameInputs(next, last)) return;
-		if (cost.expression + cost.compare < SLOW_MS) {
-			settled = next;
-			return;
-		}
-		const timer = setTimeout(() => (settled = next), SETTLE_MS);
-		return () => clearTimeout(timer);
-	});
-	const pending = $derived(!sameInputs(inputsOf(model), settled));
-
-	/** The inputs as typed, parsed only (diagnostics). */
+	/** The inputs as typed, parsed only. */
 	const typed = $derived(
 		analyzeExpression(
 			{ re: model.re, defs: model.defs, dialect: model.dialect, alphabet: model.alphabet },
@@ -190,22 +150,8 @@
 	);
 	const typedCompare = $derived(parseCompare(typed, model.compare));
 
-	/** The settled inputs with L(R) built: everything the views show. */
-	const analysis = $derived.by(() => {
-		const start = now();
-		const a = analyzeExpression(settled);
-		cost.expression = now() - start;
-		return a;
-	});
-	const compareResult = $derived.by(() => {
-		const start = now();
-		const c = analyzeCompare(analysis, settled.compare);
-		cost.compare = now() - start;
-		return c;
-	});
-
-	const root = $derived(analysis.re.regex);
-	const typedUsesAny = $derived(typed.re.regex ? containsAny(typed.re.regex) : false);
+	const root = $derived(typed.re.regex);
+	const typedUsesAny = $derived(root ? containsAny(root) : false);
 	const defNames = $derived(new Set(typed.defs.defs.keys()));
 	const sigmaPlaceholder = $derived(
 		typed.inferred && !typedUsesAny
@@ -214,17 +160,16 @@
 	);
 
 	const printOpts = $derived<PrintOptions>({
-		...analysis.print,
+		...typed.print,
 		parens: model.full ? 'full' : 'minimal'
 	});
-	const definitionText = (name: string) => analysis.defs.entries.find((e) => e.name === name)?.text;
+	const definitionText = (name: string) => typed.defs.entries.find((e) => e.name === name)?.text;
 
 	// The selected tree node, marked where it was written (R or a definition). A
-	// definition use also marks the definition's line. The root (all of R) is not
-	// marked, and nothing is marked while the tree is behind the text being typed.
+	// definition use also marks the definition's line. The root (all of R) is not marked.
 	const selectedPath = $derived(root && nodeAtPath(root, model.node) ? model.node : []);
 	const selectedNode = $derived(root ? (nodeAtPath(root, selectedPath) ?? null) : null);
-	const span = $derived(selectedPath.length > 0 && !pending ? (selectedNode?.span ?? null) : null);
+	const span = $derived(selectedPath.length > 0 ? (selectedNode?.span ?? null) : null);
 	const reHighlight = $derived(
 		span && span.source === null ? { start: span.start, end: span.end } : null
 	);
@@ -232,39 +177,122 @@
 		const marks: HighlightToken[] = [];
 		if (span && span.source !== null)
 			marks.push({ from: span.start, to: span.end, className: 'rx-node' });
-		const node = pending ? null : selectedNode;
+		const node = selectedNode;
 		if (node?.kind === 'ref') {
-			const entry = analysis.defs.entries.find(
-				(e) => e.name === node.name && e.regex === node.body
-			);
+			const entry = typed.defs.entries.find((e) => e.name === node.name && e.regex === node.body);
 			if (entry)
 				marks.push({ from: entry.nameSpan.start, to: entry.exprSpan.end, className: 'rx-def' });
 		}
 		return marks.sort((a, b) => a.from - b.from);
 	});
 
-	const structureNote = $derived(structureBlocked(settled.re, analysis));
-	const languageNote = $derived(languageBlocked(settled.re, analysis));
-	const min = $derived(analysis.language?.ok ? analysis.language.min : null);
-	const listing = $derived(min ? listLanguage(min, model.maxLength) : null);
-	const minStates = $derived(min ? withoutTrap(min).states.length : 0);
-	const results = $derived(model.tests.map((t) => evaluateTest(analysis, t)));
-	const namedSets = $derived(namedSymbolSets(analysis.defs));
-	const bracketLabel = (b: Bracket) => nodeText(b.derivation.node, printOpts);
+	const structureNote = $derived(structureBlocked(model.re, typed));
+	/** Why the language views are empty, from R and Σ as typed. */
+	const parseNote = $derived(
+		languageBlocked(model.re, { re: typed.re, sigma: typed.sigma, language: null })
+	);
 
-	const current = $derived(matchPreset(model));
+	/** Everything the worker needs (plain data: it is copied to the worker). */
+	const request = $derived<ViewsRequest>({
+		re: model.re,
+		defs: model.defs,
+		dialect: model.dialect,
+		alphabet: model.alphabet,
+		compare: model.compare,
+		tests: [...model.tests],
+		maxLength: model.maxLength,
+		node: [...selectedPath]
+	});
+	const task = new WorkerTask<ViewsRequest, ViewsData>({
+		compute: viewsComputer(),
+		worker: createViewsWorker,
+		// The default preset, computed at once so the prerendered page shows its views.
+		initial: untrack(() => request)
+	});
+	$effect(() => task.run(request));
+
+	/** The last views computed, and the inputs they are for. */
+	const done = $derived(
+		task.output && task.input ? { data: task.output, input: task.input } : null
+	);
+	/** Those views are for the R, definitions and Σ typed now. */
+	const current = $derived(done !== null && sameExpression(done.input, request));
+	/** The parse of the inputs `done` is for: derivations and names refer to it. */
+	const doneParse = $derived(
+		!done || current ? typed : analyzeExpression(done.input, { build: false })
+	);
+	/** The computation ran out of time or failed: shown instead of the views. */
+	const failure = $derived(parseNote ? null : analysisFailed(task.status, task.error));
+
+	const language = $derived(done?.data.language ?? null);
+	const languageStale = $derived(!current || done?.input.maxLength !== model.maxLength);
+	/**
+	 * Why the language views are empty (unless the computation failed): R or Σ as
+	 * typed, or the size of L(R), which is stale while a newer R is computed.
+	 */
+	const note = $derived(failure ? null : languageNote(parseNote, language, current));
+
+	const rows = $derived(
+		parseNote || failure
+			? model.tests.map(() => null)
+			: testRows(model.tests, done, doneParse.resolved, current)
+	);
+	const testsStale = $derived(
+		!parseNote && !failure && (!current || model.tests.some((t, i) => done?.input.tests[i] !== t))
+	);
+	const namedSets = $derived(namedSymbolSets(doneParse.defs));
+	const bracketPrint = $derived<PrintOptions>({
+		...doneParse.print,
+		parens: model.full ? 'full' : 'minimal'
+	});
+	const bracketLabel = (b: Bracket) => nodeText(b.derivation.node, bracketPrint);
+
+	const compareResult = $derived.by((): CompareSummary | null => {
+		// R₂ as typed has errors: nothing to compare, whatever was computed before.
+		if (typedCompare && !typedCompare.regex)
+			return { language: null, comparison: null, tooLarge: false };
+		return done?.data.compare ?? null;
+	});
+	const compareStale = $derived(
+		!current || (done !== null && done.input.compare !== model.compare && !!typedCompare?.regex)
+	);
+	/** The Compare panel waits for a newer result: its comparison, or the note it shows instead. */
+	const compareUpdating = $derived(
+		!failure && (note ? note.stale : compareStale && model.compare.trim() !== '')
+	);
+
+	/** Strings of the selected node: only a result for that same node is shown. */
+	const sample = $derived(
+		failure
+			? null
+			: selectedSample(
+					done,
+					selectedPath,
+					current,
+					{ root, print: printOpts },
+					{ root: doneParse.re.regex, print: bracketPrint }
+				)
+	);
+
+	const presetMatch = $derived(matchPreset(model));
 
 	// ---- Links -----------------------------------------------------------------
 
 	const hasThompson = toolBySlug('thompson') !== undefined;
 	const hasAutomata = toolBySlug('automata') !== undefined;
 	const thompsonHref = $derived.by(() => {
-		const s = hasThompson ? thompsonState(settled, analysis) : null;
+		const s = hasThompson ? thompsonState(model, typed) : null;
 		return s ? toolLink('thompson', s) : null;
 	});
+	/** The minimal DFA last built; its link is disabled while a newer one is computed. */
+	const automataText = $derived(!parseNote && language?.ok ? language.automataText : null);
 	const automataHref = $derived.by(() => {
-		const s = hasAutomata ? automataState(analysis, model.tests[0]) : null;
-		return s ? toolLink('automata', s) : null;
+		if (!hasAutomata || !automataText) return null;
+		const input = model.tests[0];
+		return toolLink(
+			'automata',
+			input === undefined ? { text: automataText } : { text: automataText, input }
+		);
 	});
 
 	// ---- Views -----------------------------------------------------------------
@@ -325,17 +353,23 @@
 			</a>
 		{/if}
 		{#if automataHref}
-			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path and adds the hash -->
-			<a class="tool-link" href={automataHref}>
+			<!-- Without an href (and dimmed) while the DFA for the R typed is being built. -->
+			<!-- eslint-disable svelte/no-navigation-without-resolve -- toolLink resolves the path and adds the hash -->
+			<a
+				class={['tool-link', { 'stale-data': !current }]}
+				href={current ? automataHref : undefined}
+				aria-disabled={!current}
+			>
 				Open DFA in Finite Automata <Icon name="arrow-right" size={15} />
 			</a>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
 		{/if}
 	</div>
 {/snippet}
 
 <ToolPage {tool}>
 	{#snippet actions()}
-		<PresetMenu {presets} selected={current?.id ?? null} onselect={load} align="end" />
+		<PresetMenu {presets} selected={presetMatch?.id ?? null} onselect={load} align="end" />
 	{/snippet}
 
 	<Panel title="Expression" footer={thompsonHref || automataHref ? links : undefined}>
@@ -401,13 +435,13 @@
 		</div>
 	</Panel>
 
-	{#if current?.questions?.length}
+	{#if presetMatch?.questions?.length}
 		<Panel title="From the slides" level={2} variant="subtle">
 			{#snippet actions()}
-				{#if current.cite}<CitationTag cite={current.cite} />{/if}
+				{#if presetMatch.cite}<CitationTag cite={presetMatch.cite} />{/if}
 			{/snippet}
 			<ul class="questions">
-				{#each current.questions as q (q.question)}
+				{#each presetMatch.questions as q (q.question)}
 					<li>
 						<p class={['question', { formal: q.formal }]}>{q.question}</p>
 						<Disclosure summary="Show answer" openSummary="Hide answer">
@@ -457,9 +491,11 @@
 								selected={selectedPath}
 								onselect={(p) => (model.node = p)}
 								print={printOpts}
-								dialect={analysis.dialect}
+								dialect={typed.dialect}
 								definition={definitionText}
-								sigma={analysis.sigma}
+								{sample}
+								sampleStale={!current}
+								sampleNote={failure}
 							/>
 						{/key}
 					{/if}
@@ -473,10 +509,24 @@
 				aria-labelledby={narrow ? tabId('language') : undefined}
 			>
 				<Panel title="Language">
-					{#if languageNote || !listing}
-						<p class="view-note">{languageNote}</p>
+					{#snippet actions()}
+						{#if !parseNote && !failure && languageStale}<Updating />{/if}
+					{/snippet}
+					{#if failure}
+						<Callout tone="warn">{failure}</Callout>
+					{:else if note}
+						<p class={['view-note', { 'stale-data': note.stale }]} aria-busy={note.stale}>
+							{note.text}
+						</p>
+					{:else if language?.ok}
+						<LanguageView
+							listing={language.listing}
+							bind:maxLength={model.maxLength}
+							states={language.states}
+							stale={languageStale}
+						/>
 					{:else}
-						<LanguageView {listing} bind:maxLength={model.maxLength} states={minStates} />
+						<p class="view-note"><Updating label="Listing L(R)…" standalone /></p>
 					{/if}
 				</Panel>
 			</div>
@@ -488,12 +538,19 @@
 				aria-labelledby={narrow ? tabId('tests') : undefined}
 			>
 				<Panel title="Test strings">
-					{#if languageNote}
-						<p class="view-note spaced">{languageNote}</p>
+					{#snippet actions()}
+						{#if testsStale}<Updating />{/if}
+					{/snippet}
+					{#if failure}
+						<div class="spaced"><Callout tone="warn">{failure}</Callout></div>
+					{:else if note}
+						<p class={['view-note spaced', { 'stale-data': note.stale }]} aria-busy={note.stale}>
+							{note.text}
+						</p>
 					{/if}
 					<TestStrings
 						bind:tests={model.tests}
-						{results}
+						results={rows}
 						label={bracketLabel}
 						names={namedSets}
 						onselect={selectFromDerivation}
@@ -508,11 +565,17 @@
 				aria-labelledby={narrow ? tabId('compare') : undefined}
 			>
 				<Panel title="Compare">
+					{#snippet actions()}
+						{#if compareUpdating}<Updating />{/if}
+					{/snippet}
 					<CompareView
 						bind:value={model.compare}
 						result={compareResult}
+						stale={compareStale}
+						{failure}
 						diagnostics={typedCompare?.diagnostics ?? []}
-						blocked={languageNote}
+						blocked={note?.text ?? null}
+						blockedStale={note?.stale ?? false}
 						symbols={palette}
 						{aliases}
 						placeholder={flex ? 'e.g. [A-Za-z][A-Za-z0-9]*' : 'e.g. (letter* | digit*)'}
@@ -564,6 +627,10 @@
 	}
 	.tool-link:hover {
 		text-decoration: underline;
+	}
+	.tool-link:not([href]) {
+		color: var(--text-2);
+		text-decoration: none;
 	}
 
 	.questions {
@@ -663,7 +730,7 @@
 		color: var(--text-3);
 		font-size: var(--text-sm);
 	}
-	.view-note.spaced {
+	.spaced {
 		margin-bottom: var(--space-4);
 	}
 	/* In the definitions editor: the selected tree node, and the definition a selected use refers to. */

@@ -185,45 +185,78 @@ export function machineKey(nfa: Automaton, positions: Positions | null): string 
 	return `${formatAutomatonText(nfa)}\n${grid}`;
 }
 
-/** The NFA for the current source, or diagnostics explaining why there is none. */
-export function buildNfa(src: NfaSource): NfaBuild {
-	const empty: NfaBuild = {
-		nfa: null,
-		positions: null,
+/** The source parsed, without building anything: what the page checks on every keystroke. */
+export interface SourceCheck {
+	/** Problems in the regular expression (spans index into `re`). */
+	reDiagnostics: Diagnostic[];
+	/** Problems in the regular definitions (spans index into `defs`). */
+	defsDiagnostics: Diagnostic[];
+	/** Problems in the NFA text (spans index into `text`). */
+	textDiagnostics: Diagnostic[];
+	/** The NFA would have more than MAX_NFA_STATES states (this many; it is not built). */
+	tooLarge: number | null;
+	/** The source gives an NFA the page builds: no errors, not too large. */
+	ok: boolean;
+}
+
+function readSource(src: NfaSource): {
+	check: SourceCheck;
+	regex: Regex | null;
+	automaton: Automaton | null;
+} {
+	const check: SourceCheck = {
 		reDiagnostics: [],
 		defsDiagnostics: [],
 		textDiagnostics: [],
 		tooLarge: null,
-		key: null
+		ok: false
 	};
 	if (src.from === 're') {
 		const d = parseDefinitions(src.defs);
 		const r = parseRegex(src.re, { defs: d.defs, invalid: d.invalid });
-		const base = { ...empty, reDiagnostics: r.diagnostics, defsDiagnostics: d.diagnostics };
-		if (!r.ok) return base;
+		check.reDiagnostics = r.diagnostics;
+		check.defsDiagnostics = d.diagnostics;
+		if (!r.ok) return { check, regex: null, automaton: null };
 		const size = thompsonSize(r.regex);
-		if (size > MAX_NFA_STATES) return { ...base, tooLarge: size };
-		const t = thompson(r.regex);
-		return { ...base, nfa: t.nfa, positions: t.positions, key: machineKey(t.nfa, t.positions) };
+		if (size > MAX_NFA_STATES) check.tooLarge = size;
+		else check.ok = true;
+		return { check, regex: check.ok ? r.regex : null, automaton: null };
 	}
 	const p = parseAutomatonText(src.text);
-	const base = { ...empty, textDiagnostics: p.diagnostics };
-	if (!p.automaton) return base;
-	if (p.automaton.states.length > MAX_NFA_STATES)
-		return { ...base, tooLarge: p.automaton.states.length };
-	return { ...base, nfa: p.automaton, key: machineKey(p.automaton, null) };
+	check.textDiagnostics = p.diagnostics;
+	if (!p.automaton) return { check, regex: null, automaton: null };
+	if (p.automaton.states.length > MAX_NFA_STATES) check.tooLarge = p.automaton.states.length;
+	else check.ok = true;
+	return { check, regex: null, automaton: check.ok ? p.automaton : null };
 }
 
 /**
- * `buildNfa`, keeping the previous build's NFA and positions when the machine
- * is unchanged (an edit to spaces or comments), so what is derived from them
- * is not redone. Diagnostics always come from the new source.
+ * The source's diagnostics and whether it gives an NFA, by parsing only
+ * (Thompson's construction is counted, not run). A typed NFA's text is parsed
+ * in full; a regular expression's NFA is left to `buildNfa`.
  */
-export function rebuildNfa(src: NfaSource, previous: NfaBuild | null): NfaBuild {
-	const next = buildNfa(src);
-	if (previous?.nfa && next.nfa && previous.key === next.key)
-		return { ...next, nfa: previous.nfa, positions: previous.positions };
-	return next;
+export function checkSource(src: NfaSource): SourceCheck {
+	return readSource(src).check;
+}
+
+/** The NFA for the current source, or diagnostics explaining why there is none. */
+export function buildNfa(src: NfaSource): NfaBuild {
+	const { check, regex, automaton } = readSource(src);
+	const base: NfaBuild = {
+		nfa: null,
+		positions: null,
+		reDiagnostics: check.reDiagnostics,
+		defsDiagnostics: check.defsDiagnostics,
+		textDiagnostics: check.textDiagnostics,
+		tooLarge: check.tooLarge,
+		key: null
+	};
+	if (regex) {
+		const t = thompson(regex);
+		return { ...base, nfa: t.nfa, positions: t.positions, key: machineKey(t.nfa, t.positions) };
+	}
+	if (automaton) return { ...base, nfa: automaton, key: machineKey(automaton, null) };
+	return base;
 }
 
 // ---------------------------------------------------------------------------
@@ -578,6 +611,75 @@ export function checkPicks(
 /** Leaves the verdict and starts on the next target. */
 export function continuePrediction(p: Prediction): Prediction {
 	return { ...p, verdict: null };
+}
+
+// ---------------------------------------------------------------------------
+// A new construction for an edited source
+// ---------------------------------------------------------------------------
+
+/** Where the stepper was left: a step number, or the last step whatever the number. */
+export interface StepAnchor {
+	index: number;
+	atEnd: boolean;
+}
+
+/** The anchor for step `index` of `total` steps. */
+export function stepAnchor(index: number, total: number): StepAnchor {
+	return { index, atEnd: total > 0 && index >= total - 1 };
+}
+
+/**
+ * The step to show for `anchor` in a construction of `total` steps: the last
+ * step for an anchor at the end, otherwise the anchor's step (the last one
+ * when there are fewer steps).
+ */
+export function anchoredStep(anchor: StepAnchor, total: number): number {
+	if (total <= 0) return 0;
+	return anchor.atEnd ? total - 1 : Math.max(0, Math.min(anchor.index, total - 1));
+}
+
+/**
+ * Predictions after an edit changed the construction: the steps revealed so
+ * far stay revealed (a construction with fewer steps is revealed to its end),
+ * the picks and the last verdict (which name states and targets of the old
+ * construction) are dropped, and the score stays.
+ */
+export function carryPrediction(p: Prediction): Prediction {
+	return { ...newPrediction(p.revealed), score: p.score };
+}
+
+/** An anchor and the step it had the stepper show. */
+export type ShownAnchor = StepAnchor & { shown: number };
+
+/**
+ * The stepper and the predictions after an edit replaced the construction.
+ * Null when the steps are the same (the same NFA with the same ∅ setting,
+ * maybe named differently): nothing moves. Otherwise the step follows the
+ * anchor (the one from the last edit while the stepper still shows the step
+ * it chose, else where the stepper is now), and the prediction is carried.
+ * With no construction before, the stepper goes to the end.
+ */
+export function followEdit(opts: {
+	stepsChanged: boolean;
+	/** There was a construction before this one. */
+	before: boolean;
+	index: number;
+	total: number;
+	newTotal: number;
+	anchor: ShownAnchor | null;
+	prediction: Prediction;
+}): { index: number; anchor: StepAnchor; prediction: Prediction } | null {
+	if (!opts.stepsChanged) return null;
+	const anchor: StepAnchor = !opts.before
+		? { index: 0, atEnd: true }
+		: opts.anchor?.shown === opts.index
+			? { index: opts.anchor.index, atEnd: opts.anchor.atEnd }
+			: stepAnchor(opts.index, opts.total);
+	return {
+		index: anchoredStep(anchor, opts.newTotal),
+		anchor,
+		prediction: carryPrediction(opts.prediction)
+	};
 }
 
 // ---------------------------------------------------------------------------
