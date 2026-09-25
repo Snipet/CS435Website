@@ -465,8 +465,9 @@ time.
 					<div class="table-wrap">
 						<DriverTable {table} highlight={tableHighlight} />
 						<p class="legend">
-							Rows are states, columns are symbol classes. — in T: no transition, so T gives the
-							error state.
+							Rows are states, columns are symbol classes (label classes on which every state has
+							the same next state share a column, but a named set such as <em>digit</em> never goes
+							into an unnamed column). — in T: no transition, so T gives the error state.
 							{#if table.eofColumn !== null}
 								<em>other</em>: every other character; getChar () at the end of the input returns
 								EOF, which is looked up there too.

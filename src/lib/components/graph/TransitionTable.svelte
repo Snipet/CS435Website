@@ -5,10 +5,12 @@ symbol classes in ascending order (plus ε when the machine has ε-moves), cells
 are next states. DFA cells show a state name; NFA cells show sets such as
 {A, B}. The start row is marked →, accepting rows ◎, trap rows are muted.
 
-Default columns cover the declared alphabet and every label, one column per
-symbol when there are at most 16 of them (as on the slides). A class reached
-only through labels shown as `other` (a display override) is headed `other`
-and comes last.
+Default columns cover the declared alphabet and every label, with classes that
+every state treats alike merged into one column (e.g. [A-Z] and [a-z]; a
+named set such as `digit` never goes into an unnamed column), and one column
+per symbol when there are at most 16 of them (as on the slides). A
+class reached only through labels shown as `other` (a display override) is
+headed `other` and comes last.
 -->
 <script lang="ts">
 	import type { CharSet } from '$lib/theory/charset';

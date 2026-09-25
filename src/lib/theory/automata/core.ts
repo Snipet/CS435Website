@@ -4,7 +4,7 @@
  * transition tables, and the plain-text automaton format.
  */
 import { CharSet, partitionCharSets, type Range } from '../charset';
-import { formatClass, showChar } from '../chars';
+import { formatClass, showChar, type NamedSet } from '../chars';
 import type { Diagnostic } from '../diagnostics';
 import type { Automaton, State, StateId, Transition } from './types';
 
@@ -328,6 +328,82 @@ export function transitionTable(
 		};
 	});
 	return { classes, rows };
+}
+
+/**
+ * Merges the classes whose columns in `transitionTable(a, classes)` are the
+ * same: in every state's row the targets on each of them are equal (the ε
+ * column plays no part). Each result is the union of such classes, so
+ * `[A-Z]` and `[a-z]` become one class when every state treats them alike.
+ * Results are in ascending order of their first code point; empty classes are
+ * dropped. The table over the result has the same distinct columns as the
+ * table over `classes`.
+ *
+ * With `names`, named sets keep their names: a union that is not itself a
+ * named set is split back into the named sets that are unions of its classes
+ * (largest first, none overlapping) and one class for the rest. So `digit`
+ * and `_` stay apart unless `digit` ∪ `_` is named, while `[A-Z]` and `[a-z]`
+ * still become `letter`.
+ */
+export function mergeEquivalentClasses(
+	a: Automaton,
+	classes: readonly CharSet[],
+	opts: { names?: readonly NamedSet[] } = {}
+): CharSet[] {
+	// cells[k]: state → targets on classes[k] (states with no target are left out).
+	const cells = classes.map(() => new Map<StateId, Set<StateId>>());
+	// Many transitions share a label object (a subset DFA labels them with its symbol classes).
+	const covered = new Map<CharSet, number[]>();
+	for (const t of a.transitions) {
+		if (!isLabeled(t) || !a.states[t.from] || !a.states[t.to]) continue;
+		let ks = covered.get(t.label);
+		if (!ks) {
+			ks = classes.flatMap((c, k) => (t.label.overlaps(c) ? [k] : []));
+			covered.set(t.label, ks);
+		}
+		for (const k of ks) {
+			let targets = cells[k].get(t.from);
+			if (!targets) cells[k].set(t.from, (targets = new Set()));
+			targets.add(t.to);
+		}
+	}
+	// groups: identical columns → their classes.
+	const groups = new Map<string, CharSet[]>();
+	classes.forEach((c, k) => {
+		if (c.isEmpty) return;
+		const key = [...cells[k]]
+			.sort(([x], [y]) => x - y)
+			.map(([from, targets]) => `${from}:${[...targets].sort((x, y) => x - y).join(',')}`)
+			.join(';');
+		const group = groups.get(key);
+		if (group) group.push(c);
+		else groups.set(key, [c]);
+	});
+	return [...groups.values()]
+		.flatMap((group) => namedUnions(group, opts.names))
+		.sort((x, y) => x.first()! - y.first()!);
+}
+
+/**
+ * The union of disjoint `classes`, or, when that union is not a named set,
+ * the named sets that are unions of some of the classes (largest first, none
+ * overlapping another) plus the union of the classes left over.
+ */
+function namedUnions(classes: readonly CharSet[], names?: readonly NamedSet[]): CharSet[] {
+	const all = classes.reduce((u, c) => u.union(c), CharSet.EMPTY);
+	if (!names?.length || classes.length === 1) return [all];
+	const madeOfClasses = (n: CharSet) =>
+		!n.isEmpty && n.isSubsetOf(all) && classes.every((c) => c.isSubsetOf(n) || !c.overlaps(n));
+	const picked: CharSet[] = [];
+	let rest = all;
+	for (const { set } of names
+		.filter((n) => madeOfClasses(n.set))
+		.sort((x, y) => y.set.size - x.set.size)) {
+		if (!set.isSubsetOf(rest)) continue;
+		picked.push(set);
+		rest = rest.subtract(set);
+	}
+	return rest.isEmpty ? picked : [...picked, rest];
 }
 
 // ---------------------------------------------------------------------------

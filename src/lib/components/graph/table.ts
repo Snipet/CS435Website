@@ -4,6 +4,7 @@
  */
 import { CharSet, partitionCharSets } from '$lib/theory/charset';
 import { formatLabel, type NamedSet } from '$lib/theory/chars';
+import { mergeEquivalentClasses } from '$lib/theory/automata/core';
 import type { Automaton } from '$lib/theory/automata/types';
 
 export interface TableColumn {
@@ -40,10 +41,15 @@ function displayHeaders(a: Automaton, classes: readonly CharSet[]): Map<CharSet,
  * The symbol columns of a transition table (the ε column is not included).
  *
  * Given `classes`, those are the columns, in that order. Otherwise the columns
- * are the classes of the declared alphabet and every label in ascending order,
- * split into single symbols when there are at most SPLIT_LIMIT symbols (named
- * sets stay whole), and a class reached only through labels displayed as, say,
- * `other` is headed `other` and comes last.
+ * are the classes of the declared alphabet and every label, with classes that
+ * every state treats alike merged into one (`mergeEquivalentClasses`, so
+ * `[A-Z]` and `[a-z]` can share a column), in ascending order. Named sets keep
+ * their names whatever the number of symbols: classes merge into an unnamed
+ * union only apart from the named sets they make up (`digit` and `_` stay two
+ * columns unless their union is named). When there are at most SPLIT_LIMIT
+ * symbols the columns are split into single symbols (named sets stay whole).
+ * A class reached only through labels displayed as, say, `other` is headed
+ * `other`, is never merged, and comes last.
  */
 export function tableColumns(
 	a: Automaton,
@@ -60,15 +66,22 @@ export function tableColumns(
 	const labels = a.transitions.flatMap((t) => (t.label ? [t.label] : []));
 	const parts = partitionCharSets(a.alphabet ? [a.alphabet, ...labels] : labels);
 	const heads = displayHeaders(a, parts);
-	const plain = parts.filter((c) => !heads.has(c));
-	const total = plain.reduce((n, c) => n + c.size, 0);
+	const merged = mergeEquivalentClasses(
+		a,
+		parts.filter((c) => !heads.has(c)),
+		{ names: opts.names }
+	);
+	const total = merged.reduce((n, c) => n + c.size, 0);
 	const named = (c: CharSet) => opts.names?.some((n) => n.set.equals(c)) ?? false;
-	const split =
+	// One column per symbol, as on the slides, except for named sets.
+	const plain =
 		total <= SPLIT_LIMIT
-			? plain.flatMap((c) => (named(c) ? [c] : [...c.codePoints()].map((cp) => CharSet.single(cp))))
-			: plain;
+			? merged
+					.flatMap((c) => (named(c) ? [c] : [...c.codePoints()].map((cp) => CharSet.single(cp))))
+					.sort((x, y) => x.first()! - y.first()!)
+			: merged;
 	return [
-		...split.map((c) => column(c)),
+		...plain.map((c) => column(c)),
 		...parts.filter((c) => heads.has(c)).map((c) => column(c, heads.get(c)))
 	];
 }

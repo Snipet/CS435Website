@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CharSet } from '../charset';
+import { formatClass } from '../chars';
 import { alt, cat, star, sym } from '../regex/ast';
 import {
 	acceptingStates,
@@ -16,6 +17,7 @@ import {
 	isLabeled,
 	labelUnion,
 	letterName,
+	mergeEquivalentClasses,
 	outgoing,
 	outgoingIndex,
 	parseAutomatonText,
@@ -321,6 +323,186 @@ describe('transitionTable', () => {
 		const a = automatonFromText('start: A\nA [a-z] B');
 		const { rows } = transitionTable(a, [CharSet.range('a', 'm'), CharSet.range('n', 'z')]);
 		expect(rows[0].cells).toEqual([[1], [1]]);
+	});
+});
+
+describe('mergeEquivalentClasses', () => {
+	const text = (sets: CharSet[]) => sets.map(formatClass);
+
+	it('merges [A-Z] and [a-z] when every state has the same targets on both', () => {
+		const a = automatonFromText(`
+			start: A
+			accept: B
+			A [A-Z] B
+			A [a-z] B
+			B [A-Z] B
+			B [a-z] B
+			B [0-9] B
+		`);
+		const classes = symbolClasses(a);
+		expect(text(classes)).toEqual(['[0-9]', '[A-Z]', '[a-z]']);
+		const merged = mergeEquivalentClasses(a, classes);
+		expect(text(merged)).toEqual(['[0-9]', '[A-Za-z]']);
+		// The merged table has the same distinct columns, one of each.
+		const before = transitionTable(a, classes).rows.map((r) => r.cells);
+		const after = transitionTable(a, merged).rows.map((r) => r.cells);
+		expect(after).toEqual(before.map((cells) => [cells[0], cells[1]]));
+		expect(before.every((cells) => JSON.stringify(cells[1]) === JSON.stringify(cells[2]))).toBe(
+			true
+		);
+	});
+
+	it('keeps classes apart when a state moves to different states on them, even equivalent ones', () => {
+		const a = automatonFromText(`
+			start: S
+			accept: X Y
+			S [A-Z] X
+			S [a-z] Y
+			X [A-Za-z] X
+			Y [A-Za-z] Y
+		`);
+		expect(text(mergeEquivalentClasses(a, symbolClasses(a)))).toEqual(['[A-Z]', '[a-z]']);
+	});
+
+	it('orders the results by their first code point, whatever the input order', () => {
+		const a = automatonFromText(`
+			start: A
+			A [0-9] B
+			A [A-Z] C
+			A _ D
+			A [a-z] C
+		`);
+		const classes = symbolClasses(a);
+		expect(text(classes)).toEqual(['[0-9]', '[A-Z]', '_', '[a-z]']);
+		expect(text(mergeEquivalentClasses(a, classes))).toEqual(['[0-9]', '[A-Za-z]', '_']);
+		expect(text(mergeEquivalentClasses(a, [...classes].reverse()))).toEqual([
+			'[0-9]',
+			'[A-Za-z]',
+			'_'
+		]);
+	});
+
+	it('compares target sets of an NFA and ignores ε-moves', () => {
+		const nfa = automatonFromText(`
+			start: A
+			accept: C
+			A ε B
+			A a,b C
+			B a,b B
+			B a,b,c C
+		`);
+		const classes = symbolClasses(nfa);
+		expect(text(classes)).toEqual(['[ab]', 'c']);
+		const split = [CharSet.single('a'), CharSet.single('b'), CharSet.single('c')];
+		expect(text(mergeEquivalentClasses(nfa, split))).toEqual(['[ab]', 'c']);
+		// B reaches only B on b: a and b now differ in B's row.
+		const other = automatonFromText(`
+			start: A
+			accept: C
+			A ε B
+			A a,b C
+			B a,b B
+			B a,c C
+		`);
+		expect(text(mergeEquivalentClasses(other, split))).toEqual(['a', 'b', 'c']);
+	});
+
+	it('drops empty classes', () => {
+		const a = automatonFromText('start: A\nA a B\nA b B');
+		expect(text(mergeEquivalentClasses(a, [CharSet.EMPTY, CharSet.single('b')]))).toEqual(['b']);
+		expect(mergeEquivalentClasses(a, [])).toEqual([]);
+	});
+
+	describe('with names', () => {
+		const digit = { name: 'digit', set: CharSet.range('0', '9') };
+		const letter = { name: 'letter', set: CharSet.range('A', 'Z').union(CharSet.range('a', 'z')) };
+		const lower = { name: 'lower', set: CharSet.range('a', 'z') };
+		// Every class leads A to B: without names, all of them merge into one.
+		const a = automatonFromText(`
+			start: A
+			A [0-9] B
+			A [A-Z] B
+			A _ B
+			A [a-z] B
+		`);
+		const classes = symbolClasses(a);
+
+		it('keeps a named class out of a union that is not named', () => {
+			expect(text(mergeEquivalentClasses(a, classes))).toEqual(['[0-9A-Z_a-z]']);
+			const b = automatonFromText('start: A\nA [0-9] B\nA _ B\nB [A-Za-z] B');
+			expect(text(mergeEquivalentClasses(b, symbolClasses(b)))).toEqual(['[0-9_]', '[A-Za-z]']);
+			expect(text(mergeEquivalentClasses(b, symbolClasses(b), { names: [digit, letter] }))).toEqual(
+				['[0-9]', '[A-Za-z]', '_']
+			);
+		});
+
+		it('splits a union into the named sets made of its classes and the rest', () => {
+			expect(text(mergeEquivalentClasses(a, classes, { names: [digit, letter] }))).toEqual([
+				'[0-9]',
+				'[A-Za-z]',
+				'_'
+			]);
+			// Only digit is named: [A-Z], _ and [a-z] still share one class.
+			expect(text(mergeEquivalentClasses(a, classes, { names: [digit] }))).toEqual([
+				'[0-9]',
+				'[A-Z_a-z]'
+			]);
+		});
+
+		it('takes the largest named set first and never overlaps two', () => {
+			for (const names of [
+				[lower, letter],
+				[letter, lower]
+			])
+				expect(text(mergeEquivalentClasses(a, classes, { names }))).toEqual(['[0-9_]', '[A-Za-z]']);
+			// lower alone: [A-Z] is left over with 0–9 and _.
+			expect(text(mergeEquivalentClasses(a, classes, { names: [lower] }))).toEqual([
+				'[0-9A-Z_]',
+				'[a-z]'
+			]);
+		});
+
+		it('keeps a union whole when it is named', () => {
+			const word = { name: 'word', set: CharSet.of('_').union(letter.set).union(digit.set) };
+			expect(text(mergeEquivalentClasses(a, classes, { names: [digit, letter, word] }))).toEqual([
+				'[0-9A-Z_a-z]'
+			]);
+			expect(text(mergeEquivalentClasses(a, classes, { names: [letter] }))).toEqual([
+				'[0-9_]',
+				'[A-Za-z]'
+			]);
+		});
+
+		it('never splits a class, even when a named set covers only part of it', () => {
+			const b = automatonFromText('start: A\nA [0-9_] B\nA [A-Za-z] B');
+			expect(text(mergeEquivalentClasses(b, symbolClasses(b), { names: [digit] }))).toEqual([
+				'[0-9A-Z_a-z]'
+			]);
+			const c = automatonFromText('start: A\nA [0-9_] B\nA [A-Za-z] C');
+			expect(text(mergeEquivalentClasses(c, symbolClasses(c), { names: [digit] }))).toEqual([
+				'[0-9_]',
+				'[A-Za-z]'
+			]);
+		});
+
+		it('changes nothing when no union is formed', () => {
+			const c = automatonFromText('start: A\nA [0-9] B\nA _ C\nA [A-Za-z] D');
+			expect(text(mergeEquivalentClasses(c, symbolClasses(c), { names: [digit, letter] }))).toEqual(
+				['[0-9]', '[A-Za-z]', '_']
+			);
+		});
+	});
+
+	it('leaves the lecture tables alone: 0 and 1 stay two columns', () => {
+		const nfa = lectureNfa();
+		const classes = symbolClasses(nfa);
+		const merged = mergeEquivalentClasses(nfa, classes);
+		expect(merged).toHaveLength(2);
+		expect(merged.every((c, i) => c.equals(classes[i]))).toBe(true);
+		const { dfa, classes: dfaClasses } = subsetConstruction(nfa);
+		expect(text(mergeEquivalentClasses(dfa, dfaClasses))).toEqual(['0', '1']);
+		const min = minimize(dfa).dfa;
+		expect(text(mergeEquivalentClasses(min, symbolClasses(min)))).toEqual(['0', '1']);
 	});
 });
 

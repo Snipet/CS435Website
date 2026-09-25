@@ -3,15 +3,17 @@
  */
 import type { NamedSet } from '$lib/theory/chars';
 import { minimize, type Automaton } from '$lib/theory/automata';
-import { driverTable } from './table';
+import { driverTable, labelClasses } from './table';
 
 /** Columns of T when it is indexed by character code, as on slide 15 ([state, char]) over ASCII. */
 export const ASCII_COLUMNS = 128;
 
 export interface TableSize {
 	states: number;
-	/** Columns of T: the symbol classes (relop's `other` among them). */
+	/** Columns of T: the symbol classes (relop's `other` among them), with classes every state treats alike merged. */
 	classes: number;
+	/** Symbol classes of the transition labels before merging (at least `classes`). */
+	labelClasses: number;
 	cells: number;
 	/** Cells with one column per ASCII character. */
 	asciiCells: number;
@@ -20,7 +22,13 @@ export interface TableSize {
 export function tableSize(dfa: Automaton, names?: readonly NamedSet[]): TableSize {
 	const states = dfa.states.length;
 	const classes = driverTable(dfa, { names }).columns.length;
-	return { states, classes, cells: states * classes, asciiCells: states * ASCII_COLUMNS };
+	return {
+		states,
+		classes,
+		labelClasses: labelClasses(dfa).length,
+		cells: states * classes,
+		asciiCells: states * ASCII_COLUMNS
+	};
 }
 
 /**
