@@ -8,6 +8,7 @@ import { CharSet } from '$lib/theory/charset';
 import type { Diagnostic } from '$lib/theory/diagnostics';
 import {
 	children,
+	containsAny,
 	empty,
 	parseDefinitions,
 	parseRegex,
@@ -151,6 +152,22 @@ export function dfaFitsWithin(nfa: Automaton, cap: number): boolean {
 	return true;
 }
 
+/**
+ * Σ for the size guard. The scan's Σ is every symbol the rules use plus every
+ * character of the input; an input character outside the rules' symbols is
+ * matched only by Σ, so all such characters lead every rule's DFA to the same
+ * states. One stand-in for them gives the largest DFA any input can produce.
+ */
+export function guardAlphabet(regexes: readonly Regex[]): CharSet {
+	const used = scannerAlphabet(
+		regexes.map((regex) => ({ name: '', regex })),
+		CharSet.EMPTY
+	);
+	if (!regexes.some((r) => containsAny(r))) return used;
+	const free = used.complement().first();
+	return free === undefined ? used : used.union(CharSet.single(free));
+}
+
 /** Parses the helper definitions and the rules, in order. */
 export function buildSpec(defsText: string, rules: readonly RuleState[]): LexSpec {
 	const defs = parseDefinitions(defsText);
@@ -183,10 +200,7 @@ export function buildSpec(defsText: string, rules: readonly RuleState[]): LexSpe
 
 	// Size guard: the NFA estimate first (cheap), then a bounded determinization.
 	const usable = infos.filter((r) => r.regex !== null);
-	const alphabet = scannerAlphabet(
-		usable.map((r) => ({ name: r.name, regex: r.regex! })),
-		CharSet.EMPTY
-	);
+	const alphabet = guardAlphabet(usable.map((r) => r.regex!));
 	for (const info of usable) {
 		const regex = info.regex!;
 		const fits =

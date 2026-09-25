@@ -40,7 +40,13 @@
 		type LexerPreset,
 		type PresetTry
 	} from '$lib/tools/lexer/presets';
-	import { MAX_INPUT, advance, describeStep, runScan } from '$lib/tools/lexer/scan';
+	import {
+		MAX_INPUT,
+		MAX_MATRIX_CELLS,
+		advance,
+		describeStep,
+		runScan
+	} from '$lib/tools/lexer/scan';
 	import { MAX_DFA_STATES, buildSpec } from '$lib/tools/lexer/spec';
 	import {
 		isLexerHash,
@@ -162,12 +168,14 @@
 		const upto = Math.min(stepper.index, run.tokens.length);
 		for (let t = 0; t < upto; t++) {
 			const tok = run.tokens[t];
-			// Dropped lexemes are shaded but not captioned, to keep the stream readable.
+			// Consumed input is muted, each token underlined in its rule's color. Dropped
+			// lexemes are not captioned, to keep the stream readable.
 			out.push({
 				start: tok.start,
 				end: tok.end,
 				tone: tok.error ? 'reject' : tok.skipped ? 'muted' : tok.rule,
-				label: tok.skipped ? undefined : tok.name
+				label: tok.skipped ? undefined : tok.name,
+				muted: true
 			});
 		}
 		if (stepToken) {
@@ -355,7 +363,12 @@
 				<p class="count">
 					{[...lex.input].length} character{[...lex.input].length === 1 ? '' : 's'}
 				</p>
-				{#if run.truncated}
+				{#if run.limit === 'matrix'}
+					<Callout tone="warn">
+						Only the first {[...run.text].length} characters are scanned: past them, the prefix-match
+						tables would hold more than {MAX_MATRIX_CELLS.toLocaleString('en-US')} entries.
+					</Callout>
+				{:else if run.limit === 'length'}
 					<Callout tone="warn">Only the first {MAX_INPUT} characters are scanned.</Callout>
 				{/if}
 			</Panel>
@@ -568,7 +581,9 @@
 		gap: var(--space-3);
 		padding-top: var(--space-2);
 	}
+	/* Scroll boxes are positioned so visually hidden text inside them cannot widen the page. */
 	.r-box {
+		position: relative;
 		padding: var(--space-3) var(--space-4);
 		border-radius: var(--radius);
 		background: var(--surface-2);
@@ -623,6 +638,7 @@
 		min-width: 0;
 	}
 	.stream-box {
+		position: relative;
 		padding: var(--space-4);
 		border: 1px solid var(--border);
 		border-radius: var(--radius);

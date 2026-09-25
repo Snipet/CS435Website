@@ -134,6 +134,52 @@ describe('lookahead sentences', () => {
 		);
 	});
 
+	it('a token that ends the input ends with "End of input", even when no rule can grow', () => {
+		const lastOf = (id: string, input?: string) => {
+			const s = setup(id, input);
+			const i = s.index.total - 1;
+			const { point, standings, text } = s.at(i);
+			expect(point.final).toBe(true);
+			expect(point.end).toBe(s.run.text.length);
+			return { standings, text };
+		};
+
+		const eq = lastOf('lookahead-eq');
+		expect(eq.standings[4]).toEqual({ status: 'match', more: false });
+		expect(eq.standings.some((s) => s.status === 'viable' || s.more)).toBe(false);
+		expect(eq.text).toBe('End of input after "===". The longest match is "===" → (EQ3, "===").');
+
+		expect(lastOf('templates').text).toBe(
+			'End of input after ">>". The longest match is ">>" → (SHR, ">>").'
+		);
+		expect(lastOf('f-plus-3', 'f+').text).toBe(
+			'End of input after "+". The longest match is "+" → (Plus, "+").'
+		);
+	});
+
+	it('at the end of the input, the scanner can still back up or be stuck', () => {
+		// REAL = digit+ '.' digit+ is still viable after "1." when the input ends.
+		const { index, at } = setup('fortran-do', '1.');
+		expect(at(index.offsets[0] + 1).text).toBe(
+			'End of input after "1.". The scanner backs up to the longest match, "1" → (INT, "1"); "." stays in the input.'
+		);
+		expect(at(index.total - 1).text).toBe(
+			'End of input after ".". No prefix matches R, so the scanner is stuck at position 1.'
+		);
+	});
+
+	it('mid-input, the last read is the one no rule survives', () => {
+		const { run, index, at } = setup('lookahead-eq');
+		// "= == ===": the reads for "=" are "=" and "= ".
+		const { point, standings, text } = at(index.offsets[0] + 1);
+		expect(point.final).toBe(true);
+		expect(point.end).toBeLessThan(run.text.length);
+		expect(standings.every((s) => s.status === 'dead')).toBe(true);
+		expect(text).toBe(
+			'Read "= " (2 characters): no rule matches it or anything longer. The scanner backs up to the longest match, "=" → (ASSIGN, "="); " " stays in the input.'
+		);
+	});
+
 	it('stuck and Error', () => {
 		expect(setup('equals-56').at(0).text).toBe(
 			'Read "=" (1 character): no rule matches it or anything longer. No prefix matches R, so the scanner is stuck at position 0.'

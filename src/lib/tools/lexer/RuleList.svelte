@@ -34,7 +34,17 @@
 
 	let announcement = $state('');
 
-	function move(from: number, to: number) {
+	/** A reordering control in a row, marked with `data-control`. */
+	type Control = 'grip' | 'up' | 'down';
+
+	/**
+	 * Moves rule `from` to `to`. When the move came from the keyboard, `focus` names
+	 * the control that was used, and focus returns to it in the moved row: the
+	 * keyed list may re-insert the row's DOM, which drops focus to the page.
+	 * At the top or bottom, a chevron keeps focus (it is then aria-disabled), so
+	 * repeated presses stop there instead of moving the rule back.
+	 */
+	async function move(from: number, to: number, focus?: Control) {
 		if (from === to || to < 0 || to >= rules.length) return;
 		const name = infos[from]?.name ?? rules[from].name;
 		const [rule] = rules.splice(from, 1);
@@ -42,6 +52,9 @@
 		const [key] = keys.splice(from, 1);
 		keys.splice(to, 0, key);
 		announcement = `${name} is now R${to + 1} of ${rules.length}`;
+		if (!focus) return;
+		await tick();
+		rowElements()[to]?.querySelector<HTMLElement>(`[data-control="${focus}"]`)?.focus();
 	}
 
 	async function remove(i: number) {
@@ -81,16 +94,18 @@
 		if (!drag) return;
 		const { from, to } = drag;
 		drag = null;
-		move(from, to);
+		void move(from, to);
 	}
 
 	function onhandlekey(event: KeyboardEvent, i: number) {
-		if (event.key === 'ArrowUp' && i > 0) move(i, i - 1);
-		else if (event.key === 'ArrowDown' && i < rules.length - 1) move(i, i + 1);
-		else if (event.key === 'Home' && i > 0) move(i, 0);
-		else if (event.key === 'End' && i < rules.length - 1) move(i, rules.length - 1);
+		let to: number;
+		if (event.key === 'ArrowUp' && i > 0) to = i - 1;
+		else if (event.key === 'ArrowDown' && i < rules.length - 1) to = i + 1;
+		else if (event.key === 'Home' && i > 0) to = 0;
+		else if (event.key === 'End' && i < rules.length - 1) to = rules.length - 1;
 		else return;
 		event.preventDefault();
+		void move(i, to, 'grip');
 	}
 
 	/** Row before which the drop marker is drawn (rules.length = after the last row). */
@@ -125,6 +140,7 @@
 				<button
 					type="button"
 					class="grip"
+					data-control="grip"
 					aria-label="Move R{i + 1} ({info?.name ?? rule.name}): drag, or use the arrow keys"
 					title="Drag to reorder (or focus and press ↑ / ↓)"
 					onpointerdown={(e) => onpointerdown(e, i)}
@@ -181,15 +197,17 @@
 						icon="chevron-up"
 						size="sm"
 						label="Move R{i + 1} up"
+						data-control="up"
 						aria-disabled={i === 0}
-						onclick={() => i > 0 && move(i, i - 1)}
+						onclick={() => i > 0 && move(i, i - 1, 'up')}
 					/>
 					<IconButton
 						icon="chevron-down"
 						size="sm"
 						label="Move R{i + 1} down"
+						data-control="down"
 						aria-disabled={i === rules.length - 1}
-						onclick={() => i < rules.length - 1 && move(i, i + 1)}
+						onclick={() => i < rules.length - 1 && move(i, i + 1, 'down')}
 					/>
 					<IconButton icon="x" size="sm" label="Delete R{i + 1}" onclick={() => remove(i)} />
 				</div>

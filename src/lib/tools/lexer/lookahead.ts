@@ -212,7 +212,9 @@ export function describeLookahead(
 		const which = n === 0 ? 'R' : n === 1 ? 'R1' : `R1…R${n}`;
 		return `${opening} No prefix matches ${which}, so the Error rule (R${n + 1}) takes one character → ${formatTokenPair(token, format)}.`;
 	}
-	const atEnd = point.end >= run.text.length && canGoOn;
+	// Mid-input, the last read is the one that left every rule dead. At the end of
+	// the input, reading stops however the rules stand (one may even match all of it).
+	const atEnd = point.end >= run.text.length;
 	const head = atEnd
 		? `End of input after ${quoteShort(read)}.`
 		: `Read ${quoteShort(read)} (${count}): no rule matches it or anything longer.`;

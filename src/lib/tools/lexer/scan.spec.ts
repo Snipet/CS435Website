@@ -1,15 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { presetById } from './presets';
+import { presetById, presets } from './presets';
 import {
 	MAX_INPUT,
+	MAX_MATRIX_CELLS,
 	advance,
 	clip,
 	describeStep,
 	matrixColumns,
+	matrixLength,
 	prefixesAt,
 	quoteShort,
 	rulesMatching,
 	runScan,
+	type LexRun,
 	type StepContext
 } from './scan';
 import { buildSpec } from './spec';
@@ -83,6 +86,20 @@ describe('matrix helpers', () => {
 	it('prefixesAt lists x1…xi for every examined length', () => {
 		const ctx = context('foo-plus-3');
 		expect(prefixesAt(ctx.run.text, ctx.run.steps[0])).toEqual(['f', 'fo', 'foo', 'foo+']);
+		expect(matrixLength(ctx.run.steps[0], false)).toBe(4);
+	});
+
+	it('with no rules, the Error rule still gets the x1 column', () => {
+		const spec = buildSpec('', []);
+		const run = runScan(spec, 'ab', true);
+		const step = run.steps[0];
+		expect(step.maxLen).toBe(0);
+		expect(run.tokens[0]).toMatchObject({ name: 'Error', lexeme: 'a' });
+		expect(matrixLength(step, true)).toBe(1);
+		expect(prefixesAt(run.text, step, matrixLength(step, true))).toEqual(['a']);
+		expect(matrixColumns(matrixLength(step, true), 1)).toEqual([{ kind: 'len', len: 1 }]);
+		expect(matrixLength(runScan(spec, 'ab', false).steps[0], false)).toBe(0);
+		expect(prefixesAt('ab', step, 5)).toEqual(['a', 'ab']);
 	});
 
 	it('rulesMatching adds the Error rule at length 1', () => {
@@ -120,7 +137,47 @@ describe('input helpers', () => {
 		const spec = buildSpec(p.value.defs ?? '', p.value.rules);
 		const run = runScan(spec, 'a'.repeat(MAX_INPUT + 1), false);
 		expect(run.truncated).toBe(true);
+		expect(run.limit).toBe('length');
 		expect(run.tokens[0].lexeme).toHaveLength(MAX_INPUT);
+	});
+
+	describe('the read-ahead budget', () => {
+		// 'a'* 'b' stays viable to the end of "aaa…", so every step reads the rest.
+		const spec = buildSpec('', [
+			{ name: 'AB', re: "'a'* 'b'" },
+			{ name: 'A', re: "'a'" }
+		]);
+		const cells = (run: LexRun) =>
+			run.steps.reduce((n, s) => n + s.maxLen, 0) * spec.tokenRules.length;
+
+		it('scans only the start of the input once the tables would pass the cap', () => {
+			const run = runScan(spec, 'a'.repeat(MAX_INPUT), false);
+			expect(run.limit).toBe('matrix');
+			expect(run.truncated).toBe(true);
+			expect(run.text.length).toBeGreaterThan(0);
+			expect(run.text.length).toBeLessThan(MAX_INPUT);
+			expect(cells(run)).toBeLessThanOrEqual(MAX_MATRIX_CELLS);
+			expect(run.stuck).toBeNull();
+			expect(run.tokens).toHaveLength(run.text.length);
+			expect(run.tokens.every((t) => t.name === 'A')).toBe(true);
+			// Every step reads to the end of the text that was kept.
+			expect(run.steps.every((s) => s.pos + s.maxLen === run.text.length)).toBe(true);
+		});
+
+		it('keeps the steps before the cutoff', () => {
+			const run = runScan(spec, 'aaaa', false, 10);
+			expect(run).toMatchObject({ text: 'aa', limit: 'matrix', truncated: true, stuck: null });
+			expect(run.steps.map((s) => s.maxLen)).toEqual([2, 1]);
+			expect(run.tokens.map((t) => t.lexeme)).toEqual(['a', 'a']);
+			expect(runScan(spec, 'aaaa', false, 20).limit).toBeNull();
+		});
+
+		it('no preset comes near it', () => {
+			for (const p of presets) {
+				const s = buildSpec(p.value.defs ?? '', p.value.rules);
+				expect(runScan(s, p.value.input, p.value.errorRule ?? false).limit, p.id).toBeNull();
+			}
+		});
 	});
 
 	it('advance counts code points', () => {

@@ -20,10 +20,22 @@ import type { LexSpec } from './spec';
 /** Longer inputs are cut to this many characters (string indices) before scanning. */
 export const MAX_INPUT = 2000;
 
+/**
+ * The scan stops before its prefix-match tables pass this many entries (rules ×
+ * characters read, over all steps). Reading ahead is quadratic in the worst
+ * case, e.g. 'a'* 'b' on "aaa…", and the scan runs on every keystroke.
+ */
+export const MAX_MATRIX_CELLS = 250_000;
+
+/** Why only part of the input was scanned. */
+export type ScanLimit = 'length' | 'matrix';
+
 export interface LexRun extends ScanResult {
-	/** The text that was scanned (the input, cut to MAX_INPUT). */
+	/** The text that was scanned: the input, or its start when `limit` is set. */
 	text: string;
 	truncated: boolean;
+	/** 'length': cut to MAX_INPUT; 'matrix': cut where the tables would pass MAX_MATRIX_CELLS. */
+	limit: ScanLimit | null;
 	/** tokenAt[step] = index into `tokens` of the token that step emitted, or null (stuck). */
 	tokenAt: (number | null)[];
 }
@@ -42,12 +54,30 @@ export function lexAlphabet(spec: LexSpec, text: string): CharSet {
 	return scannerAlphabet(spec.tokenRules, CharSet.of(text));
 }
 
-export function runScan(spec: LexSpec, input: string, errorRule: boolean): LexRun {
-	const text = clip(input);
-	const result = scan(spec.tokenRules, text, { errorRule, alphabet: lexAlphabet(spec, text) });
+export function runScan(
+	spec: LexSpec,
+	input: string,
+	errorRule: boolean,
+	maxCells = MAX_MATRIX_CELLS
+): LexRun {
+	let text = clip(input);
+	let limit: ScanLimit | null = text.length < input.length ? 'length' : null;
+	const maxReads = Math.max(1, Math.floor(maxCells / Math.max(1, spec.tokenRules.length)));
+	let result = scan(spec.tokenRules, text, {
+		errorRule,
+		alphabet: lexAlphabet(spec, text),
+		maxReads
+	});
+	if (result.cutoff !== undefined) {
+		// Scan only the text before the cutoff: the steps and tokens are the same up
+		// to there, and no step reads past the end of the text shown.
+		text = text.slice(0, result.cutoff);
+		limit = 'matrix';
+		result = scan(spec.tokenRules, text, { errorRule, alphabet: lexAlphabet(spec, text) });
+	}
 	// Each step emits exactly one token, except a final stuck step.
 	const tokenAt = result.steps.map((_, i) => (i < result.tokens.length ? i : null));
-	return { ...result, text, truncated: text.length < input.length, tokenAt };
+	return { ...result, text, truncated: limit !== null, limit, tokenAt };
 }
 
 /** String index just past `count` code points from `start`. */
@@ -59,11 +89,20 @@ export function advance(text: string, start: number, count: number): number {
 	return i;
 }
 
-/** The prefixes x1…xi examined at a step, as strings (index i - 1). */
-export function prefixesAt(text: string, step: MatchMatrix): string[] {
+/**
+ * The number of prefix lengths the matrix shows at a step: every length read,
+ * and at least 1 when the Error rule took a character (with no rules, the
+ * scanner reads nothing, but the Error rule matches x1).
+ */
+export function matrixLength(step: MatchMatrix, errorFired: boolean): number {
+	return Math.max(step.maxLen, errorFired ? 1 : 0);
+}
+
+/** The prefixes x1…xi examined at a step (up to `count`, default maxLen), as strings (index i - 1). */
+export function prefixesAt(text: string, step: MatchMatrix, count = step.maxLen): string[] {
 	const out: string[] = [];
 	let end = step.pos;
-	for (let len = 1; len <= step.maxLen; len++) {
+	for (let len = 1; len <= count && end < text.length; len++) {
 		end = advance(text, end, 1);
 		out.push(text.slice(step.pos, end));
 	}

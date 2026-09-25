@@ -9,7 +9,7 @@
 	import { formatString } from '$lib/theory/chars';
 	import { glyphFor } from '$lib/components/ui/char-stream';
 	import { toneStyle } from '$lib/components/ui/tones';
-	import { matrixColumns, prefixesAt, type LexRun } from './scan';
+	import { matrixColumns, matrixLength, prefixesAt, type LexRun } from './scan';
 	import type { LexSpec } from './spec';
 
 	interface Props {
@@ -22,7 +22,6 @@
 	let { spec, run, step, errorRule }: Props = $props();
 
 	const current = $derived(run.steps[step]);
-	const prefixes = $derived(current ? prefixesAt(run.text, current) : []);
 	const token = $derived.by(() => {
 		const t = run.tokenAt[step];
 		return t === null || t === undefined ? null : run.tokens[t];
@@ -30,7 +29,9 @@
 	const errorFired = $derived(token?.rule === ERROR_RULE);
 	const chosenLen = $derived(current?.length ?? (errorFired ? 1 : null));
 	const chosenRow = $derived(current?.rule ?? (errorFired ? spec.rules.length : null));
-	const columns = $derived(current ? matrixColumns(current.maxLen, chosenLen) : []);
+	const shown = $derived(current ? matrixLength(current, errorFired) : 0);
+	const prefixes = $derived(current ? prefixesAt(run.text, current, shown) : []);
+	const columns = $derived(current ? matrixColumns(shown, chosenLen) : []);
 
 	interface Row {
 		index: number;
@@ -61,7 +62,7 @@
 				drop: false,
 				problem: false,
 				tone: 'reject',
-				cells: Array.from({ length: Math.max(1, current.maxLen) }, (_, k) => k === 0)
+				cells: Array.from({ length: Math.max(1, shown) }, (_, k) => k === 0)
 			});
 		}
 		return out;
@@ -153,7 +154,9 @@
 {/if}
 
 <style>
+	/* Positioned, so the visually hidden labels in its cells stay inside the scroll box. */
 	.wrap {
+		position: relative;
 		width: fit-content;
 		max-width: 100%;
 		overflow-x: auto;

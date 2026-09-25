@@ -51,7 +51,8 @@
 			out.push({
 				start: tok.start,
 				end: tok.end,
-				tone: tok.error ? 'reject' : tok.skipped ? 'muted' : tok.rule
+				tone: tok.error ? 'reject' : tok.skipped ? 'muted' : tok.rule,
+				muted: true
 			});
 		}
 		if (best) {
@@ -202,6 +203,7 @@
 		min-width: 0;
 	}
 	.stream-box {
+		position: relative;
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-3);
@@ -246,6 +248,7 @@
 		color: var(--text-3);
 	}
 	.table-wrap {
+		position: relative;
 		max-width: 100%;
 		overflow-x: auto;
 		border: 1px solid var(--border);

@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { parseRegex } from '$lib/theory/regex';
 import { thompson } from '$lib/theory/automata';
+import { CharSet } from '$lib/theory/charset';
 import {
 	MAX_DFA_STATES,
 	buildSpec,
 	dfaFitsWithin,
 	estimateNfaStates,
+	guardAlphabet,
 	ruleLabel,
 	ruleName
 } from './spec';
@@ -110,6 +112,32 @@ describe('size guards', () => {
 			expect(estimateNfaStates(r)).toBeGreaterThanOrEqual(thompson(r).nfa.states.length);
 		}
 		expect(estimateNfaStates(re('(1 | 0)*1'))).toBe(10);
+	});
+
+	it('guardAlphabet adds one stand-in for the input characters Σ can match', () => {
+		const plain = guardAlphabet([re("'a' | 'b'"), re("'c'")]);
+		expect(plain.equals(CharSet.of('abc'))).toBe(true);
+		const withAny = guardAlphabet([re("Σ* 'a'"), re("'b'")]);
+		expect(withAny.size).toBe(3);
+		expect(withAny.has('a') && withAny.has('b')).toBe(true);
+		expect(guardAlphabet([re('Σ Σ')]).size).toBe(1);
+	});
+
+	it('measures rules that use Σ against input characters the rules do not name', () => {
+		// Over {a} alone these are tiny; over {a, any other character} they are not.
+		const spec = buildSpec('', [
+			{ name: 'Tail', re: "Σ* 'a' Σ^10" },
+			{ name: 'Periods', re: '(Σ^2)* | (Σ^3)* | (Σ^5)* | (Σ^7)* | (Σ^11)*' },
+			{ name: 'Line', re: "'/' '/' Σ*" },
+			{ name: 'Any', re: 'Σ' }
+		]);
+		expect(spec.rules.map((r) => r.problem)).toEqual(['too-large', 'too-large', null, null]);
+		expect(spec.tokenRules[0].regex.kind).toBe('empty');
+		expect(spec.tokenRules[1].regex.kind).toBe('empty');
+		// The same language without Σ was already caught.
+		expect(
+			buildSpec('', [{ name: 'Tail', re: "('a' | 'b')* 'a' ('a' | 'b')^10" }]).rules[0]
+		).toMatchObject({ problem: 'too-large' });
 	});
 
 	it('dfaFitsWithin stops at the cap', () => {
