@@ -14,6 +14,7 @@ follow, skip) and read off the ordered result.
 		type StateId
 	} from '$lib/theory/automata';
 	import { setText, stateName } from './logic';
+	import StatePicker from './StatePicker.svelte';
 
 	interface Props {
 		nfa: Automaton;
@@ -123,15 +124,8 @@ follow, skip) and read off the ordered result.
 				ariaLabel="NFA. Select states to pick the set whose ε-closure is computed."
 			/>
 		{:else}
-			<div class="chips" role="group" aria-label="NFA states">
-				{#each nfa.states as s (s.id)}
-					<button
-						type="button"
-						class="chip f"
-						aria-pressed={picked.includes(s.id)}
-						onclick={() => toggle(s.id)}>{name(s.id)}</button
-					>
-				{/each}
+			<div class="picker">
+				<StatePicker {nfa} {picked} onpick={toggle} />
 			</div>
 		{/if}
 		<p class="hint">
@@ -291,26 +285,8 @@ follow, skip) and read off the ordered result.
 		color: var(--text-2);
 		font-size: var(--text-sm);
 	}
-	.chips {
-		display: flex;
-		flex-wrap: wrap;
-		gap: var(--space-1);
-		max-height: 16rem;
+	.picker {
 		padding: var(--space-3);
-		overflow-y: auto;
-	}
-	.chip {
-		min-width: 2.4em;
-		padding: 2px 8px;
-		border: 1px solid var(--border-strong);
-		border-radius: 999px;
-		background: var(--surface);
-		cursor: pointer;
-		font-size: var(--text-sm);
-	}
-	.chip[aria-pressed='true'] {
-		border-color: var(--active);
-		background: var(--active-soft);
 	}
 	@media (max-width: 860px) {
 		.closure {

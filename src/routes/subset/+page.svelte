@@ -31,6 +31,7 @@
 	import BlowUp from '$lib/tools/subset/BlowUp.svelte';
 	import ClosureExplorer from '$lib/tools/subset/ClosureExplorer.svelte';
 	import RunBoth from '$lib/tools/subset/RunBoth.svelte';
+	import StatePicker from '$lib/tools/subset/StatePicker.svelte';
 	import WorklistTable from '$lib/tools/subset/WorklistTable.svelte';
 	import {
 		MAX_DFA_STATES,
@@ -40,20 +41,24 @@
 		MAX_NFA_STATES,
 		blowupNfaText,
 		buildNfa,
-		checkPrediction,
+		checkPicks,
 		classText,
 		construct,
+		continuePrediction,
 		dfaHighlight,
 		drawnDfa,
-		nextTarget,
+		newPrediction,
 		nfaHighlight,
 		partialDfa,
 		powerOfTwoText,
+		predictionView,
 		setText,
 		stateName,
 		superscript,
 		targetSet,
-		type PredictionCheck
+		togglePick,
+		type NfaBuild,
+		type Prediction
 	} from '$lib/tools/subset/logic';
 	import { PRESETS, presetFor, type SubsetPreset } from '$lib/tools/subset/presets';
 	import {
@@ -62,6 +67,7 @@
 		presetFields,
 		stateFromHash,
 		stepFromHash,
+		switchSource,
 		type TabId
 	} from '$lib/tools/subset/state';
 
@@ -72,13 +78,23 @@
 	// ------------------------------------------------------------------
 
 	const build = $derived(buildNfa(model));
-	const nfa = $derived(build.nfa);
-	const nfaDrawable = $derived(
-		nfa !== null && nfa.states.length <= (build.positions ? MAX_DRAWN_NFA_GRID : MAX_DRAWN_NFA_AUTO)
-	);
+	/**
+	 * The last NFA built. While the input has problems (mid-edit), the page keeps
+	 * showing its construction, dimmed, instead of tearing the panels down.
+	 */
+	let lastGood = $state.raw<NfaBuild | null>(null);
+	$effect(() => {
+		if (build.nfa) lastGood = build;
+	});
+	const shown = $derived(build.nfa ? build : lastGood);
+	/** The construction shown is for an earlier input. */
+	const stale = $derived(build.nfa === null && shown !== null);
+	const nfa = $derived(shown?.nfa ?? null);
+	const nfaGrid = $derived(shown?.positions ?? null);
+	const maxDrawnNfa = $derived(nfaGrid ? MAX_DRAWN_NFA_GRID : MAX_DRAWN_NFA_AUTO);
+	const nfaDrawable = $derived(nfa !== null && nfa.states.length <= maxDrawnNfa);
 	const nfaPositions = $derived(
-		build.positions ??
-			(nfa !== null && nfaDrawable ? nodePositions(layoutAutomaton(nfa)) : undefined)
+		nfaGrid ?? (nfa !== null && nfaDrawable ? nodePositions(layoutAutomaton(nfa)) : undefined)
 	);
 
 	const construction = $derived(
@@ -105,13 +121,13 @@
 	// Links to other tools
 	// ------------------------------------------------------------------
 
-	const dfaText = $derived(result ? formatAutomatonText(result.dfa) : null);
+	const dfaText = $derived(result && !stale ? formatAutomatonText(result.dfa) : null);
 	const minimizeHref = $derived(
 		dfaText ? toolLink('minimize', { from: 'dfa', text: dfaText }) : null
 	);
 	const automataHref = $derived(dfaText ? toolLink('automata', { text: dfaText }) : null);
 	const thompsonHref = $derived(
-		model.from === 're' && nfa
+		model.from === 're' && build.nfa
 			? toolLink('thompson', model.defs ? { re: model.re, defs: model.defs } : { re: model.re })
 			: null
 	);
@@ -120,44 +136,52 @@
 	// Predictions
 	// ------------------------------------------------------------------
 
-	let picks = $state<{ target: number | null; ids: StateId[] }>({ target: null, ids: [] });
-	let verdict = $state.raw<{ target: number; check: PredictionCheck } | null>(null);
-	let score = $state({ right: 0, total: 0 });
+	let prediction = $state.raw<Prediction>(newPrediction());
 
-	const pending = $derived(model.predict && result ? nextTarget(result, index) : null);
-	const picked = $derived(picks.target !== null && picks.target === pending ? picks.ids : []);
-	const showVerdict = $derived(model.predict && verdict !== null && verdict.target === index);
-	const predicting = $derived(pending !== null && !showVerdict);
+	const pv = $derived(model.predict && result ? predictionView(result, index, prediction) : null);
+	const pending = $derived(pv?.pending ?? null);
+	const picked = $derived(pv?.picked ?? []);
+	const verdict = $derived(pv?.showVerdict ? prediction.verdict : null);
+	const predicting = $derived(pv?.phase === 'pick');
 	const pendingStep = $derived(pending !== null ? result?.steps[pending] : undefined);
 
+	/** Drops the picks and the verdict; the score stays. */
 	function resetPrediction() {
-		picks = { target: null, ids: [] };
-		verdict = null;
+		prediction = { ...newPrediction(), score: prediction.score };
 	}
 
 	function pick(id: StateId) {
-		if (pending === null) return;
-		verdict = null;
-		picks = {
-			target: pending,
-			ids: picked.includes(id) ? picked.filter((s) => s !== id) : [...picked, id]
-		};
+		if (result) prediction = togglePick(result, index, prediction, id);
 	}
 
 	function check() {
-		if (pending === null || !result) return;
-		const c = checkPrediction(picked, targetSet(result, pending));
-		verdict = { target: pending, check: c };
-		score = { right: score.right + (c.correct ? 1 : 0), total: score.total + 1 };
-		picks = { target: null, ids: [] };
+		const c = result ? checkPicks(result, index, prediction) : null;
+		if (!c) return;
+		prediction = c.prediction;
 		stepper.pause();
-		stepper.set(pending);
+		stepper.set(c.reveal);
+	}
+
+	function startOver() {
+		prediction = newPrediction();
+		stepper.pause();
+		stepper.first();
+	}
+
+	const primaryLabel = $derived(
+		pv?.phase === 'pick' ? 'Check' : pv?.phase === 'verdict' ? 'Continue' : 'Start over'
+	);
+
+	/** Check the picks, move on to the next target after a verdict, or start again at the end. */
+	function primaryAction() {
+		if (pv?.phase === 'pick') check();
+		else if (pv?.phase === 'verdict') prediction = continuePrediction(prediction);
+		else startOver();
 	}
 
 	function setPredict(on: boolean) {
 		model.predict = on;
-		resetPrediction();
-		score = { right: 0, total: 0 };
+		prediction = newPrediction();
 		stepper.pause();
 		if (on) stepper.first();
 	}
@@ -184,7 +208,7 @@
 		}
 		const h = nfaHighlight(result, index);
 		const tone = toneMap(h.info, 'info');
-		if (showVerdict && verdict) {
+		if (verdict) {
 			for (const s of verdict.check.hits) tone.set(s, 'accept');
 			for (const s of verdict.check.extra) tone.set(s, 'reject');
 		}
@@ -225,18 +249,23 @@
 		machinesWidth > 0 && machinesWidth < 640 ? 'auto' : 320
 	);
 
+	/** The Regular definitions editor is opened or closed only when a source arrives from outside. */
+	let defsOpen = $state(false);
+
 	function loadPreset(p: SubsetPreset) {
-		Object.assign(model, presetFields(p.value));
+		Object.assign(model, presetFields(p.value, model));
 		model.input = p.value.input ?? '';
 		model.seeds = [];
+		defsOpen = model.defs !== '';
 		restart();
 	}
 
 	function setFrom(from: 're' | 'nfa') {
 		if (from === model.from) return;
-		// The NFA text starts from the machine built so far.
-		if (from === 'nfa' && model.text.trim() === '' && nfa) model.text = formatAutomatonText(nfa);
-		model.from = from;
+		const { re, defs, text } = model;
+		// The NFA text starts from the machine shown; an empty regular expression from the default.
+		const nfaText = from === 'nfa' && text.trim() === '' && nfa ? formatAutomatonText(nfa) : null;
+		Object.assign(model, switchSource({ from: model.from, re, defs, text }, from, nfaText));
 		model.seeds = [];
 		restart();
 	}
@@ -256,6 +285,9 @@
 		validate: isSubsetHash,
 		onLoad: (v) => {
 			Object.assign(model, stateFromHash($state.snapshot(model), v));
+			// A new source: the only NFA to fall back on is its own.
+			lastGood = build.nfa ? build : null;
+			defsOpen = model.defs !== '';
 			stepper.pause();
 			resetPrediction();
 			const s = stepFromHash(v);
@@ -392,7 +424,7 @@
 						placeholder="(1 | 0)*1"
 						oninput={restart}
 					/>
-					<Disclosure summary="Regular definitions" open={model.defs !== ''}>
+					<Disclosure summary="Regular definitions" bind:open={defsOpen}>
 						<CodeEditor
 							ariaLabel="Regular definitions, one per line"
 							bind:value={model.defs}
@@ -465,14 +497,22 @@
 
 	{#if build.tooLarge !== null}
 		<Callout tone="warn" title="NFA too large">
-			This regular expression gives an NFA with more than {MAX_NFA_STATES} states; the page builds NFAs
-			of up to {MAX_NFA_STATES} states.
+			{model.from === 're'
+				? `This regular expression gives an NFA with more than ${MAX_NFA_STATES} states`
+				: `This NFA has ${build.tooLarge} states`}; the page builds NFAs of up to {MAX_NFA_STATES}
+			states.
+			{#if stale}The construction below is for the last NFA built.{/if}
 		</Callout>
 	{:else if !nfa}
 		<Callout tone="info">No NFA yet: fix the problems listed under the input.</Callout>
-	{:else}
+	{/if}
+
+	{#if nfa}
 		<Panel title="Construction" id="construction">
 			{#snippet actions()}
+				{#if stale}
+					<span class="stale-badge"><Badge>Last valid NFA</Badge></span>
+				{/if}
 				{#if nfa}
 					<span class="counter">
 						DFA states: <strong>{step?.dfaStates ?? '—'}</strong> of 2{superscript(
@@ -495,51 +535,67 @@
 					{/snippet}
 				</StepControls>
 
-				{#if model.predict}
-					<div class="predict" aria-live="polite">
-						{#if showVerdict && verdict}
-							{@const c = verdict.check}
-							{#if c.correct}
-								<p class="verdict ok">
-									<Icon name="check" size={16} /> Correct:
-									<span class="f">{set(targetSet(result, verdict.target))}</span>.
-								</p>
+				{#if model.predict && pv}
+					<div class="predict">
+						<div class="predict-status" aria-live="polite">
+							{#if verdict}
+								{@const c = verdict.check}
+								{#if c.correct}
+									<p class="verdict ok">
+										<Icon name="check" size={16} /> Correct:
+										<span class="f">{set(targetSet(result, verdict.target))}</span>.
+									</p>
+								{:else}
+									<p class="verdict bad">
+										<Icon name="x" size={16} />
+										{#if c.missing.length}Missing: {@render list(c.missing.map(nfaName))}.{/if}
+										{#if c.extra.length}Not in the set: {@render list(c.extra.map(nfaName))}.{/if}
+										The set is <span class="f">{set(targetSet(result, verdict.target))}</span>.
+									</p>
+								{/if}
+							{/if}
+							{#if pendingStep?.kind === 'target'}
+								{@const asked = `ε-closure(move(${dfaName(pendingStep.from)}, ${classText(pendingStep.symbol)}))`}
+								{#if pv.phase === 'verdict'}
+									<p>Next: <span class="f">{asked}</span>.</p>
+								{:else}
+									<p>
+										<strong>Predict</strong> <span class="f">{asked}</span>: {nfaDrawable
+											? 'click NFA states in the diagram'
+											: 'pick NFA states below'}, then Check.
+									</p>
+								{/if}
 							{:else}
-								<p class="verdict bad">
-									<Icon name="x" size={16} />
-									{#if c.missing.length}Missing: {@render list(c.missing.map(nfaName))}.{/if}
-									{#if c.extra.length}Not in the set: {@render list(c.extra.map(nfaName))}.{/if}
-									The set is <span class="f">{set(targetSet(result, verdict.target))}</span>.
+								<p class="done-note">
+									Every target has been revealed{prediction.score.total > 0
+										? `; ${prediction.score.right} of ${prediction.score.total} predictions correct`
+										: ''}.
 								</p>
 							{/if}
+						</div>
+						{#if pv.phase === 'pick' && !nfaDrawable}
+							<StatePicker {nfa} {picked} onpick={pick} label="NFA states for the prediction" />
 						{/if}
-						{#if pendingStep?.kind === 'target'}
-							<div class="ask">
-								<p>
-									<strong>Predict</strong> ε-closure(move(<span class="f"
-										>{dfaName(pendingStep.from)}</span
-									>, <span class="f">{classText(pendingStep.symbol)}</span>)): click NFA states in
-									the diagram, then Check.
-								</p>
-								<div class="ask-row">
-									<span class="f picked">{set(picked)}</span>
-									<Button size="sm" variant="primary" onclick={check}>Check</Button>
-									<Button
-										size="sm"
-										variant="ghost"
-										disabled={picked.length === 0}
-										onclick={() => (picks = { target: pending, ids: [] })}>Clear</Button
-									>
-								</div>
-							</div>
-						{:else}
-							<p class="done-note">Every target has been revealed.</p>
-						{/if}
+						<!-- One primary button whose action follows the phase, so keyboard focus stays on it. -->
+						<div class="ask-row">
+							{#if pv.phase === 'pick'}
+								<output class="f picked">{set(picked)}</output>
+							{/if}
+							<Button size="sm" variant="primary" onclick={primaryAction}>{primaryLabel}</Button>
+							{#if pv.phase === 'pick'}
+								<Button
+									size="sm"
+									variant="ghost"
+									disabled={picked.length === 0}
+									onclick={resetPrediction}>Clear</Button
+								>
+							{/if}
+						</div>
 					</div>
 				{/if}
 			{/if}
 
-			<div class="machines" bind:clientWidth={machinesWidth}>
+			<div class={['machines', { stale }]} bind:clientWidth={machinesWidth}>
 				<figure class="machine">
 					<figcaption>
 						<span class="machine-title">NFA</span>
@@ -554,16 +610,15 @@
 							automaton={nfa}
 							positions={nfaPositions}
 							highlight={nfaView}
-							onstateclick={predicting ? pick : undefined}
+							onstateclick={pv?.canPick ? pick : undefined}
 							height={diagramHeight}
-							ariaLabel={predicting
+							ariaLabel={pv?.canPick
 								? 'NFA. Select states to add them to the prediction.'
 								: 'NFA with the current step marked'}
 						/>
 					{:else}
 						<p class="too-big">
-							The NFA has {nfa.states.length} states; diagrams are drawn for up to
-							{build.positions ? MAX_DRAWN_NFA_GRID : MAX_DRAWN_NFA_AUTO}.
+							The NFA has {nfa.states.length} states; diagrams are drawn for up to {maxDrawnNfa}.
 						</p>
 					{/if}
 				</figure>
@@ -618,50 +673,54 @@
 					<span class="legend-item"><span class="mark">◎</span> accepting</span>
 				</div>
 
-				<div class="worklist">
+				<div class={['worklist', { stale }]}>
 					<h3 class="sub-title">Worklist</h3>
 					<WorklistTable {result} {nfa} {index} />
 				</div>
 			{/if}
 		</Panel>
+	{/if}
 
-		<Panel>
-			<Tabs
-				label="More views"
-				{tabs}
-				value={model.tab}
-				onchange={(id) => (model.tab = id as TabId)}
-			>
-				{#snippet children(id)}
-					{#if id === 'closure'}
-						<ClosureExplorer
-							{nfa}
-							positions={nfaPositions}
-							drawable={nfaDrawable}
-							seeds={model.seeds}
-							onseedschange={(s) => (model.seeds = s)}
-						/>
-					{:else if id === 'predict'}
-						<div class="predict-tab">
-							<Toggle
-								label="Predict each target"
-								description="Before a target is revealed, click the NFA states you expect in its ε-closure, then Check. Missing and extra states are listed, then the step is shown."
-								checked={model.predict}
-								onchange={setPredict}
+	<Panel>
+		<Tabs label="More views" {tabs} value={model.tab} onchange={(id) => (model.tab = id as TabId)}>
+			{#snippet children(id)}
+				{#if id === 'closure'}
+					{#if nfa}
+						<div class={{ stale }}>
+							<ClosureExplorer
+								{nfa}
+								positions={nfaPositions}
+								drawable={nfaDrawable}
+								seeds={model.seeds}
+								onseedschange={(s) => (model.seeds = s)}
 							/>
-							{#if model.predict}
-								<p>
-									The prompt is above the diagrams, in <a href="#construction">Construction</a>.
-									{#if score.total > 0}
-										<Badge tone={score.right === score.total ? 'accept' : 'neutral'}
-											>{score.right} of {score.total} correct</Badge
-										>
-									{/if}
-								</p>
-							{/if}
 						</div>
-					{:else if id === 'run'}
-						{#if result && dfa}
+					{:else}
+						<p class="tab-note">No NFA: fix the problems listed under the input.</p>
+					{/if}
+				{:else if id === 'predict'}
+					<div class="predict-tab">
+						<Toggle
+							label="Predict each target"
+							description="Before a target is revealed, pick the NFA states you expect in its ε-closure, then Check. Missing and extra states are listed, then the step is shown."
+							checked={model.predict}
+							onchange={setPredict}
+						/>
+						{#if model.predict}
+							<p>
+								The prompt is above the diagrams, in <a href="#construction">Construction</a>.
+								{#if prediction.score.total > 0}
+									{@const sc = prediction.score}
+									<Badge tone={sc.right === sc.total ? 'accept' : 'neutral'}
+										>{sc.right} of {sc.total} correct</Badge
+									>
+								{/if}
+							</p>
+						{/if}
+					</div>
+				{:else if id === 'run'}
+					{#if nfa && result && dfa}
+						<div class={{ stale }}>
 							<RunBoth
 								{nfa}
 								{dfa}
@@ -673,16 +732,18 @@
 								input={model.input}
 								oninputchange={(v) => (model.input = v)}
 							/>
-						{:else}
-							<p class="too-big">The run needs the DFA, which is too large here.</p>
-						{/if}
+						</div>
+					{:else if nfa}
+						<p class="tab-note">The run needs the DFA, which is too large here.</p>
 					{:else}
-						<BlowUp k={model.k} onkchange={(k) => (model.k = k)} onopen={openBlowup} />
+						<p class="tab-note">No NFA: fix the problems listed under the input.</p>
 					{/if}
-				{/snippet}
-			</Tabs>
-		</Panel>
-	{/if}
+				{:else}
+					<BlowUp k={model.k} onkchange={(k) => (model.k = k)} onopen={openBlowup} />
+				{/if}
+			{/snippet}
+		</Tabs>
+	</Panel>
 </ToolPage>
 
 <style>
@@ -774,7 +835,7 @@
 	.predict p {
 		margin: 0;
 	}
-	.ask {
+	.predict-status {
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-2);
@@ -853,6 +914,26 @@
 		padding: var(--space-5) var(--space-4);
 		color: var(--text-2);
 		font-size: var(--text-sm);
+	}
+	.tab-note {
+		margin: 0;
+		color: var(--text-2);
+		font-size: var(--text-sm);
+	}
+	/* The construction of the last NFA built, while the input has problems. */
+	.stale {
+		opacity: 0.5;
+		/* Dims only once a problem outlasts a pause in typing; restores at once. */
+		transition: opacity var(--duration) var(--ease) 400ms;
+	}
+	.stale-badge {
+		display: inline-flex;
+		animation: appear var(--duration) var(--ease) 400ms both;
+	}
+	@keyframes appear {
+		from {
+			opacity: 0;
+		}
 	}
 	.legend {
 		display: flex;

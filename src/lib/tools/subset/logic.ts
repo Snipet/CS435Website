@@ -116,7 +116,10 @@ export function thompsonSize(r: Regex, limit = MAX_NFA_STATES): number {
 				out = n.parts.reduce((s, p) => cap(s + size(p)), 0);
 				break;
 			case 'alt':
-				out = n.options.reduce((s, p) => cap(s + size(p)), 2);
+				// Options are combined two at a time, (A | B) | C: each union adds a start and a final.
+				out = cap(
+					n.options.reduce((s, p) => cap(s + size(p)), 0) + 2 * Math.max(1, n.options.length - 1)
+				);
 				break;
 			case 'star':
 				out = cap(size(n.body) + 2);
@@ -421,6 +424,84 @@ export function checkPrediction(
 	const missing = actual.filter((s) => !got.has(s));
 	const extra = [...got].filter((s) => !want.has(s));
 	return { correct: missing.length === 0 && extra.length === 0, hits, missing, extra };
+}
+
+/** Predictions made so far: the states picked for the next target, the last verdict, the score. */
+export interface Prediction {
+	picks: { target: number | null; ids: StateId[] };
+	/** The last check, shown while the stepper stays on its target step. */
+	verdict: { target: number; check: PredictionCheck } | null;
+	score: { right: number; total: number };
+}
+
+export function newPrediction(): Prediction {
+	return { picks: { target: null, ids: [] }, verdict: null, score: { right: 0, total: 0 } };
+}
+
+/**
+ * Where predicting stands at step `index`:
+ * - 'pick': states are being picked for the target `pending`;
+ * - 'verdict': the last check is shown, and `pending` is the target after it;
+ * - 'done': every target is revealed.
+ */
+export interface PredictionView {
+	phase: 'pick' | 'verdict' | 'done';
+	/** The target step to predict next; null when every target is revealed. */
+	pending: number | null;
+	/** States picked for `pending`, in the order picked. */
+	picked: StateId[];
+	/** NFA states can be picked (in the verdict phase a pick starts the next prediction). */
+	canPick: boolean;
+	/** The last verdict is shown (the stepper is on its target; also after the last target). */
+	showVerdict: boolean;
+}
+
+export function predictionView(result: SubsetResult, index: number, p: Prediction): PredictionView {
+	const pending = nextTarget(result, index);
+	const picked = pending !== null && p.picks.target === pending ? p.picks.ids : [];
+	const showVerdict = p.verdict !== null && p.verdict.target === index;
+	const phase = pending === null ? 'done' : showVerdict ? 'verdict' : 'pick';
+	return { phase, pending, picked, canPick: pending !== null, showVerdict };
+}
+
+/** Adds `id` to the prediction for the pending target, or removes it; clears a shown verdict. */
+export function togglePick(
+	result: SubsetResult,
+	index: number,
+	p: Prediction,
+	id: StateId
+): Prediction {
+	const { pending, picked } = predictionView(result, index, p);
+	if (pending === null) return p;
+	const ids = picked.includes(id) ? picked.filter((s) => s !== id) : [...picked, id];
+	return { ...p, picks: { target: pending, ids }, verdict: null };
+}
+
+/**
+ * Checks the picked states against the pending target's set. Returns the new
+ * prediction and the target step to reveal, or null when nothing is pending.
+ */
+export function checkPicks(
+	result: SubsetResult,
+	index: number,
+	p: Prediction
+): { prediction: Prediction; reveal: number } | null {
+	const { pending, picked } = predictionView(result, index, p);
+	if (pending === null) return null;
+	const check = checkPrediction(picked, targetSet(result, pending));
+	return {
+		prediction: {
+			picks: { target: null, ids: [] },
+			verdict: { target: pending, check },
+			score: { right: p.score.right + (check.correct ? 1 : 0), total: p.score.total + 1 }
+		},
+		reveal: pending
+	};
+}
+
+/** Leaves the verdict and starts on the next target. */
+export function continuePrediction(p: Prediction): Prediction {
+	return { ...p, verdict: null };
 }
 
 // ---------------------------------------------------------------------------

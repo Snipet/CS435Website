@@ -14,15 +14,19 @@ import {
 	blowupNfaText,
 	blowupRows,
 	buildNfa,
+	checkPicks,
 	checkPrediction,
 	construct,
+	continuePrediction,
 	countSubsets,
 	dfaHighlight,
 	drawnDfa,
+	newPrediction,
 	nextTarget,
 	nfaHighlight,
 	partialDfa,
 	powerOfTwoText,
+	predictionView,
 	runSideBySide,
 	sameSet,
 	setText,
@@ -30,7 +34,9 @@ import {
 	superscript,
 	targetSet,
 	thompsonSize,
-	worklist
+	togglePick,
+	worklist,
+	type Prediction
 } from './logic';
 
 const src = (re: string, defs = '') => ({ from: 're' as const, re, defs, text: '' });
@@ -66,7 +72,7 @@ describe('formatting', () => {
 
 describe('thompsonSize', () => {
 	it('matches the states Thompson builds', () => {
-		const defs = "digit = '0' | '1'\npair = digit digit";
+		const defs = "digit = '0' | '1'\npair = digit digit\nabc = a | b | c";
 		const d = parseDefinitions(defs);
 		for (const text of [
 			'(1 | 0)*1',
@@ -81,7 +87,14 @@ describe('thompsonSize', () => {
 			'pair+ digit?',
 			'a^{2,4}',
 			'a^{2,}',
-			'(0 | 1)* 1 (0|1)^2'
+			'(0 | 1)* 1 (0|1)^2',
+			// Alternations of more than two options are combined two at a time.
+			'a|b|c',
+			'(a|b|c|d)*',
+			'abc abc',
+			'(a|b|c)^{1,2}',
+			'(a|b|c)?',
+			'(a|b|c)+'
 		]) {
 			const r = parseRegex(text, { defs: d.defs });
 			if (!r.ok) throw new Error(text);
@@ -121,6 +134,13 @@ describe('buildNfa', () => {
 		const big = buildNfa(src('(a|b)^100'));
 		expect(big.nfa).toBeNull();
 		expect(big.tooLarge).toBeGreaterThan(MAX_NFA_STATES);
+		// Thompson makes 308 states here (10 options, 9 unions each).
+		const wide = buildNfa(src('(a|b|c|d|e|f|g|h|i|j)*a(a|b|c|d|e|f|g|h|i|j)^7'));
+		expect(wide.nfa).toBeNull();
+		expect(wide.tooLarge).toBeGreaterThan(MAX_NFA_STATES);
+		const letters = 'abcdefghijklmnopqrstuvwxyz'.split('').join('|');
+		expect(buildNfa(src(`(${letters})^5`)).nfa).toBeNull();
+		expect(buildNfa(src(`(${letters})^2`)).nfa?.states.length).toBeLessThanOrEqual(MAX_NFA_STATES);
 	});
 
 	it('reads the text format without positions', () => {
@@ -255,6 +275,74 @@ describe('predictions', () => {
 		expect(nextTarget(result, 3)).toBe(6);
 		expect(nextTarget(result, result.steps.length - 1)).toBeNull();
 		expect(names(nfa, targetSet(result, 3)).join('')).toBe('FGABCDHI');
+	});
+
+	it('answers one target after another without stepping in between', () => {
+		const setOf = (text: string) => [...text].map((c) => c.charCodeAt(0) - 65);
+		let p: Prediction = newPrediction();
+		let index = 0;
+		const pickAll = (ids: number[]) => {
+			for (const id of ids) p = togglePick(result, index, p, id);
+		};
+
+		expect(predictionView(result, index, p)).toMatchObject({ phase: 'pick', pending: 3 });
+		pickAll(setOf('FGABCDHI'));
+		let c = checkPicks(result, index, p)!;
+		expect(c.reveal).toBe(3);
+		p = c.prediction;
+		index = c.reveal;
+		expect(p.verdict?.check.correct).toBe(true);
+
+		// The verdict is shown, and the next target (EJGABCDHI) can be picked straight away.
+		let v = predictionView(result, index, p);
+		expect(v).toMatchObject({ phase: 'verdict', pending: 6, canPick: true, showVerdict: true });
+		expect(v.picked).toEqual([]);
+		pickAll(setOf('EJGABCDHI'));
+		v = predictionView(result, index, p);
+		expect(v.phase).toBe('pick');
+		expect(v.showVerdict).toBe(false);
+		expect(names(nfa, v.picked).join('')).toBe('EJGABCDHI');
+		c = checkPicks(result, index, p)!;
+		p = c.prediction;
+		index = c.reveal;
+		expect(index).toBe(6);
+		expect(p.verdict?.check.correct).toBe(true);
+		expect(p.score).toEqual({ right: 2, total: 2 });
+
+		// Continue clears the verdict; a wrong guess is scored as wrong.
+		p = continuePrediction(p);
+		v = predictionView(result, index, p);
+		expect(v).toMatchObject({ phase: 'pick', showVerdict: false });
+		pickAll(setOf('F'));
+		c = checkPicks(result, index, p)!;
+		expect(c.prediction.verdict?.check.correct).toBe(false);
+		expect(c.prediction.score).toEqual({ right: 2, total: 3 });
+	});
+
+	it('picking twice removes a state; nothing is pending after the last target', () => {
+		let p = togglePick(result, 0, newPrediction(), 5);
+		p = togglePick(result, 0, p, 6);
+		p = togglePick(result, 0, p, 5);
+		expect(predictionView(result, 0, p).picked).toEqual([6]);
+		// Stepping past the target drops its picks.
+		expect(predictionView(result, 4, p).picked).toEqual([]);
+		const last = result.steps.length - 1;
+		expect(predictionView(result, last, p)).toMatchObject({
+			phase: 'done',
+			pending: null,
+			canPick: false
+		});
+		expect(togglePick(result, last, p, 1)).toBe(p);
+		expect(checkPicks(result, last, p)).toBeNull();
+	});
+
+	it('an empty prediction can be right (the ∅ target)', () => {
+		const a = automatonFromText('alphabet: 0,1\nstart: A\naccept: B\nA 1 A\nA 1 B\n');
+		const r = subsetConstruction(a, { includeEmpty: true });
+		const first = nextTarget(r, 0)!;
+		expect(targetSet(r, first)).toEqual([]);
+		const c = checkPicks(r, 0, newPrediction())!;
+		expect(c.prediction.verdict?.check.correct).toBe(true);
 	});
 
 	it('lists missing and extra states', () => {

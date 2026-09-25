@@ -36,18 +36,45 @@ export interface SubsetState {
 /** What the hash may hold: a link state, or the page's own state plus the step. */
 export type SubsetHash = LinkStates['subset'] & Partial<SubsetState> & { step?: number };
 
-/** The regular-expression and NFA-text fields a preset fills in. */
+type Source = Pick<SubsetState, 'from' | 're' | 'defs' | 'text'>;
+
+/** The default preset's regular expression and definitions. */
+export function defaultRe(): Pick<SubsetState, 're' | 'defs'> {
+	const v = DEFAULT_PRESET.value;
+	return v.from === 're' ? { re: v.re, defs: v.defs ?? '' } : { re: '', defs: '' };
+}
+
+/**
+ * The source fields a preset fills in. A regular-expression preset clears the
+ * NFA text (switching to "From an NFA" then starts from its Thompson NFA); an
+ * NFA preset keeps the regular expression of `keep`.
+ */
 export function presetFields(
-	v: SubsetPresetValue
-): Pick<SubsetState, 'from' | 're' | 'defs' | 'text'> {
+	v: SubsetPresetValue,
+	keep: Pick<SubsetState, 're' | 'defs'> = defaultRe()
+): Source {
 	return v.from === 're'
 		? { from: 're', re: v.re, defs: v.defs ?? '', text: '' }
-		: { from: 'nfa', re: '', defs: '', text: v.text };
+		: { from: 'nfa', re: keep.re, defs: keep.defs, text: v.text };
+}
+
+/**
+ * The source after switching to `from`. "From an NFA" with no text starts
+ * from `nfaText` (the NFA shown); "From a regular expression" with none
+ * starts from the default preset's.
+ */
+export function switchSource(s: Source, from: 're' | 'nfa', nfaText: string | null): Source {
+	if (from === s.from) return s;
+	if (from === 'nfa')
+		return { ...s, from, text: s.text.trim() === '' && nfaText !== null ? nfaText : s.text };
+	if (s.re.trim() !== '') return { ...s, from };
+	const d = defaultRe();
+	return { ...s, from, re: d.re, defs: s.defs.trim() === '' ? d.defs : s.defs };
 }
 
 export function defaultState(): SubsetState {
 	return {
-		...presetFields(DEFAULT_PRESET.value),
+		...presetFields(DEFAULT_PRESET.value, defaultRe()),
 		naming: 'discovery',
 		showEmpty: false,
 		tab: 'closure',

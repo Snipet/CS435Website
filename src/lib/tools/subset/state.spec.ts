@@ -2,8 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { decode, encode } from '$lib/url-state';
 import type { LinkStates } from '$lib/tools/links';
 import { MAX_RUN_INPUT } from './logic';
-import { DEFAULT_PRESET } from './presets';
-import { defaultState, isSubsetHash, stateFromHash, stepFromHash, type SubsetHash } from './state';
+import { buildNfa } from './logic';
+import { DEFAULT_PRESET, PRESETS } from './presets';
+import {
+	defaultState,
+	isSubsetHash,
+	presetFields,
+	stateFromHash,
+	stepFromHash,
+	switchSource,
+	type SubsetHash
+} from './state';
 
 describe('defaultState', () => {
 	it('loads the default preset on the regular-expression source', () => {
@@ -100,5 +109,43 @@ describe('stateFromHash', () => {
 		expect(stepFromHash({ from: 're', re: 'a', step: 3 })).toBe(3);
 		expect(stepFromHash({ from: 're', re: 'a' })).toBeNull();
 		expect(stepFromHash({ from: 're', re: 'a', step: -1 })).toBeNull();
+	});
+});
+
+describe('presetFields and switchSource', () => {
+	const nfaPreset = PRESETS.find((p) => p.value.from === 'nfa')!;
+	const rePreset = PRESETS.find((p) => p.value.from === 're' && p.id !== DEFAULT_PRESET.id)!;
+
+	it('an NFA preset keeps the regular expression', () => {
+		const keep = { re: 'a | b*', defs: 'd = 0' };
+		const f = presetFields(nfaPreset.value, keep);
+		expect(f).toMatchObject({ from: 'nfa', re: 'a | b*', defs: 'd = 0' });
+		// Switching back finds a regular expression that builds.
+		const back = switchSource(f, 're', null);
+		expect(back).toMatchObject({ from: 're', re: 'a | b*' });
+		expect(buildNfa(back).nfa).not.toBeNull();
+	});
+
+	it('a regular-expression preset clears the NFA text, which then starts from the NFA shown', () => {
+		const f = presetFields(rePreset.value, { re: 'x', defs: '' });
+		expect(f.text).toBe('');
+		const nfa = switchSource(f, 'nfa', 'start: A\nA a B\n');
+		expect(nfa).toMatchObject({ from: 'nfa', text: 'start: A\nA a B\n', re: f.re });
+		// Text already there is kept.
+		expect(switchSource({ ...f, text: 'start: Q\n' }, 'nfa', 'start: A\n').text).toBe('start: Q\n');
+	});
+
+	it('switching to an empty regular expression starts from the default preset', () => {
+		const s = switchSource({ from: 'nfa', re: '', defs: '', text: 'start: A\n' }, 're', null);
+		expect(s).toMatchObject({ from: 're', re: '(1 | 0)*1', defs: '', text: 'start: A\n' });
+		expect(buildNfa(s).nfa).not.toBeNull();
+		// Definitions typed earlier stay.
+		const d = switchSource({ from: 'nfa', re: ' ', defs: 'd = 0', text: '' }, 're', null);
+		expect(d).toMatchObject({ re: '(1 | 0)*1', defs: 'd = 0' });
+	});
+
+	it('switching to the current source changes nothing', () => {
+		const f = presetFields(DEFAULT_PRESET.value);
+		expect(switchSource(f, 're', 'start: A\n')).toBe(f);
 	});
 });
