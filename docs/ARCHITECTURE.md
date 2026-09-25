@@ -553,13 +553,18 @@ interface ScanResult {
 	tokens: ScanToken[];
 	steps: MatchMatrix[];
 	stuck: number | null;
+	cutoff?: number; // set only when opts.maxReads stopped the scan: offset of the next, unscanned token
 }
 // Σ in a rule means any symbol of opts.alphabet; all three default to scannerAlphabet(rules).
 function scannerAlphabet(rules: TokenRule[], extra?: CharSet): CharSet; // symbols the rules use ∪ extra
 function scan(
 	rules: TokenRule[],
 	input: string,
-	opts?: { errorRule?: boolean; alphabet?: CharSet }
+	opts?: {
+		errorRule?: boolean;
+		alphabet?: CharSet;
+		maxReads?: number; /* total of the steps' maxLen */
+	}
 ): ScanResult;
 function scannerNfa(
 	rules: TokenRule[],

@@ -26,6 +26,11 @@ export interface HighlightRange {
 	tone: Tone;
 	/** Short caption drawn under the range, e.g. a token name. */
 	label?: string;
+	/**
+	 * Quiet text with the tone only as an underline (no fill), e.g. for input
+	 * that is already consumed.
+	 */
+	muted?: boolean;
 }
 
 /** A token as shown by `TokenPairs`; `ScanToken` from the scanner engine fits. */
