@@ -76,7 +76,9 @@ export function back(t: number, mode: Granularity): number {
 
 /**
  * Runs up to `budget` instructions from `t`: to HALT or an error, to an IN
- * that needs a value, or until the budget is spent (`budgetSpent`).
+ * that needs a value, or until the budget is spent. `budgetSpent` is true
+ * only when the budget ran out and the run can go on (not at HALT, an error,
+ * an IN that waits, or the MAX_TRACE limit).
  */
 export function run(
 	trace: Trace,
@@ -84,15 +86,26 @@ export function run(
 	mode: Granularity,
 	budget = RUN_BUDGET
 ): { t: number; budgetSpent: boolean } {
-	const cap = 3 * (Math.floor(t / 3) + budget);
-	trace.runTo(Math.floor(t / 3) + budget);
+	const base = Math.floor(t / 3);
+	const cap = 3 * (base + budget);
+	// One call past the budget, so an IN that waits right after it is known.
+	trace.runTo(base + budget + 1);
 	const end = trace.end;
-	let reach: number;
-	if (end?.kind === 'stopped') reach = lastPosition(trace)!;
-	else if (end?.kind === 'waiting') reach = waitPosition(trace, mode)!;
-	else reach = 3 * trace.count;
-	const next = Math.max(t, Math.min(cap, reach));
-	return { t: next, budgetSpent: next === cap && end?.kind !== 'stopped' };
+	let next: number;
+	if (end?.kind === 'waiting' && trace.count <= base + budget) {
+		// Fetch and decode of the waiting IN execute nothing, so the budget allows them.
+		next = waitPosition(trace, mode)!;
+	} else {
+		const reach = end?.kind === 'stopped' ? lastPosition(trace)! : 3 * trace.count;
+		next = Math.min(cap, reach);
+	}
+	next = Math.max(t, next);
+	return { t: next, budgetSpent: next === cap && forward(trace, next, mode) !== next };
+}
+
+/** Whether `t` is where the run stops after MAX_TRACE calls without HALT. */
+export function atRunLimit(trace: Trace, t: number): boolean {
+	return trace.end?.kind === 'limit' && t === lastPosition(trace);
 }
 
 /** Moves `t` onto an instruction boundary for instruction stepping. */

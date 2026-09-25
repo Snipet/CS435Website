@@ -2,8 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { PC_REG } from './machine';
 import { parseTM } from './parse';
 import { FACTORIAL_PROGRAM } from './presets';
-import { MAX_CONSOLE, RUN_BUDGET, Trace } from './trace';
+import { MAX_CONSOLE, MAX_TRACE, RUN_BUDGET, Trace } from './trace';
 import {
+	atRunLimit,
 	back,
 	captionString,
 	clampPosition,
@@ -129,6 +130,35 @@ describe('positions', () => {
 		expect(r).toEqual({ t: 3000, budgetSpent: true });
 		expect(run(tr, r.t, 'instruction', 1000).t).toBe(6000);
 		expect(RUN_BUDGET).toBe(100_000);
+	});
+
+	it('does not call a run that stops at an IN right after the budget a spent budget', () => {
+		const text = '0: LDC 1,1,0\n1: IN 0,0,0\n2: OUT 0,0,0\n3: HALT';
+		expect(run(trace(text), 0, 'instruction', 1)).toEqual({ t: 3, budgetSpent: false });
+		// Fetch and decode of the waiting IN execute nothing: phase steps reach its decode.
+		expect(run(trace(text), 0, 'phase', 1)).toEqual({ t: 5, budgetSpent: false });
+		// With a value the budget is spent before the IN runs.
+		expect(run(trace(text, [7]), 0, 'instruction', 1)).toEqual({ t: 3, budgetSpent: true });
+	});
+
+	it('spends the budget one call before HALT and reaches HALT on the next run', () => {
+		const tr = trace('0: LDC 1,1,0\n1: HALT');
+		expect(run(tr, 0, 'instruction', 1)).toEqual({ t: 3, budgetSpent: true });
+		expect(run(tr, 3, 'instruction', 1)).toEqual({ t: 6, budgetSpent: false });
+	});
+
+	it('stops at the MAX_TRACE limit without calling it a spent budget', () => {
+		const tr = trace('0: LDA 7,0(0)');
+		const from = 3 * (MAX_TRACE - RUN_BUDGET);
+		expect(atRunLimit(tr, from)).toBe(false);
+		const r = run(tr, from, 'instruction');
+		expect(r).toEqual({ t: 3 * MAX_TRACE, budgetSpent: false });
+		expect(tr.end?.kind).toBe('limit');
+		expect(atRunLimit(tr, r.t)).toBe(true);
+		expect(atRunLimit(tr, r.t - 3)).toBe(false);
+		expect(forward(tr, r.t, 'instruction')).toBe(r.t);
+		expect(forward(tr, r.t, 'phase')).toBe(r.t);
+		expect(run(tr, r.t, 'phase')).toEqual({ t: 3 * MAX_TRACE, budgetSpent: false });
 	});
 
 	it('clamps positions to the run', () => {

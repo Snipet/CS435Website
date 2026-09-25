@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { revealInBox } from './reveal';
+	import { scrollRegion } from './scroll-region';
 
 	interface Props {
 		lines: readonly string[];
@@ -59,6 +60,7 @@
 	bind:this={box}
 	role="group"
 	aria-label={ariaLabel}
+	{@attach scrollRegion}
 >
 	<ol>
 		{#each lines as line, i (i)}

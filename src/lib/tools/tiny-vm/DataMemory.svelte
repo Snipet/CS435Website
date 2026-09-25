@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { dMemRows, rangeText } from './listing';
 	import { revealInBox } from './reveal';
+	import { scrollRegion } from './scroll-region';
 
 	interface Props {
 		dMem: Int32Array;
@@ -23,7 +24,7 @@
 	});
 </script>
 
-<div class="dmem" bind:this={box}>
+<div class="dmem" bind:this={box} role="group" aria-label="Data memory" {@attach scrollRegion}>
 	<table>
 		<caption class="visually-hidden">
 			Data memory: cell 0, the top cell, every non-zero cell, and the cell the current instruction

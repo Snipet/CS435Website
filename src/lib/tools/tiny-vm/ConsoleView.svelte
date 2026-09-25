@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { scrollRegion } from './scroll-region';
 	import type { ConsoleLine } from './trace';
 
 	interface Props {
@@ -24,7 +25,14 @@
 	});
 </script>
 
-<div class="console" bind:this={box} role="log" aria-live="off" aria-label="Console output">
+<div
+	class="console"
+	bind:this={box}
+	role="log"
+	aria-live="off"
+	aria-label="Console output"
+	{@attach scrollRegion}
+>
 	{#if hidden}
 		<p class="note">{hidden} earlier line{hidden === 1 ? '' : 's'} not shown</p>
 	{/if}

@@ -33,6 +33,7 @@
 	import { DADDR_SIZE, IADDR_SIZE, PC_REG } from '$lib/tools/tiny-vm/machine';
 	import { highlightTM, parseTM, parseTMCached, programKey } from '$lib/tools/tiny-vm/parse';
 	import { presetById, presets, type TinyVmPreset } from '$lib/tools/tiny-vm/presets';
+	import { SCROLL_REGION_ATTR } from '$lib/tools/tiny-vm/scroll-region';
 	import {
 		defaultState,
 		isTinyVmHash,
@@ -45,6 +46,7 @@
 	import {
 		PHASES,
 		STATUS_TEXT,
+		atRunLimit,
 		back,
 		currentAddress,
 		describe,
@@ -81,7 +83,8 @@
 	const canStep = $derived(!broken && forward(trace, t, vm.mode) !== t);
 	/** Step and Run stay usable at an IN that needs a value: they move focus to its prompt. */
 	const canAct = $derived(canStep || (!broken && !!view.waiting));
-	const atLimit = $derived(trace.end?.kind === 'limit' && t === 3 * trace.count);
+	// `trace.end` is not reactive: `t` (an argument) makes this update after every Run.
+	const atLimit = $derived(atRunLimit(trace, t));
 	const current = $derived(currentAddress(view));
 	const pc = $derived(view.machine.reg[PC_REG]);
 	const consoleNow = $derived(trace.consoleAt(view.executed));
@@ -245,6 +248,7 @@
 	}
 
 	function setMode(mode: Granularity) {
+		settle();
 		if (mode === 'instruction') vm.step = snapToInstruction(trace, t);
 		vm.mode = mode;
 	}
@@ -255,11 +259,15 @@
 		vm.step = 0;
 	}
 
-	/** ←/→ step, Home resets, End runs, Space plays, while focus is in the machine. */
+	/**
+	 * ←/→ step, Home resets, End runs, Space plays, while focus is in the machine
+	 * (except in a box that scrolls: those keys scroll it).
+	 */
 	const shortcuts: Attachment<HTMLElement> = (node) => {
 		const onkeydown = (event: KeyboardEvent) => {
 			if (event.defaultPrevented || event.isComposing) return;
 			const el = event.target instanceof HTMLElement ? event.target : node;
+			if (el.hasAttribute(SCROLL_REGION_ATTR)) return;
 			const command = keyToCommand(
 				event.key,
 				{
@@ -378,7 +386,7 @@
 					error={queueError ?? undefined}
 					mono
 					placeholder="e.g. 3"
-					oninput={() => (resumeRun = false)}
+					oninput={settle}
 				/>
 				<InputQueueView values={queue.values} read={view.machine.inPos} />
 			</div>
@@ -483,7 +491,7 @@
 					<Callout tone="warn">
 						The run stops after {MAX_TRACE.toLocaleString('en-US')} instructions without reaching HALT.
 					</Callout>
-				{:else if budgetSpent}
+				{:else if budgetSpent && canStep}
 					<Callout tone="warn">
 						Run executed {RUN_BUDGET.toLocaleString('en-US')} instructions without reaching HALT. Run
 						again to continue.

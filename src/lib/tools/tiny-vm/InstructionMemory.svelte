@@ -3,6 +3,7 @@
 	import { IADDR_SIZE, formatInstruction, opClass, type Instruction } from './machine';
 	import type { Program } from './parse';
 	import { revealInBox } from './reveal';
+	import { scrollRegion } from './scroll-region';
 
 	interface Props {
 		program: Program;
@@ -41,7 +42,13 @@
 	const phaseWord = $derived(phase === 1 ? 'fetched' : phase === 2 ? 'decoded' : 'executed');
 </script>
 
-<div class="imem" bind:this={box}>
+<div
+	class="imem"
+	bind:this={box}
+	role="group"
+	aria-label="Instruction memory"
+	{@attach scrollRegion}
+>
 	<table>
 		<caption class="visually-hidden">
 			Instruction memory. The arrow marks the PC (reg[7]); the highlighted row is the instruction of

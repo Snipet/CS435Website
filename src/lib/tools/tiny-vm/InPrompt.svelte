@@ -38,13 +38,14 @@
 	</p>
 	<div class="row">
 		<label class="label" for="{uid}-value">{IN_PROMPT.trim()}</label>
+		<!-- No inputmode="numeric": the iOS number pad has no minus key, and IN takes negative values. -->
 		<input
 			bind:this={element}
 			bind:value={text}
 			id="{uid}-value"
 			class="value"
 			type="text"
-			inputmode="numeric"
+			enterkeyhint="done"
 			autocomplete="off"
 			spellcheck="false"
 			aria-invalid={error ? 'true' : undefined}
