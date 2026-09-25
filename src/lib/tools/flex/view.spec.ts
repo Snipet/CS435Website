@@ -15,6 +15,7 @@ import {
 	formatReturn,
 	inputWindow,
 	outputRuns,
+	runMessages,
 	stepAt,
 	stepHighlights,
 	visible
@@ -209,6 +210,39 @@ describe('console runs', () => {
 		expect(runs[1].chunks.map((c) => c.text).join('')).toBe(
 			'error: comment is never closed\n1 comment(s) removed\n'
 		);
+	});
+});
+
+describe('run messages', () => {
+	it('lists warnings without a span (%option nodefault)', () => {
+		const spec = '%option nodefault\n%%\na  { ECHO; }\n%%\n';
+		const run = runScanner(compileSpec(spec), 'ab');
+		expect(run.exitStatus).toBe(2);
+		expect(runMessages(run, spec)).toEqual([
+			{
+				severity: 'warning',
+				message: 'no rule matches "b" at line 1 and %option nodefault forbids the default rule',
+				span: null,
+				line: null
+			}
+		]);
+	});
+
+	it('gives spec lines for spanned messages and leaves out the error that stopped the run', () => {
+		const spec = '%%\n%%\nint main() {\n  int z = 0;\n  printf("a\\n", 1);\n  return 1 / z;\n}\n';
+		const run = runScanner(compileSpec(spec), '');
+		expect(run.stopped).toBe('runtime error: division by zero');
+		expect(run.diagnostics).toHaveLength(2);
+		const messages = runMessages(run, spec);
+		expect(messages.map((m) => [m.severity, m.message, m.line])).toEqual([
+			['warning', 'more arguments than the format string uses', 5]
+		]);
+		expect(spec.slice(messages[0].span!.start, messages[0].span!.end)).toBe('printf("a\\n", 1)');
+	});
+
+	it('is empty for a clean run', () => {
+		const { run, compiled } = example3();
+		expect(runMessages(run, compiled.spec.text)).toEqual([]);
 	});
 });
 

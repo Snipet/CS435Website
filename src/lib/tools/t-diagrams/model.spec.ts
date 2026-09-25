@@ -38,6 +38,14 @@ describe('formatT / sameT / normalizeT', () => {
 		expect(normalizeT(T(" L'", 'M_{X}', 'M'))).toEqual(T('L′', 'M_X', 'M'));
 	});
 
+	it('treats every spelling of a double prime as the same language', () => {
+		expect(formatT(T("L''", 'M', 'L′′'))).toBe('T(L″ → M / L″)');
+		expect(sameT(T("L''", 'M', 'M'), T('L′′', 'M', 'M'))).toBe(true);
+		expect(sameT(T("L''", 'M', 'M'), T('L″', 'M', 'M'))).toBe(true);
+		expect(sameT(T("L'''", 'M', 'M'), T('L‴', 'M', 'M'))).toBe(true);
+		expect(sameT(T("L''", 'M', 'M'), T("L'", 'M', 'M'))).toBe(false);
+	});
+
 	it('lists blank fields', () => {
 		expect(blankFields(T('', 'M', ' '))).toEqual(['source', 'host']);
 		expect(blankFields(T('S', 'T', 'H'))).toEqual([]);
@@ -53,6 +61,7 @@ describe('parseRunnable', () => {
 		expect(parseRunnable("M, M', ,M")).toEqual(['M', 'M′']);
 		expect(parseRunnable('')).toEqual([]);
 		expect(parseRunnable('x86; ARMv9')).toEqual(['x86', 'ARMv9']);
+		expect(parseRunnable("M'', M′′, M″")).toEqual(['M″']);
 	});
 });
 
@@ -72,6 +81,9 @@ describe('subsetChain', () => {
 	it('follows declarations transitively', () => {
 		expect(subsetChain(facts, 'L′', 'L')).toEqual(['L′', 'L']);
 		expect(subsetChain(facts, 'L″', 'L')).toEqual(['L″', 'L′', 'L']);
+		// Declared as L″ ⊆ L′; asked with L'' or L′′.
+		expect(subsetChain(facts, "L''", 'L')).toEqual(['L″', 'L′', 'L']);
+		expect(subsetChain(facts, 'L′′', "L'")).toEqual(['L″', 'L′']);
 	});
 
 	it('does not go the other way', () => {
@@ -214,6 +226,7 @@ describe('richText', () => {
 			{ lang: 'M_NATIVE' },
 			'.'
 		]);
+		expect(richText('M″_x and M′_y')).toEqual([{ lang: 'M″_x' }, ' and ', { lang: 'M′_y' }]);
 		expect(richText('plain')).toEqual(['plain']);
 		expect(richText('')).toEqual([]);
 	});

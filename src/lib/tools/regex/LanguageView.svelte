@@ -14,9 +14,11 @@
 		maxLength: number;
 		/** States of the minimal DFA. */
 		states: number;
+		/** The listing is for an earlier R or length (a newer one is being computed). */
+		stale?: boolean;
 	}
 
-	let { listing, maxLength = $bindable(), states }: Props = $props();
+	let { listing, maxLength = $bindable(), states, stale = false }: Props = $props();
 
 	const uid = $props.id();
 	const limited = $derived(listing.strings.length >= LIST_LIMIT);
@@ -29,8 +31,8 @@
 	const symbolsText = (n: number) => `${n} ${n === 1 ? 'symbol' : 'symbols'}`;
 </script>
 
-<div class="language">
-	<div class="summary">
+<div class="language" aria-busy={stale}>
+	<div class={['summary', { 'stale-data': stale }]}>
 		{#if listing.empty}
 			<Badge tone="reject" mono>L(R) = &#123; &#125;</Badge>
 		{:else if listing.finite}
@@ -60,7 +62,7 @@
 		</span>
 	</div>
 
-	<div class="set">
+	<div class={['set', { 'stale-data': stale }]}>
 		{#if beyond}
 			<p class="beyond">
 				L(R) has no strings of up to {symbolsText(maxLength)}. Its shortest string has
@@ -77,7 +79,7 @@
 		)}{limited ? `; the first ${LIST_LIMIT} are listed` : ''}.
 	</p>
 
-	<div class="counts-wrap">
+	<div class={['counts-wrap', { 'stale-data': stale }]}>
 		<table class="counts">
 			<caption>Number of strings of each length</caption>
 			<thead>

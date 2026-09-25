@@ -154,6 +154,9 @@ export type LanguageBuild =
 			limit: number;
 	  };
 
+/** Whether a language was built, without its automata (e.g. as sent by a worker). */
+export type LanguageStatus = { ok: true } | Extract<LanguageBuild, { ok: false }>;
+
 /** Thompson NFA, subset DFA and minimal DFA for `r`, unless one would exceed its limit. */
 export function buildLanguage(
 	r: Regex,

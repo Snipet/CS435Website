@@ -8,3 +8,4 @@ export * from './minimize';
 export * from './simulate';
 export * from './language';
 export * from './scanner';
+export * from './serialize';

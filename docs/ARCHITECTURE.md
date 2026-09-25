@@ -608,6 +608,23 @@ function driveScanner(
 	runs: { start: number; steps: DriverStep[]; token: { state: StateId; end: number } | null }[];
 	stuck: number | null;
 };
+
+// serialize.ts — plain-data forms for postMessage (structured clone drops class
+// prototypes: a cloned CharSet is a bare { ranges }). Each …FromPlain rebuilds engine objects.
+type PlainCharSet = [lo: number, hi: number][];
+function charSetToPlain(set): PlainCharSet;
+function charSetFromPlain(p: PlainCharSet | { ranges }): CharSet; // also revives a cloned CharSet
+class CharSetInterner {
+	constructor(seed?: Iterable<CharSet>);
+	add(set);
+	get(plain);
+} // one object per distinct set
+function automatonToPlain(a): PlainAutomaton; // labels and alphabet as ranges
+function automatonFromPlain(p, intern?): Automaton;
+function closureEventsToPlain(events): number[]; // flat (kind, state, via) triples
+function closureEventsFromPlain(p): ClosureEvent[];
+function subsetResultToPlain(r): PlainSubsetResult; // step symbols as class indices, events flat
+function subsetResultFromPlain(p): SubsetResult; // step symbols and DFA labels are the `classes` objects again
 ```
 
 ## 5. UI contracts
@@ -708,7 +725,66 @@ diagnostics, and an optional `highlight` range), `StepControls` + `Stepper` clas
 `PresetMenu` (grouped presets with citations), `CitationTag`, `CharStream`
 (input characters with visible whitespace and highlight ranges), `StringSetView`,
 `TokenPairs` (token output in either lecture format), `CopyLinkButton`,
-`ToolPage`, `Disclosure` (for slide questions' answers).
+`ToolPage`, `Disclosure` (for slide questions' answers), `Updating` (a
+delayed "Updating…" mark for results being recomputed) and the `WorkerTask`
+class (§5.4).
+
+### 5.4 Heavy work off the main thread
+
+A computation that can take long enough to be felt while typing (building,
+minimizing and comparing automata; enumerating languages; derivations; the
+subset construction and its layouts) runs in a module Web Worker through
+`WorkerTask` (`$lib/components/ui/worker-task.svelte.ts`). Parsing and
+diagnostics stay on the page so they follow every keystroke.
+
+```ts
+// x.worker.ts: the worker's side
+import { serveTask } from '$lib/components/ui/worker-protocol';
+serveTask(computeViews); // (input) => output, pure; plain data in and out
+
+// worker.ts (kept apart from the computation so the worker bundle does not include itself)
+export const createWorker = () =>
+	new Worker(new URL('./x.worker.ts', import.meta.url), { type: 'module' });
+
+// the page
+const task = new WorkerTask<Input, Output>({
+	compute: computeViews, // also the fallback on the main thread
+	worker: createWorker, // called on the first run, from an effect: never while prerendering
+	initial: untrack(() => request), // computed at once, so the prerendered page shows it
+	timeLimit, // default 5000 ms
+	key, // request identity (default JSON.stringify)
+	onresult // (output, input) => void, untracked
+});
+$effect(() => task.run(request));
+```
+
+- `task.output` / `task.input` are the newest finished result and the input it
+  was computed for; `task.status` is `'idle' | 'working' | 'timed-out' |
+'error'` (`task.error` holds the message).
+- The latest request wins: one request runs at a time and at most one waits
+  (a newer one replaces it); answers to older requests are dropped by id. A
+  running request that a newer one has replaced is abandoned once it has run
+  `restartAfter` ms (default 300): the worker restarts with the waiting
+  request, so the newest request never waits long behind older work.
+- A request still running after `timeLimit` ms is abandoned (the worker is
+  terminated and a new one starts with the next request); the page shows a
+  `Callout` saying the input takes too long. The clock starts once the worker
+  has loaded (it posts `READY`).
+- Without a worker (prerendering, tests, a worker that fails to load) the
+  computation runs synchronously on the main thread.
+- Inputs and outputs are copied with the structured clone algorithm: send
+  plain data, and use `theory/automata/serialize.ts` (or a tool's own plain
+  types) for engine objects, reviving them on the page so rendering code keeps
+  working on CharSets.
+- Never show a result as current when it is for other inputs: compare
+  `task.input` with the current request, mark stale views with the global
+  `stale-data` class (dimmed after a short pause), `aria-busy` and
+  `<Updating />`, and show a result that belongs to something else (another
+  test string, another tree node) only if it is drawn with what it is for.
+  A note shown instead of a result ("the DFA has more than 300 states") that
+  came from an earlier result is marked stale the same way. A placeholder that
+  is the only content while a result is computed ("Comparing…") is an
+  `<Updating standalone />`, which screen readers read as a status.
 
 ## 6. Quality bar
 

@@ -3,9 +3,24 @@
 	compose them: a legal pair snaps (stem against arm) while dragging. A click,
 	Enter or Space chooses a diagram for the Compose row instead (first the one
 	to compile, then the translator).
+	The dragged diagram is drawn in a fixed-position overlay, so the canvas's
+	scroll box (long names on a phone) never clips it. The pointer is mapped
+	onto the canvas again whenever the page or the box scrolls, and dragging
+	near the box's left or right edge scrolls it.
 -->
 <script lang="ts">
-	import { flowLayout, pickDropTarget, TRAY_METRICS, tGeometry, type Point } from './geometry';
+	import {
+		canvasFrame,
+		clientToCanvas,
+		dragAt,
+		edgeScroll,
+		flowLayout,
+		overlayBox,
+		TRAY_METRICS,
+		tGeometry,
+		type CanvasFrame,
+		type Point
+	} from './geometry';
 	import {
 		compose,
 		describeT,
@@ -61,7 +76,12 @@
 		id: string;
 		index: number;
 		pointerId: number;
+		/** The pointer at pointerdown, in canvas units. */
 		start: Point;
+		/** The pointer's last position, in client px. */
+		client: Point;
+		/** Where the canvas was on screen at the last update. */
+		frame: CanvasFrame;
 		pos: Point;
 		moved: boolean;
 		target: { id: string; snap: Point } | null;
@@ -70,22 +90,22 @@
 
 	let drag = $state<Drag | null>(null);
 	let suppressClick = false;
+	let wrap: HTMLDivElement | undefined = $state();
 
-	function toLocal(e: PointerEvent): Point {
-		const rect = svg!.getBoundingClientRect();
-		const scale = rect.width ? canvasWidth / rect.width : 1;
-		return { x: (e.clientX - rect.left) * scale, y: (e.clientY - rect.top) * scale };
-	}
+	const frameNow = (): CanvasFrame => canvasFrame(svg!.getBoundingClientRect(), canvasWidth);
 
 	function down(e: PointerEvent, index: number) {
 		if (e.button !== 0 || !svg) return;
 		suppressClick = false;
-		const p = toLocal(e);
+		const frame = frameNow();
+		const client = { x: e.clientX, y: e.clientY };
 		drag = {
 			id: items[index].id,
 			index,
 			pointerId: e.pointerId,
-			start: p,
+			start: clientToCanvas(frame, client),
+			client,
+			frame,
 			pos: homes[index],
 			moved: false,
 			target: null,
@@ -94,28 +114,45 @@
 		(e.currentTarget as Element).setPointerCapture?.(e.pointerId);
 	}
 
-	function move(e: PointerEvent) {
-		if (!drag || e.pointerId !== drag.pointerId) return;
-		const p = toLocal(e);
-		const dx = p.x - drag.start.x;
-		const dy = p.y - drag.start.y;
-		if (!drag.moved && Math.hypot(dx, dy) < 5) return;
-		e.preventDefault();
-		const home = homes[drag.index];
-		const pos = { x: home.x + dx, y: home.y + dy };
-		const geom = geoms[drag.index];
+	/**
+	 * Maps the pointer at `client` onto the canvas as it is now (it may have
+	 * scrolled) and updates the drag. False while the press has not moved far
+	 * enough to be a drag.
+	 */
+	function track(client: Point): boolean {
+		if (!drag || !svg) return false;
+		const frame = frameNow();
+		const index = drag.index;
+		const geom = geoms[index];
 		const candidates = items
 			.map((it, i) => ({ id: it.id, pos: homes[i], geom: geoms[i] }))
 			.filter((c) => c.id !== drag!.id);
-		const target = pickDropTarget({ pos, geom }, candidates, p, geom.unit * 1.8);
-		const other = target ? items.find((it) => it.id === target.id) : undefined;
+		const at = dragAt(
+			{ home: homes[index], geom, start: drag.start },
+			frame,
+			client,
+			candidates,
+			geom.unit * 1.8
+		);
+		if (!drag.moved && !at.far) return false;
+		const other = at.target ? items.find((it) => it.id === at.target!.id) : undefined;
 		drag = {
 			...drag,
+			client,
+			frame,
 			moved: true,
-			pos,
-			target,
-			composition: other ? compose(items[drag.index].t, other.t, facts) : null
+			pos: at.pos,
+			target: at.target,
+			composition: other ? compose(items[index].t, other.t, facts) : null
 		};
+		return true;
+	}
+
+	function move(e: PointerEvent) {
+		if (!drag || e.pointerId !== drag.pointerId) return;
+		if (!track({ x: e.clientX, y: e.clientY })) return;
+		e.preventDefault();
+		autoScroll();
 	}
 
 	function up(e: PointerEvent) {
@@ -130,6 +167,37 @@
 	function cancel(e: PointerEvent) {
 		if (drag && e.pointerId === drag.pointerId) drag = null;
 	}
+
+	/** Scrolls a canvas that is wider than the tray while the pointer is held near its left or right edge. */
+	let scrollFrame = 0;
+	function autoScroll() {
+		if (scrollFrame || !wide) return;
+		const step = () => {
+			scrollFrame = 0;
+			if (!drag?.moved || !wrap) return;
+			const before = wrap.scrollLeft;
+			wrap.scrollLeft += edgeScroll(drag.client.x, wrap.getBoundingClientRect());
+			// The scroll listener below re-tracks the pointer.
+			if (wrap.scrollLeft !== before) scrollFrame = requestAnimationFrame(step);
+		};
+		scrollFrame = requestAnimationFrame(step);
+	}
+
+	// While a diagram is held, any scroll (the canvas's box or the page) moves the
+	// canvas under the pointer: map the pointer again so the drop target stays right.
+	const holding = $derived(drag !== null);
+	$effect(() => {
+		if (!holding) return;
+		const onScroll = () => {
+			if (drag?.moved) track(drag.client);
+		};
+		window.addEventListener('scroll', onScroll, { capture: true, passive: true });
+		return () => {
+			window.removeEventListener('scroll', onScroll, { capture: true });
+			cancelAnimationFrame(scrollFrame);
+			scrollFrame = 0;
+		};
+	});
 
 	function click(id: string) {
 		if (suppressClick) {
@@ -153,6 +221,19 @@
 	const dragTone = $derived<MarkTone | null>(
 		drag?.target ? (drag.composition?.legal ? 'accept' : 'reject') : null
 	);
+
+	/** Room around the overlaid diagram for its outline and shadow, in canvas units. */
+	const GHOST_MARGIN = 6;
+	/** The dragged diagram's overlay: what to draw and where it is on screen. */
+	const ghost = $derived.by(() => {
+		if (!drag?.moved || !dragPos || !items[drag.index]) return null;
+		const geom = geoms[drag.index];
+		return {
+			item: items[drag.index],
+			geom,
+			box: overlayBox(drag.frame, dragPos, geom, GHOST_MARGIN)
+		};
+	});
 
 	function toneOf(item: Item): ShapeTone {
 		if (item.id === program) return 'program';
@@ -200,7 +281,7 @@
 
 <div class="tray" bind:clientWidth={width}>
 	{#if items.length}
-		<div class={['canvas-wrap', { wide }]}>
+		<div class={['canvas-wrap', { wide }]} bind:this={wrap}>
 			<svg
 				bind:this={svg}
 				class={['canvas', { dragging: drag?.moved }]}
@@ -249,22 +330,29 @@
 						<TShape t={item.t} geom={g} tone={toneOf(item)} marks={marksOf(item)} />
 					</g>
 				{/each}
-				{#if drag?.moved && dragPos && items[drag.index]}
-					{@const item = items[drag.index]}
-					<g class="ghost" aria-hidden="true">
-						<TShape
-							t={item.t}
-							geom={geoms[drag.index]}
-							x={dragPos.x}
-							y={dragPos.y}
-							tone={toneOf(item)}
-							marks={dragTone ? { stem: dragTone } : {}}
-						/>
-					</g>
-				{/if}
 			</svg>
 		</div>
-	{:else}
+	{/if}
+	{#if ghost}
+		{@const m = GHOST_MARGIN}
+		<svg
+			class="ghost"
+			style:left="{ghost.box.left}px"
+			style:top="{ghost.box.top}px"
+			width={ghost.box.width}
+			height={ghost.box.height}
+			viewBox="{-m} {-m} {ghost.geom.width + 2 * m} {ghost.geom.height + 2 * m}"
+			aria-hidden="true"
+		>
+			<TShape
+				t={ghost.item.t}
+				geom={ghost.geom}
+				tone={toneOf(ghost.item)}
+				marks={dragTone ? { stem: dragTone } : {}}
+			/>
+		</svg>
+	{/if}
+	{#if !items.length}
 		<p class="empty">The toolbox is empty. Add a T-diagram to draw it here.</p>
 	{/if}
 	<p id="{uid}-how" class="visually-hidden">
@@ -280,7 +368,7 @@
 	.tray {
 		min-width: 0;
 	}
-	/* Only a canvas wider than the tray scrolls; otherwise a dragged diagram may leave its box. */
+	/* Only a canvas wider than the tray scrolls. */
 	.canvas-wrap.wide {
 		max-width: 100%;
 		overflow-x: auto;
@@ -322,7 +410,12 @@
 	.dragging .item {
 		cursor: grabbing;
 	}
+	/* Drawn over everything (but menus), so no scroll box or panel edge clips it. */
 	.ghost {
+		position: fixed;
+		z-index: 70;
+		display: block;
+		overflow: visible;
 		pointer-events: none;
 		filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--backdrop) 50%, transparent));
 	}

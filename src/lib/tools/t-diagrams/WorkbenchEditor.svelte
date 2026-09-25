@@ -6,6 +6,7 @@
 	import { tick } from 'svelte';
 	import { Button, Icon, IconButton, TextField } from '$lib/components/ui';
 	import LangInput from './LangInput.svelte';
+	import { normalizePrimes } from './labels';
 	import LangText from './LangText.svelte';
 	import type { SubsetDecl, TDiagram, TField, WorkbenchIssue } from './model';
 	import { MAX_RUNNABLE_TEXT, MAX_SUBSETS, MAX_TOOLBOX, type ToolboxItem } from './state';
@@ -79,28 +80,42 @@
 	}
 </script>
 
-{#snippet tFields(t: TDiagram, name: string, list: readonly WorkbenchIssue[], errId: string)}
+{#snippet tFields(
+	t: TDiagram,
+	name: string,
+	list: readonly WorkbenchIssue[],
+	errId: string,
+	removeLabel: string,
+	onremove: () => void
+)}
 	<div class="t-fields" role="group" aria-label={name}>
-		<span class="sym" aria-hidden="true">T(</span>
 		{#each FIELDS as field, k (field)}
-			<LangInput
-				bind:value={t[field]}
-				label="{name}: {FIELD_LABEL[field]}"
-				placeholder={PLACEHOLDER[field]}
-				invalid={badField(list, field)}
-				describedby={list.length ? errId : undefined}
-			/>
-			<span class="sym" aria-hidden="true">{k === 0 ? '→' : k === 1 ? '/' : ')'}</span>
+			<!-- A field keeps its punctuation when the row wraps. -->
+			<span class="part">
+				{#if k === 0}<span class="sym" aria-hidden="true">T(</span>{/if}
+				<LangInput
+					bind:value={t[field]}
+					label="{name}: {FIELD_LABEL[field]}"
+					placeholder={PLACEHOLDER[field]}
+					invalid={badField(list, field)}
+					describedby={list.length ? errId : undefined}
+				/>
+				<span class="sym" aria-hidden="true">{k === 0 ? '→' : k === 1 ? '/' : ')'}</span>
+			</span>
 		{/each}
+		<!-- In the fields' flow, not a column of its own, so the fields can take the whole row. -->
+		<span class="remove">
+			<IconButton icon="x" size="sm" label={removeLabel} onclick={onremove} />
+		</span>
 	</div>
 {/snippet}
 
 <div class="editor">
 	<p class="hint">
 		<span class="mono">T(S → T / H)</span> translates S to T and is written in H. Type
-		<kbd>'</kbd> for a prime (<LangText text="L′" />) and <kbd>_</kbd> for a subscript (<span
-			class="mono">M_OTHER</span
-		>
+		<kbd>'</kbd> for a prime (<span class="mono">L'</span> → <LangText text="L′" />,
+		<span class="mono">L''</span> → <LangText text="L″" />) and
+		<kbd>_</kbd> for a subscript (<span class="mono">M_OTHER</span>
 		→ <LangText text="M_OTHER" />).
 	</p>
 
@@ -111,13 +126,14 @@
 				{@const list = diagramIssues(i)}
 				<li class="row">
 					<span class="num" aria-hidden="true">{i + 1}</span>
-					{@render tFields(item, `Diagram ${i + 1}`, list, `${uid}-d${i}-err`)}
-					<IconButton
-						icon="x"
-						size="sm"
-						label="Remove diagram {i + 1}"
-						onclick={() => onremove(item.id)}
-					/>
+					{@render tFields(
+						item,
+						`Diagram ${i + 1}`,
+						list,
+						`${uid}-d${i}-err`,
+						`Remove diagram ${i + 1}`,
+						() => onremove(item.id)
+					)}
 					{#if list.length}
 						<p class="row-msg {list[0].severity}" id="{uid}-d{i}-err">{list[0].message}</p>
 					{/if}
@@ -147,28 +163,34 @@
 					{@const errId = `${uid}-s${i}-err`}
 					<li class="row">
 						<div class="subset-fields" role="group" aria-label="Subset {i + 1}">
-							<LangInput
-								bind:value={d.sub}
-								label="Subset {i + 1}: smaller language"
-								placeholder="L′"
-								invalid={blankSide(list, 'sub')}
-								describedby={list.length ? errId : undefined}
-							/>
-							<span class="sym" aria-hidden="true">⊆</span>
-							<LangInput
-								bind:value={d.sup}
-								label="Subset {i + 1}: larger language"
-								placeholder="L"
-								invalid={blankSide(list, 'sup')}
-								describedby={list.length ? errId : undefined}
-							/>
+							<span class="part">
+								<LangInput
+									bind:value={d.sub}
+									label="Subset {i + 1}: smaller language"
+									placeholder="L′"
+									invalid={blankSide(list, 'sub')}
+									describedby={list.length ? errId : undefined}
+								/>
+								<span class="sym" aria-hidden="true">⊆</span>
+							</span>
+							<span class="part">
+								<LangInput
+									bind:value={d.sup}
+									label="Subset {i + 1}: larger language"
+									placeholder="L"
+									invalid={blankSide(list, 'sup')}
+									describedby={list.length ? errId : undefined}
+								/>
+							</span>
 						</div>
-						<IconButton
-							icon="x"
-							size="sm"
-							label="Remove subset {i + 1}"
-							onclick={() => subsets.splice(i, 1)}
-						/>
+						<span class="remove">
+							<IconButton
+								icon="x"
+								size="sm"
+								label="Remove subset {i + 1}"
+								onclick={() => subsets.splice(i, 1)}
+							/>
+						</span>
 						{#if list.length}
 							<p class="row-msg {list[0].severity}" id={errId}>{list[0].message}</p>
 						{/if}
@@ -200,7 +222,7 @@
 			size="sm"
 			maxlength={MAX_RUNNABLE_TEXT}
 			placeholder="M, M′"
-			onchange={() => (runnable = runnable.replace(/['’]/g, '′'))}
+			onchange={() => (runnable = normalizePrimes(runnable))}
 		/>
 	</section>
 
@@ -211,8 +233,14 @@
 				<span class="num want" aria-hidden="true">
 					<Icon name="arrow-right" size={14} />
 				</span>
-				{@render tFields(goal, 'Goal', goalIssues, `${uid}-goal-err`)}
-				<IconButton icon="x" size="sm" label="Remove the goal" onclick={() => (goal = null)} />
+				{@render tFields(
+					goal,
+					'Goal',
+					goalIssues,
+					`${uid}-goal-err`,
+					'Remove the goal',
+					() => (goal = null)
+				)}
 				{#if goalIssues.length}
 					<p class="row-msg {goalIssues[0].severity}" id="{uid}-goal-err">
 						{goalIssues[0].message}
@@ -279,14 +307,24 @@
 		padding: 0;
 		list-style: none;
 	}
+	/*
+		A row: a diagram's number and fields, or a subset's fields, with the remove
+		button at the end of their line. The fields are never narrower than their
+		widest part (a name of MAX_LABEL characters with its punctuation) unless
+		the row itself is: when that part does not fit beside the number or the
+		button, the fields or the button go to the next line instead of the name
+		being cut off.
+	*/
 	.row {
-		display: grid;
-		grid-template-columns: 1.25rem minmax(0, 1fr) auto;
+		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-1) var(--space-2);
 		min-width: 0;
 	}
 	.num {
+		flex: none;
+		width: 1.25rem;
 		color: var(--text-3);
 		font-size: var(--text-xs);
 		font-weight: 600;
@@ -298,16 +336,33 @@
 		justify-content: flex-end;
 		color: var(--accept);
 	}
+	/* Long names wrap onto a second line (on a phone) instead of being cut off. */
 	.t-fields,
 	.subset-fields {
 		display: flex;
+		flex: 1 1 0;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 4px;
+		max-width: 100%;
+	}
+	.subset-fields {
+		max-width: min(16rem, 100%);
+	}
+	.part {
+		display: flex;
+		flex: 1 1 auto;
 		align-items: center;
 		gap: 4px;
 		min-width: 0;
 	}
-	.subset-fields {
-		grid-column: 1 / 3;
-		max-width: 16rem;
+	.remove {
+		display: flex;
+		flex: none;
+		margin-left: auto;
+	}
+	.t-fields > .remove {
+		padding-left: 4px;
 	}
 	.sym {
 		flex: none;
@@ -316,8 +371,9 @@
 		font-size: var(--text-sm);
 	}
 	.row-msg {
-		grid-column: 2 / -1;
+		flex: 1 0 100%;
 		margin: 0;
+		padding-left: calc(1.25rem + var(--space-2));
 		font-size: var(--text-xs);
 		line-height: 1.4;
 	}

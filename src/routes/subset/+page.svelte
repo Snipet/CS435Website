@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { AutomatonView, layoutAutomaton, nodePositions } from '$lib/components/graph';
+	import { untrack } from 'svelte';
+	import { AutomatonView } from '$lib/components/graph';
 	import type { StateTone } from '$lib/components/graph';
 	import {
 		Badge,
@@ -16,7 +17,9 @@
 		StepControls,
 		Tabs,
 		Toggle,
-		ToolPage
+		ToolPage,
+		Updating,
+		WorkerTask
 	} from '$lib/components/ui';
 	import {
 		formatAutomatonText,
@@ -41,27 +44,37 @@
 		MAX_NFA_STATES,
 		MAX_WORKLIST_CELLS,
 		blowupNfaText,
+		followEdit,
 		checkPicks,
+		checkSource,
 		classText,
-		construct,
 		continuePrediction,
 		dfaHighlight,
-		drawnDfa,
 		newPrediction,
 		nfaHighlight,
 		partialDfa,
 		powerOfTwoText,
 		predictionLimit,
 		predictionView,
-		rebuildNfa,
 		setText,
 		stateName,
 		superscript,
 		targetSet,
 		togglePick,
-		type NfaBuild,
-		type Prediction
+		type Prediction,
+		type ShownAnchor
 	} from '$lib/tools/subset/logic';
+	import {
+		TOO_SLOW,
+		computeConstruction,
+		requestKey,
+		reviveConstruction,
+		stepsChanged,
+		type ConstructionData,
+		type ConstructionRequest,
+		type Shown
+	} from '$lib/tools/subset/job';
+	import { createConstructionWorker } from '$lib/tools/subset/worker';
 	import { PRESETS, presetFor, type SubsetPreset } from '$lib/tools/subset/presets';
 	import {
 		defaultState,
@@ -78,40 +91,30 @@
 	// ------------------------------------------------------------------
 	// NFA → DFA
 	// ------------------------------------------------------------------
+	// The source is parsed on every keystroke (diagnostics, size check). The NFA,
+	// the subset construction and the layouts are computed in a worker (job.ts);
+	// the page shows the last construction it received, dimmed while a newer one
+	// is computed or while the source has problems.
 
-	/** The previous build (not reactive): an edit that leaves the machine as it was keeps its NFA. */
-	let previousBuild: NfaBuild | null = null;
-	const build = $derived.by(() => (previousBuild = rebuildNfa(model, previousBuild)));
-	/**
-	 * The last NFA built. While the input has problems (mid-edit), the page keeps
-	 * showing its construction, dimmed, instead of tearing the panels down.
-	 */
-	let lastGood = $state.raw<NfaBuild | null>(null);
-	$effect(() => {
-		if (build.nfa) lastGood = build;
-	});
-	const shown = $derived(build.nfa ? build : lastGood);
-	/** The construction shown is for an earlier input. */
-	const stale = $derived(build.nfa === null && shown !== null);
+	const source = $derived(checkSource(model));
+
+	/** The construction shown; null only when no source has given an NFA yet. */
+	let shown = $state.raw<Shown | null>(null);
+
 	const nfa = $derived(shown?.nfa ?? null);
-	const nfaGrid = $derived(shown?.positions ?? null);
+	const nfaGrid = $derived(shown?.grid ?? null);
 	const maxDrawnNfa = $derived(nfaGrid ? MAX_DRAWN_NFA_GRID : MAX_DRAWN_NFA_AUTO);
 	const nfaDrawable = $derived(nfa !== null && nfa.states.length <= maxDrawnNfa);
-	const nfaPositions = $derived(
-		nfaGrid ?? (nfa !== null && nfaDrawable ? nodePositions(layoutAutomaton(nfa)) : undefined)
-	);
+	const nfaPositions = $derived(nfaGrid ?? shown?.layout ?? undefined);
 
-	const construction = $derived(
-		nfa ? construct(nfa, { naming: model.naming, includeEmpty: model.showEmpty }) : null
-	);
+	const construction = $derived(shown?.construction ?? null);
 	const result = $derived(construction?.result ?? null);
 	// As drawn: the ∅ state (when shown) is a trap state.
-	const dfa = $derived(result ? drawnDfa(result) : null);
+	const dfa = $derived(shown?.dfa ?? null);
 	const dfaDrawable = $derived(dfa !== null && dfa.states.length <= MAX_DRAWN_DFA);
 	// The finished DFA is laid out once; every step draws its states in the same places.
-	const dfaLayout = $derived(dfa !== null && dfaDrawable ? layoutAutomaton(dfa) : null);
-	const dfaPositions = $derived(dfaLayout ? nodePositions(dfaLayout) : undefined);
-	const dfaFrame = $derived(dfaLayout?.bounds);
+	const dfaPositions = $derived(dfaDrawable ? shown?.dfaLayout?.positions : undefined);
+	const dfaFrame = $derived(dfaDrawable ? shown?.dfaLayout?.bounds : undefined);
 
 	const total = $derived(result?.steps.length ?? 0);
 
@@ -128,19 +131,105 @@
 	const step = $derived(result?.steps[index]);
 	const shownDfa = $derived(dfa ? partialDfa(dfa, step) : null);
 
+	/** What the worker needs; null while the source gives no NFA. Plain data: it is copied. */
+	const request = $derived<ConstructionRequest | null>(
+		source.ok
+			? {
+					from: model.from,
+					re: model.re,
+					defs: model.defs,
+					text: model.text,
+					naming: model.naming,
+					showEmpty: model.showEmpty,
+					have: untrack(() => shown?.key ?? null)
+				}
+			: null
+	);
+
+	/** Run once the construction for the current source arrives (see `settle`). */
+	let intent: (() => void) | null = null;
+	/** Where edits have put the stepper (see `followEdit`); cleared when a new source arrives. */
+	let anchor: ShownAnchor | null = null;
+
+	/**
+	 * A construction arrived. An edit that gives the same machine changes
+	 * nothing (not the step, not the predictions); another machine keeps the
+	 * step (the end stays the end) and starts the pending prediction over.
+	 */
+	function accept(data: ConstructionData, req: ConstructionRequest) {
+		if (data.kind === 'none') return;
+		if (data.kind === 'built') {
+			const before = shown;
+			const at = { index: stepper.index, total };
+			shown = reviveConstruction(data, req.showEmpty);
+			const moved = intent
+				? null
+				: followEdit({
+						stepsChanged: stepsChanged(before, shown),
+						before: before !== null,
+						...at,
+						newTotal: total,
+						anchor,
+						prediction
+					});
+			if (moved) {
+				prediction = moved.prediction;
+				stepper.set(moved.index);
+				anchor = { ...moved.anchor, shown: stepper.index };
+			}
+		}
+		const run = intent;
+		intent = null;
+		run?.();
+	}
+
+	const task = new WorkerTask<ConstructionRequest, ConstructionData>({
+		compute: computeConstruction,
+		worker: createConstructionWorker,
+		key: requestKey,
+		// The default preset, computed at once so the prerendered page shows it.
+		initial: untrack(() => request) ?? undefined,
+		onresult: accept
+	});
+	$effect(() => {
+		if (request) task.run(request);
+	});
+
+	/** The construction shown is not for the source as typed. */
+	const failed = $derived(request !== null && task.status !== 'idle' && task.status !== 'working');
+	/** The source has problems (or its construction did not finish): the construction shown is an earlier one. */
+	const stale = $derived(shown !== null && (!source.ok || failed));
+	/** A construction for the source as typed is being computed. */
+	const updating = $derived(request !== null && task.status === 'working');
+	const dimmed = $derived(stale || updating);
+
+	/**
+	 * Runs `fn` (a step to show after a new source) now, and again once the
+	 * construction for the source arrives, unless the one shown is already it.
+	 */
+	function settle(fn: () => void) {
+		anchor = null;
+		fn();
+		const req = untrack(() => request);
+		const ready = req !== null && task.input !== null && requestKey(task.input) === requestKey(req);
+		intent = ready ? null : fn;
+	}
+
 	const preset = $derived(presetFor(model));
 
 	// ------------------------------------------------------------------
 	// Links to other tools
 	// ------------------------------------------------------------------
 
-	const dfaText = $derived(result && !stale ? formatAutomatonText(result.dfa) : null);
+	/** The DFA shown, for links; while a newer one is computed the links stay, without an href. */
+	const dfaText = $derived(!stale ? (shown?.dfaText ?? null) : null);
+	const linkHref = (href: string) => (updating ? undefined : href);
 	const minimizeHref = $derived(
 		dfaText ? toolLink('minimize', { from: 'dfa', text: dfaText }) : null
 	);
 	const automataHref = $derived(dfaText ? toolLink('automata', { text: dfaText }) : null);
 	const thompsonHref = $derived(
-		model.from === 're' && build.nfa
+		model.from === 're' && source.ok
 			? toolLink('thompson', model.defs ? { re: model.re, defs: model.defs } : { re: model.re })
 			: null
 	);
@@ -238,12 +327,11 @@
 	// Editing
 	// ------------------------------------------------------------------
 
-	/** After the source changes: show the finished construction (or the start, when predicting). */
+	/** After a new source (preset, link, switch): show the finished construction (or the start, when predicting). */
 	function restart() {
 		stepper.pause();
 		resetPrediction();
-		if (model.predict) stepper.first();
-		else stepper.last();
+		settle(() => (model.predict ? stepper.first() : stepper.last()));
 	}
 
 	/**
@@ -254,8 +342,10 @@
 		const atEnd = stepper.index >= total - 1;
 		model.showEmpty = on;
 		resetPrediction();
-		if (model.predict) stepper.first();
-		else if (atEnd) stepper.last();
+		settle(() => {
+			if (model.predict) stepper.first();
+			else if (atEnd) stepper.last();
+		});
 	}
 
 	/** Narrow screens size diagrams to their drawing; wide ones line the two up. */
@@ -301,14 +391,13 @@
 		onLoad: (v) => {
 			Object.assign(model, stateFromHash($state.snapshot(model), v));
 			// A new source: the only NFA to fall back on is its own.
-			lastGood = build.nfa ? build : null;
+			if (!checkSource(model).ok) shown = null;
 			defsOpen = model.defs !== '';
 			stepper.pause();
 			// Predictions go on from the saved step: the steps up to it are revealed.
 			const s = stepFromHash(v);
 			prediction = newPrediction(s ?? Number.MAX_SAFE_INTEGER);
-			if (s === null) stepper.last();
-			else stepper.set(s);
+			settle(() => (s === null ? stepper.last() : stepper.set(s)));
 		}
 	});
 
@@ -436,19 +525,17 @@
 					<RegexField
 						label="Regular expression"
 						bind:value={model.re}
-						diagnostics={build.reDiagnostics}
+						diagnostics={source.reDiagnostics}
 						placeholder="(1 | 0)*1"
-						oninput={restart}
 					/>
 					<Disclosure summary="Regular definitions" bind:open={defsOpen}>
 						<CodeEditor
 							ariaLabel="Regular definitions, one per line"
 							bind:value={model.defs}
-							diagnostics={build.defsDiagnostics}
+							diagnostics={source.defsDiagnostics}
 							minRows={2}
 							maxRows={8}
 							placeholder="digit = '0' | … | '9'"
-							oninput={restart}
 						/>
 					</Disclosure>
 					<p class="hint">
@@ -463,11 +550,10 @@
 					<CodeEditor
 						label="NFA"
 						bind:value={model.text}
-						diagnostics={build.textDiagnostics}
+						diagnostics={source.textDiagnostics}
 						minRows={5}
 						maxRows={14}
 						placeholder="start: A&#10;accept: B&#10;A 0,1 A&#10;A 1 B"
-						oninput={restart}
 					/>
 					<p class="hint">
 						One transition per line: <code>A 0,1 B</code> or <code>A ε B</code>. Mark states with
@@ -500,7 +586,7 @@
 							{#if dfa}<p>{q.answer(dfa.states.map((s) => s.name))}</p>{/if}
 							{#if q.minimizeLink && minimizeHref}
 								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path -->
-								<a class="link-button" href={minimizeHref}
+								<a class="link-button" href={linkHref(minimizeHref)} aria-disabled={updating}
 									>Minimize this DFA <Icon name="arrow-right" size={14} /></a
 								>
 							{/if}
@@ -511,23 +597,36 @@
 		</div>
 	</Panel>
 
-	{#if build.tooLarge !== null}
+	{#if source.tooLarge !== null}
 		<Callout tone="warn" title="NFA too large">
 			{model.from === 're'
 				? `This regular expression gives an NFA with more than ${MAX_NFA_STATES} states`
-				: `This NFA has ${build.tooLarge} states`}; the page builds NFAs of up to {MAX_NFA_STATES}
+				: `This NFA has ${source.tooLarge} states`}; the page builds NFAs of up to {MAX_NFA_STATES}
 			states.
 			{#if stale}The construction below is for the last NFA built.{/if}
 		</Callout>
-	{:else if !nfa}
+	{:else if failed}
+		<Callout tone="warn" title={task.status === 'timed-out' ? 'Too slow' : 'Not constructed'}>
+			{task.status === 'timed-out'
+				? TOO_SLOW
+				: `The construction could not be computed${task.error ? ` (${task.error})` : ''}.`}
+			{#if stale}The construction below is for the last NFA built.{/if}
+		</Callout>
+	{:else if !nfa && !source.ok}
 		<Callout tone="info">No NFA yet: fix the problems listed under the input.</Callout>
+	{:else if !nfa}
+		<p class="building"><Updating label="Building the NFA…" standalone /></p>
 	{/if}
 
 	{#if nfa}
 		<Panel title="Construction" id="construction">
 			{#snippet actions()}
 				{#if stale}
-					<span class="stale-badge"><Badge>Last valid NFA</Badge></span>
+					<span class="stale-badge"
+						><Badge>{source.ok ? 'Last NFA built' : 'Last valid NFA'}</Badge></span
+					>
+				{:else if updating}
+					<Updating />
 				{/if}
 				{#if nfa}
 					<span class="counter">
@@ -620,7 +719,11 @@
 				{/if}
 			{/if}
 
-			<div class={['machines', { stale }]} bind:clientWidth={machinesWidth}>
+			<div
+				class={['machines', { 'stale-data': dimmed }]}
+				aria-busy={updating}
+				bind:clientWidth={machinesWidth}
+			>
 				<figure class="machine">
 					<figcaption>
 						<span class="machine-title">NFA</span>
@@ -659,11 +762,15 @@
 							<span class="links">
 								{#if minimizeHref}
 									<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path -->
-									<a class="link-button" href={minimizeHref}>Minimize this DFA</a>
+									<a class="link-button" href={linkHref(minimizeHref)} aria-disabled={updating}
+										>Minimize this DFA</a
+									>
 								{/if}
 								{#if automataHref}
 									<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path -->
-									<a class="link-button" href={automataHref}>Open DFA in Finite Automata</a>
+									<a class="link-button" href={linkHref(automataHref)} aria-disabled={updating}
+										>Open DFA in Finite Automata</a
+									>
 								{/if}
 							</span>
 						{/if}
@@ -698,7 +805,7 @@
 					<span class="legend-item"><span class="mark">◎</span> accepting</span>
 				</div>
 
-				<div class={['worklist', { stale }]}>
+				<div class={['worklist', { 'stale-data': dimmed }]}>
 					<h3 class="sub-title">Worklist</h3>
 					<WorklistTable {result} {nfa} {index} />
 				</div>
@@ -711,7 +818,7 @@
 			{#snippet children(id)}
 				{#if id === 'closure'}
 					{#if nfa}
-						<div class={{ stale }}>
+						<div class={{ 'stale-data': dimmed }} aria-busy={updating}>
 							<ClosureExplorer
 								{nfa}
 								positions={nfaPositions}
@@ -745,7 +852,7 @@
 					</div>
 				{:else if id === 'run'}
 					{#if nfa && result && dfa}
-						<div class={{ stale }}>
+						<div class={{ 'stale-data': dimmed }} aria-busy={updating}>
 							<RunBoth
 								{nfa}
 								{dfa}
@@ -833,6 +940,9 @@
 		font-weight: 500;
 		text-decoration: none;
 		white-space: nowrap;
+	}
+	.link-button:not([href]) {
+		color: var(--text-3);
 	}
 	.link-button:hover {
 		background: var(--surface-2);
@@ -945,11 +1055,9 @@
 		color: var(--text-2);
 		font-size: var(--text-sm);
 	}
-	/* The construction of the last NFA built, while the input has problems. */
-	.stale {
-		opacity: 0.5;
-		/* Dims only once a problem outlasts a pause in typing; restores at once. */
-		transition: opacity var(--duration) var(--ease) 400ms;
+	.building {
+		margin: 0;
+		font-size: var(--text-sm);
 	}
 	.stale-badge {
 		display: inline-flex;

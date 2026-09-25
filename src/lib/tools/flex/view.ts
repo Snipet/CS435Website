@@ -1,6 +1,8 @@
 /** Text and layout helpers for the Flex Playground page. */
+import { lineCol } from '$lib/components/ui/editor-lines';
 import type { HighlightRange } from '$lib/components/ui/types';
 import { formatString } from '$lib/theory/chars';
+import type { Diagnostic } from '$lib/theory/diagnostics';
 import { children, printRegex, refsIn, type Regex } from '$lib/theory/regex';
 import type { FlexRun, MatchStep, OutputChunk } from './runtime';
 import type { FlexSpec } from './spec';
@@ -16,6 +18,33 @@ export function formatReturn(v: number, names: ReadonlyMap<number, string[]>): s
 	if (named?.length) return `${v} (${named.join(', ')})`;
 	if (v > 32 && v < 127) return `${v} ('${String.fromCharCode(v)}')`;
 	return String(v);
+}
+
+/** A warning or error from a run, as the Run tab lists it. */
+export interface RunMessage {
+	severity: Diagnostic['severity'];
+	message: string;
+	/** Offsets in the spec the message points to; null when it points nowhere. */
+	span: { start: number; end: number } | null;
+	/** 1-based spec line of `span.start`; null without a span. */
+	line: number | null;
+}
+
+/**
+ * Every diagnostic of a run, in order, for the list under the console:
+ * span-less ones included (e.g. %option nodefault's "no rule matches"). The
+ * error that stopped the run is left out, since `run.stopped` is shown on its
+ * own. `specText` is the spec the run was compiled from.
+ */
+export function runMessages(run: FlexRun, specText: string): RunMessage[] {
+	return run.diagnostics
+		.filter((d) => !(d.severity === 'error' && run.stopped !== null && d.message === run.stopped))
+		.map((d) => ({
+			severity: d.severity,
+			message: d.message,
+			span: d.span ? { start: d.span.start, end: d.span.end } : null,
+			line: d.span ? lineCol(specText, d.span.start).line : null
+		}));
 }
 
 /** "19 characters · 2 lines · ends with a newline" */

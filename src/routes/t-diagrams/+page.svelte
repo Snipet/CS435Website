@@ -472,7 +472,8 @@
 		gap: var(--space-5);
 		align-items: start;
 	}
-	@media (min-width: 960px) {
+	/* Side by side only where the figure's column still fits the slide's layout (FIGURE_NARROW_BELOW). */
+	@media (min-width: 1080px) {
 		.walk {
 			grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
 			gap: var(--space-6);
@@ -614,9 +615,6 @@
 		padding: var(--space-4) var(--space-3);
 		border-radius: var(--radius);
 		background: var(--surface-2);
-	}
-	.bench-figure :global(.figure) {
-		min-width: min(100%, 300px);
 	}
 	.checks {
 		display: flex;

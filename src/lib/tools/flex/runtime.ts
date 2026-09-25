@@ -20,11 +20,13 @@ import type { Diagnostic } from '$lib/theory/diagnostics';
 import type { Regex } from '$lib/theory/regex';
 import type { Loc } from './c-ast';
 import {
+	BARE_RETURN,
 	CLimitError,
 	CMachine,
 	CRuntimeError,
 	Env,
 	ExitSignal,
+	TerminateSignal,
 	type FlexHooks,
 	type OutputChunk,
 	type Val
@@ -131,8 +133,15 @@ export interface FlexRun {
 
 const NEWLINE: Regex = { kind: 'chars', set: CharSet.single('\n') };
 
-class Terminate {
-	constructor(readonly value: number) {}
+/**
+ * The number yylex returns for the value of a `return` in an action or in the
+ * code before the first rule. A bare `return;` compiles with gcc's warning
+ * "'return' with no value, in function returning non-void" (see c-check.ts);
+ * C leaves the value undefined, and here yylex returns 0 (end of input for the
+ * usual `while (yylex())` loop) so the run can go on.
+ */
+function yylexValue(m: CMachine, v: Val): number {
+	return v === BARE_RETURN ? 0 : m.toInt(v);
 }
 
 /** Consecutive matches that leave the position and start condition unchanged before the run stops. */
@@ -265,9 +274,9 @@ class Scanner implements FlexHooks {
 		this.current = step;
 		try {
 			const v = body();
-			return v === null ? null : m.toInt(v);
+			return v === null ? null : yylexValue(m, v);
 		} catch (e) {
-			if (e instanceof Terminate) return e.value;
+			if (e instanceof TerminateSignal) return e.value;
 			throw e;
 		} finally {
 			m.inAction = prev.inAction;
@@ -308,9 +317,9 @@ class Scanner implements FlexHooks {
 		if (!this.compiled.prologue.length) return null;
 		try {
 			const v = this.machine.runBody(this.compiled.prologue, env);
-			return v === null ? null : this.machine.toInt(v);
+			return v === null ? null : yylexValue(this.machine, v);
 		} catch (e) {
-			if (e instanceof Terminate) return e.value;
+			if (e instanceof TerminateSignal) return e.value;
 			throw e;
 		}
 	}
@@ -527,7 +536,8 @@ class Scanner implements FlexHooks {
 
 	terminate(loc: Loc): never {
 		void loc;
-		throw new Terminate(0);
+		// YY_NULL
+		throw new TerminateSignal(0);
 	}
 
 	yyStart(): number {
@@ -566,12 +576,13 @@ class Scanner implements FlexHooks {
 			return { exitStatus: 0, stopped: null };
 		} catch (e) {
 			if (e instanceof ExitSignal) return { exitStatus: e.status & 0xff, stopped: null };
-			if (e instanceof Terminate) {
+			if (e instanceof TerminateSignal) {
+				// Only outside every function (a global's initializer, which compileSpec reports).
 				this.diagnostics.push({
 					severity: 'error',
-					message: 'yyterminate() can only be used inside yylex (a rule’s action)'
+					message: 'yyterminate() can only be used inside a function or a rule’s action'
 				});
-				return { exitStatus: null, stopped: 'yyterminate() outside yylex' };
+				return { exitStatus: null, stopped: 'yyterminate() outside a function' };
 			}
 			if (e instanceof MatchBudgetExceeded) {
 				const message = 'stopped: matching this input takes too long';
