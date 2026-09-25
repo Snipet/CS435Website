@@ -48,6 +48,16 @@
 				: `${noun} ${index + 1} of ${total}`
 	);
 
+	/** Nothing to play: one step, or a stepper held on its first step (e.g. a subclass with a limit). */
+	const stuck = $derived(stepper.atStart && stepper.atEnd);
+
+	function scrub(e: Event & { currentTarget: HTMLInputElement }) {
+		const el = e.currentTarget;
+		stepper.set(el.valueAsNumber);
+		// A stepper may stop short of the step asked for; keep the thumb on the step shown.
+		if (stepper.index !== el.valueAsNumber) el.value = String(stepper.index);
+	}
+
 	function guard(disabled: boolean, action: () => void) {
 		return () => {
 			if (!disabled) action();
@@ -81,8 +91,8 @@
 				variant="primary"
 				class="play"
 				aria-keyshortcuts="Space"
-				aria-disabled={total <= 1}
-				onclick={guard(total <= 1, () => stepper.toggle())}
+				aria-disabled={stuck}
+				onclick={guard(stuck, () => stepper.toggle())}
 			/>
 			<IconButton
 				icon="step-forward"
@@ -112,7 +122,7 @@
 			aria-label={noun}
 			aria-valuetext={counter}
 			style="--fill: {total > 1 ? (index / (total - 1)) * 100 : 0}%"
-			oninput={(e) => stepper.set(e.currentTarget.valueAsNumber)}
+			oninput={scrub}
 		/>
 		<span
 			class="count"
