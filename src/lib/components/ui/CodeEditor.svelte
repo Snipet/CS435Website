@@ -16,6 +16,11 @@
 		language?: string;
 		/** Token coloring; return ranges with global `hl-*` classes. Keep it fast. */
 		highlight?: (text: string) => HighlightToken[];
+		/**
+		 * Extra classes per line (index 0 = line 1), added to the line number and
+		 * the line text, e.g. to mark sections. Style them with `:global(…)`.
+		 */
+		lineClasses?: readonly (string | null | undefined)[];
 		/** Problems to underline and list; span offsets index into `value`. */
 		diagnostics?: readonly Diagnostic[];
 		/**
@@ -44,6 +49,7 @@
 		ariaLabel,
 		language,
 		highlight,
+		lineClasses,
 		diagnostics = [],
 		source,
 		readonly = false,
@@ -142,13 +148,14 @@
 				<div class="mirror" aria-hidden="true" bind:this={mirror}>
 					{#if lineNumbers}<span class="ln pad"></span>{/if}<span class="lt pad"></span>
 					{#each lines as line (line.number)}
+						{@const extra = lineClasses?.[line.number - 1]}
 						{#if lineNumbers}
 							<span
-								class={['ln', line.severity && `sev-${line.severity}`]}
+								class={['ln', line.severity && `sev-${line.severity}`, extra]}
 								title={line.messages.join('\n') || undefined}>{line.number}</span
 							>
 						{/if}
-						<span class="lt"
+						<span class={['lt', extra]}
 							>{#each line.segments as seg, i (i)}{#if seg.point}<span class="pt sev-{seg.severity}"
 									></span>{:else if seg.className || seg.severity}<span
 										class={[seg.className, seg.severity && `sev-${seg.severity}`]}>{seg.text}</span
