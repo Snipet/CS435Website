@@ -5,7 +5,9 @@
  * pattern, action), and the user code section.
  *
  * Offsets in the result index into the spec text; diagnostics carry spans
- * with `source: null`, so the spec editor can underline them.
+ * with `source: null`, so the spec editor can underline them. Spans lie
+ * within the text: a problem at the very end (a missing %%, an unfinished
+ * rule) gets a zero-width span at `text.length`.
  */
 import type { Diagnostic } from '$lib/theory/diagnostics';
 import {
@@ -630,7 +632,12 @@ export function parseSpec(text: string): FlexSpec {
 					k++;
 				return lines[k]?.text.trim() === '}' ? k + 1 : k;
 			}
-			if (text[p] === ' ' || text[p] === '\t' || p >= L.end) {
+			if (p >= L.end) {
+				// Nothing follows on the line: a zero-width span where the pattern is missing.
+				diag('error', 'a pattern must follow the start conditions directly', p, p);
+				return li + 1;
+			}
+			if (text[p] === ' ' || text[p] === '\t') {
 				diag('error', 'a pattern must follow the start conditions directly', p, p + 1);
 				return li + 1;
 			}

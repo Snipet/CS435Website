@@ -119,8 +119,14 @@ export class Parser {
 		}
 		return false;
 	}
+	/**
+	 * Stops at `tok`. A problem at the end of the code (the eof token) gets a
+	 * zero-width span where the code ends, so the span never runs past the end
+	 * of the spec (the block may end the text).
+	 */
 	private fail(message: string, tok: Token = this.t): never {
-		throw new SyntaxError_(message, { start: tok.start, end: Math.max(tok.end, tok.start + 1) });
+		const end = tok.kind === 'eof' ? tok.start : Math.max(tok.end, tok.start + 1);
+		throw new SyntaxError_(message, { start: tok.start, end });
 	}
 	private expect(text: string, what?: string): Token {
 		if (this.is(text)) return this.toks[this.i++];
