@@ -1,6 +1,6 @@
 /**
  * Bootstrapping a compiler, as on Intro (cont’d), slide 8: given machine M and
- * language L, the goal is T(L → M / M). Step 1 runs T(L → M / L′) through
+ * language L, the goal is T(L → M / M), "but tough directly!". Step 1 runs T(L → M / L′) through
  * T(L′ → M′ / M); step 2 runs it again through the result of step 1. L′ is a
  * simple subset of L, and M′ is inefficient M-code.
  *
@@ -200,20 +200,32 @@ export interface FigureRow {
 	row: BootstrapRow;
 }
 
+/** Two lines of the slide's prose: first baseline, line height, and the lines. */
+export interface FigureText {
+	x: number;
+	y: number;
+	lineHeight: number;
+	lines: [string, string];
+}
+
 export interface BootstrapFigure {
 	width: number;
 	height: number;
 	metrics: Metrics;
 	/** "Given machine M" / "and language L": first baseline and line height. */
-	given: { x: number; y: number; lineHeight: number; lines: [string, string] };
+	given: FigureText;
 	/** The "Want this" arrow into the goal. */
 	arrow: { x1: number; x2: number; y: number; label: Point };
 	goal: { pos: Point; geom: TGeom };
+	/** "But tough" / "directly!", to the right of the goal. */
+	tough: FigureText;
 	rows: FigureRow[];
 }
 
 const LABEL_W = 30;
 const ROW_GAP = 34;
+/** Room between the goal and "But tough directly!" (clears the check mark on the goal's corner). */
+const TOUGH_GAP = 20;
 /** Size of the figure's prose ("Given machine M…"), in px. */
 export const FIGURE_TEXT_SIZE = 16;
 /** Average advance of the sans-serif UI font, in em. */
@@ -239,11 +251,17 @@ export function bootstrapFigure(m: Metrics = FIGURE_METRICS): BootstrapFigure {
 	const goalGeom = tGeometry(WANT, m);
 	const goalX = LABEL_W + column;
 	const lines: [string, string] = ['Given machine M', 'and language L'];
-	const textW = Math.max(...lines.map((s) => s.length * FIGURE_TEXT_SIZE * SANS_ADVANCE));
+	const toughLines: [string, string] = ['But tough', 'directly!'];
+	const proseW = (l: readonly string[]) =>
+		Math.max(...l.map((s) => s.length * FIGURE_TEXT_SIZE * SANS_ADVANCE));
+	const textW = proseW(lines);
 	const lineHeight = Math.round(FIGURE_TEXT_SIZE * 1.35);
+	/** First baseline of two lines centered on the goal's crossbar. */
+	const proseY = Math.round(u / 2 - lineHeight / 2 + FIGURE_TEXT_SIZE * 0.36);
+	const toughX = goalX + goalGeom.width + TOUGH_GAP;
 
 	let y = 2 * u + ROW_GAP;
-	let right = goalX + goalGeom.width;
+	let right = toughX + proseW(toughLines);
 	const figureRows: FigureRow[] = built.map((b) => {
 		const shift = column - b.eq.result!.x;
 		const ox = LABEL_W;
@@ -271,12 +289,7 @@ export function bootstrapFigure(m: Metrics = FIGURE_METRICS): BootstrapFigure {
 		width: Math.ceil(right),
 		height: y - ROW_GAP,
 		metrics: m,
-		given: {
-			x: 0,
-			y: Math.round(u / 2 - lineHeight / 2 + FIGURE_TEXT_SIZE * 0.36),
-			lineHeight,
-			lines
-		},
+		given: { x: 0, y: proseY, lineHeight, lines },
 		arrow: {
 			x1: Math.round(textW + 10),
 			x2: goalX - 6,
@@ -284,6 +297,7 @@ export function bootstrapFigure(m: Metrics = FIGURE_METRICS): BootstrapFigure {
 			label: { x: Math.round((textW + 10 + goalX - 6) / 2), y: Math.round(u / 2 - 7) }
 		},
 		goal: { pos: { x: goalX, y: 0 }, geom: goalGeom },
+		tough: { x: toughX, y: proseY, lineHeight, lines: toughLines },
 		rows: figureRows
 	};
 }

@@ -119,6 +119,15 @@ describe('flowLayout', () => {
 		);
 		expect(out.positions[0]).toEqual({ x: 4, y: 2 });
 		expect(out.positions[1]).toEqual({ x: 4, y: 17 });
+		// The reported width covers it, so the tray can widen its canvas (and scroll).
+		expect(out.width).toBe(4 + 300 + 4);
+	});
+
+	it('reports a long-named diagram wider than a phone’s tray', () => {
+		const g = tGeometry(T('x86-64 machine code', 'WebAssembly bytecode', 'C'), TRAY_METRICS);
+		const out = flowLayout([{ width: g.width, height: g.height }], 302, opts);
+		expect(out.width).toBeGreaterThan(302);
+		expect(out.width).toBe(opts.padX + g.width + opts.padX);
 	});
 
 	it('handles an empty list', () => {

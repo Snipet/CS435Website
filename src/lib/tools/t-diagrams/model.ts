@@ -290,6 +290,26 @@ export function resultPieces(program: TDiagram, result: TDiagram): Piece[] {
 	];
 }
 
+/**
+ * What Compose announces: the result, and that the goal is reached when the
+ * result is the goal; or why the pair does not compose.
+ */
+export function composeMessage(
+	program: TDiagram,
+	translator: TDiagram,
+	c: Composition,
+	goal: TDiagram | null
+): string {
+	const pair = `${formatT(program)} compiled with ${formatT(translator)}`;
+	if (c.result) {
+		const reached = goalMet(goal, [c.result]) ? ' The goal is reached.' : '';
+		return `${pair} gives ${formatT(c.result)}.${reached}`;
+	}
+	const failed = c.checks.find((x) => !x.ok);
+	const why = failed ? ` ${piecesText(failed.pieces)}` : '';
+	return `${formatT(program)} does not compose with ${formatT(translator)}.${why}`;
+}
+
 /** Whether `goal` is one of `diagrams` (a goal with blanks is never met). */
 export function goalMet(goal: TDiagram | null, diagrams: readonly (TDiagram | null)[]): boolean {
 	if (!goal || blankFields(goal).length) return false;
@@ -304,7 +324,7 @@ export function describeT(t: TDiagram): string {
 /** Where a workbench problem is, so the editor can mark the field. */
 export type IssueTarget =
 	| { kind: 'diagram'; index: number; field?: TField }
-	| { kind: 'subset'; index: number }
+	| { kind: 'subset'; index: number; side?: 'sub' | 'sup' }
 	| { kind: 'goal'; field?: TField }
 	| { kind: 'runnable' };
 
@@ -350,10 +370,12 @@ export function checkWorkbench(input: WorkbenchInput): WorkbenchIssue[] {
 		const sub = normalizeLang(d.sub);
 		const sup = normalizeLang(d.sup);
 		if (!sub || !sup) {
+			// A half-filled declaration points at its blank side; a new, empty one at neither.
+			const side = sub ? 'sup' : sup ? 'sub' : undefined;
 			issues.push({
 				severity: 'warning',
 				message: `Subset ${index + 1} needs a language on both sides of ⊆.`,
-				target: { kind: 'subset', index }
+				target: side ? { kind: 'subset', index, side } : { kind: 'subset', index }
 			});
 		} else if (sub === sup) {
 			issues.push({

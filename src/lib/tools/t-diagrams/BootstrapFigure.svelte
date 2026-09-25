@@ -1,6 +1,7 @@
 <!--
-	Slide 8 drawn step by step: "Given machine M and language L" → "Want this",
-	then rows 1) and 2), each a compiler run through a translator "=" a result.
+	Slide 8 drawn step by step: "Given machine M and language L" → "Want this"
+	→ the goal, "But tough directly!", then rows 1) and 2), each a compiler run
+	through a translator "=" a result.
 	Rows still to come are drawn faintly in place, so the figure does not jump.
 -->
 <script lang="ts">
@@ -16,12 +17,12 @@
 
 	const uid = $props.id();
 	const fig = bootstrapFigure();
-	const PAD = { left: 6, top: 16, right: 16, bottom: 8 };
+	const PAD = { left: 6, top: 16, right: 8, bottom: 8 };
 	const vw = fig.width + PAD.left + PAD.right;
 	const vh = fig.height + PAD.top + PAD.bottom;
 
 	const label = $derived.by(() => {
-		const parts = [`Given machine M and language L, want ${formatT(WANT)}.`];
+		const parts = [`Given machine M and language L, want ${formatT(WANT)}. But tough directly!`];
 		fig.rows.forEach((r, i) => {
 			const phase = step.rows[i];
 			if (phase === 'hidden') return;
@@ -54,15 +55,16 @@
 		</marker>
 	</defs>
 
-	<text class="given" x={fig.given.x} y={fig.given.y} font-size={FIGURE_TEXT_SIZE}
-		>{fig.given.lines[0]}</text
-	>
-	<text
-		class="given"
-		x={fig.given.x}
-		y={fig.given.y + fig.given.lineHeight}
-		font-size={FIGURE_TEXT_SIZE}>{fig.given.lines[1]}</text
-	>
+	{#each [fig.given, fig.tough] as prose, k (k)}
+		{#each prose.lines as line, i (i)}
+			<text
+				class="given"
+				x={prose.x}
+				y={prose.y + i * prose.lineHeight}
+				font-size={FIGURE_TEXT_SIZE}>{line}</text
+			>
+		{/each}
+	{/each}
 	<line
 		class="want"
 		x1={fig.arrow.x1}

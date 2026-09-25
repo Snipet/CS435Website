@@ -107,4 +107,15 @@ describe('bootstrapFigure', () => {
 		expect(fig.arrow.x2 - fig.arrow.x1).toBeGreaterThan(40);
 		expect(fig.width).toBeGreaterThanOrEqual(fig.goal.pos.x + fig.goal.geom.width);
 	});
+
+	it('writes the slide’s prose on either side of the goal', () => {
+		expect(fig.given.lines).toEqual(['Given machine M', 'and language L']);
+		expect(fig.tough.lines).toEqual(['But tough', 'directly!']);
+		expect(fig.tough.y).toBe(fig.given.y);
+		// Right of the goal, clear of the check mark on its top-right corner…
+		expect(fig.tough.x).toBeGreaterThan(fig.goal.pos.x + fig.goal.geom.width + 10);
+		// …and inside the figure.
+		const longest = Math.max(...fig.tough.lines.map((l) => l.length));
+		expect(fig.width).toBeGreaterThanOrEqual(fig.tough.x + longest * 16 * 0.5);
+	});
 });

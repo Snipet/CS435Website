@@ -53,6 +53,9 @@
 	);
 	/** Top-left corner of each diagram (below its tag line). */
 	const homes = $derived(layout.positions.map((p) => ({ x: p.x, y: p.y + TAG })));
+	/** A diagram wider than the tray (long names on a phone) widens the canvas, which then scrolls. */
+	const canvasWidth = $derived(Math.max(trayWidth, Math.ceil(layout.width)));
+	const wide = $derived(canvasWidth > trayWidth);
 
 	interface Drag {
 		id: string;
@@ -70,7 +73,7 @@
 
 	function toLocal(e: PointerEvent): Point {
 		const rect = svg!.getBoundingClientRect();
-		const scale = rect.width ? trayWidth / rect.width : 1;
+		const scale = rect.width ? canvasWidth / rect.width : 1;
 		return { x: (e.clientX - rect.left) * scale, y: (e.clientY - rect.top) * scale };
 	}
 
@@ -197,68 +200,70 @@
 
 <div class="tray" bind:clientWidth={width}>
 	{#if items.length}
-		<svg
-			bind:this={svg}
-			class={['canvas', { dragging: drag?.moved }]}
-			width={trayWidth}
-			height={layout.height}
-			viewBox="0 0 {trayWidth} {layout.height}"
-			role="group"
-			aria-label="Toolbox diagrams"
-			aria-describedby="{uid}-how"
-			onpointermove={move}
-			onpointerup={up}
-			onpointercancel={cancel}
-			onlostpointercapture={cancel}
-		>
-			{#each items as item, i (item.id)}
-				{@const g = geoms[i]}
-				{@const home = homes[i]}
-				{@const tag = tagOf(item)}
-				<g
-					class={['item', { lifted: drag?.moved && drag.id === item.id }]}
-					transform="translate({home.x} {home.y})"
-					role="button"
-					tabindex="0"
-					aria-label={nameOf(item, i)}
-					aria-pressed={item.id === program || item.id === translator}
-					onpointerdown={(e) => down(e, i)}
-					onclick={() => click(item.id)}
-					onkeydown={(e) => keydown(e, item.id)}
-				>
-					<rect
-						class="hit"
-						x={-6}
-						y={-TAG - 2}
-						width={g.width + 12}
-						height={g.height + TAG + 8}
-						rx="8"
-					/>
-					<text class="num" x="0" y={-5}>{i + 1}</text>
-					{#if tag}
-						<text
-							class={['tag', tag === 'compile' ? 'tag-program' : 'tag-translator']}
-							x="14"
-							y={-5}>{tag}</text
-						>
-					{/if}
-					<TShape t={item.t} geom={g} tone={toneOf(item)} marks={marksOf(item)} />
-				</g>
-			{/each}
-			{#if drag?.moved && dragPos && items[drag.index]}
-				{@const item = items[drag.index]}
-				<g class="ghost" aria-hidden="true">
-					<TShape
-						t={item.t}
-						geom={geoms[drag.index]}
-						x={dragPos.x}
-						y={dragPos.y}
-						tone={toneOf(item)}
-						marks={dragTone ? { stem: dragTone } : {}}
-					/>
-				</g>
-			{/if}
-		</svg>
+		<div class={['canvas-wrap', { wide }]}>
+			<svg
+				bind:this={svg}
+				class={['canvas', { dragging: drag?.moved }]}
+				width={canvasWidth}
+				height={layout.height}
+				viewBox="0 0 {canvasWidth} {layout.height}"
+				role="group"
+				aria-label="Toolbox diagrams"
+				aria-describedby="{uid}-how"
+				onpointermove={move}
+				onpointerup={up}
+				onpointercancel={cancel}
+				onlostpointercapture={cancel}
+			>
+				{#each items as item, i (item.id)}
+					{@const g = geoms[i]}
+					{@const home = homes[i]}
+					{@const tag = tagOf(item)}
+					<g
+						class={['item', { lifted: drag?.moved && drag.id === item.id }]}
+						transform="translate({home.x} {home.y})"
+						role="button"
+						tabindex="0"
+						aria-label={nameOf(item, i)}
+						aria-pressed={item.id === program || item.id === translator}
+						onpointerdown={(e) => down(e, i)}
+						onclick={() => click(item.id)}
+						onkeydown={(e) => keydown(e, item.id)}
+					>
+						<rect
+							class="hit"
+							x={-6}
+							y={-TAG - 2}
+							width={g.width + 12}
+							height={g.height + TAG + 8}
+							rx="8"
+						/>
+						<text class="num" x="0" y={-5}>{i + 1}</text>
+						{#if tag}
+							<text
+								class={['tag', tag === 'compile' ? 'tag-program' : 'tag-translator']}
+								x="14"
+								y={-5}>{tag}</text
+							>
+						{/if}
+						<TShape t={item.t} geom={g} tone={toneOf(item)} marks={marksOf(item)} />
+					</g>
+				{/each}
+				{#if drag?.moved && dragPos && items[drag.index]}
+					{@const item = items[drag.index]}
+					<g class="ghost" aria-hidden="true">
+						<TShape
+							t={item.t}
+							geom={geoms[drag.index]}
+							x={dragPos.x}
+							y={dragPos.y}
+							tone={toneOf(item)}
+							marks={dragTone ? { stem: dragTone } : {}}
+						/>
+					</g>
+				{/if}
+			</svg>
+		</div>
 	{:else}
 		<p class="empty">The toolbox is empty. Add a T-diagram to draw it here.</p>
 	{/if}
@@ -275,12 +280,22 @@
 	.tray {
 		min-width: 0;
 	}
+	/* Only a canvas wider than the tray scrolls; otherwise a dragged diagram may leave its box. */
+	.canvas-wrap.wide {
+		max-width: 100%;
+		overflow-x: auto;
+		overscroll-behavior-x: contain;
+	}
 	.canvas {
 		display: block;
+		/* Before the tray is measured (prerendered HTML) the canvas scales to fit. */
 		max-width: 100%;
 		overflow: visible;
 		user-select: none;
 		-webkit-user-select: none;
+	}
+	.wide .canvas {
+		max-width: none;
 	}
 	.item {
 		cursor: grab;
@@ -309,7 +324,7 @@
 	}
 	.ghost {
 		pointer-events: none;
-		filter: drop-shadow(0 4px 10px rgb(0 0 0 / 0.14));
+		filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--backdrop) 50%, transparent));
 	}
 	.num {
 		fill: var(--text-3);

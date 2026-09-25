@@ -22,10 +22,10 @@
 	import {
 		checkWorkbench,
 		compose,
+		composeMessage,
 		formatT,
 		goalMet,
 		parseRunnable,
-		piecesText,
 		resultPieces,
 		richText,
 		sameT,
@@ -40,8 +40,11 @@
 		matchPreset,
 		MAX_TOOLBOX,
 		nextId,
+		picksAfterRemove,
+		resolvePicks,
 		stateFromHash,
 		stateFromPreset,
+		type Picks,
 		type TDiagramsState
 	} from '$lib/tools/t-diagrams/state';
 	import TShape from '$lib/tools/t-diagrams/TShape.svelte';
@@ -54,10 +57,15 @@
 	let form = $state<TDiagramsState>(defaultState());
 
 	/** The Compose row's choices (toolbox ids); not part of the link. */
-	let picks = $state({ program: '', translator: '' });
+	let picks = $state<Picks>({ program: '', translator: '' });
 	let pickNext: 'program' | 'translator' = 'program';
 	/** Announced after Compose or a drop. */
 	let announcement = $state('');
+
+	/** Sets the live text; the same text twice is changed slightly so it is read again. */
+	function announce(text: string) {
+		announcement = announcement === text ? `${text}\u00a0` : text;
+	}
 
 	syncToHash(() => form, {
 		validate: isTDiagramsHash,
@@ -96,12 +104,9 @@
 	const ids = $derived(form.toolbox.map((t) => t.id));
 	const full = $derived(form.toolbox.length >= MAX_TOOLBOX);
 
-	const pickProgram = $derived(ids.includes(picks.program) ? picks.program : (ids[0] ?? ''));
-	const pickTranslator = $derived(
-		ids.includes(picks.translator)
-			? picks.translator
-			: (ids.find((id) => id !== pickProgram) ?? ids[0] ?? '')
-	);
+	const chosen = $derived(resolvePicks(picks, ids));
+	const pickProgram = $derived(chosen.program);
+	const pickTranslator = $derived(chosen.translator);
 	const options = $derived(
 		form.toolbox.map((t, i) => ({ value: t.id, label: `${i + 1}. ${formatT(t)}` }))
 	);
@@ -135,7 +140,11 @@
 		stepper.pause();
 		Object.assign(
 			form,
-			stateFromPreset(p.value, { languages: form.languages, targets: form.targets })
+			stateFromPreset(
+				p.value,
+				{ languages: form.languages, targets: form.targets, archView: form.archView },
+				p.id
+			)
 		);
 		resetPicks();
 		announcement = '';
@@ -160,11 +169,7 @@
 		picks.program = program;
 		picks.translator = translator;
 		pickNext = 'program';
-		const c = compose(p, t, facts);
-		const failed = c.checks.find((x) => !x.ok);
-		announcement = c.result
-			? `${formatT(p)} compiled with ${formatT(t)} gives ${formatT(c.result)}.`
-			: `${formatT(p)} does not compose with ${formatT(t)}. ${failed ? piecesText(failed.pieces) : ''}`;
+		announce(composeMessage(p, t, compose(p, t, facts), form.goal));
 	}
 
 	function addDiagram() {
@@ -179,12 +184,15 @@
 		if (form.compose && (form.compose.program === id || form.compose.translator === id)) {
 			form.compose = null;
 		}
+		// A removed choice falls back to a remaining diagram now, not to one added later.
+		if (picks.program === id || picks.translator === id) pickNext = 'program';
+		Object.assign(picks, picksAfterRemove(picks, id, ids));
 	}
 
 	function addResult() {
 		if (!result || resultInToolbox || full) return;
 		form.toolbox.push({ id: nextId(form.toolbox), ...result });
-		announcement = `Added ${formatT(result)} to the toolbox as diagram ${form.toolbox.length}.`;
+		announce(`Added ${formatT(result)} to the toolbox as diagram ${form.toolbox.length}.`);
 	}
 
 	const sampleCaption = (t: TDiagram): Piece[] => [
@@ -392,15 +400,21 @@
 		</Panel>
 	</div>
 
-	<ArchitecturePanel bind:languages={form.languages} bind:targets={form.targets} />
+	<ArchitecturePanel
+		bind:languages={form.languages}
+		bind:targets={form.targets}
+		bind:view={form.archView}
+	/>
 </ToolPage>
 
 <style>
-	/* Long Intro-deck citations shrink with an ellipsis instead of widening the page. */
+	/* Long Intro-deck citations shorten their deck name (the slide stays) instead of widening
+	   the page; the goal slot in the workbench header shrinks the same way. */
 	.scenario-head :global(.cite),
 	.q-prompt :global(.cite),
 	:global(.walk-panel .head .actions),
-	:global(.walk-panel .head .actions .cite) {
+	:global(.walk-panel .head .actions .cite),
+	:global(.bench-panel .head .actions) {
 		min-width: 0;
 		max-width: 100%;
 	}
@@ -518,6 +532,8 @@
 		flex-wrap: wrap;
 		align-items: center;
 		gap: var(--space-2);
+		min-width: 0;
+		max-width: 100%;
 		font-size: var(--text-sm);
 	}
 	.goal-label {
@@ -527,9 +543,12 @@
 		letter-spacing: 0.06em;
 		text-transform: uppercase;
 	}
+	/* A goal with long names scales down to fit a phone. */
 	.goal-t {
 		display: block;
 		flex: none;
+		max-width: 100%;
+		height: auto;
 	}
 	.bench-body {
 		display: flex;
@@ -613,6 +632,11 @@
 		align-items: flex-start;
 		gap: var(--space-2);
 		line-height: 1.5;
+	}
+	.checks li > span,
+	.result-text > span:last-child {
+		min-width: 0;
+		overflow-wrap: anywhere;
 	}
 	.checks li :global(.icon) {
 		flex: none;

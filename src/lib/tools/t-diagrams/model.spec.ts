@@ -3,6 +3,7 @@ import {
 	blankFields,
 	checkWorkbench,
 	compose,
+	composeMessage,
 	describeT,
 	formatT,
 	goalMet,
@@ -243,8 +244,30 @@ describe('checkWorkbench', () => {
 				'Diagram 1 needs a target language.',
 				{ kind: 'diagram', index: 0, field: 'target' }
 			],
-			['warning', 'Subset 1 needs a language on both sides of ⊆.', { kind: 'subset', index: 0 }],
+			[
+				'warning',
+				'Subset 1 needs a language on both sides of ⊆.',
+				{ kind: 'subset', index: 0, side: 'sup' }
+			],
 			['warning', 'The goal needs a host language.', { kind: 'goal', field: 'host' }]
+		]);
+	});
+
+	it('points a half-filled subset at its blank side, and a new one at neither', () => {
+		const issues = checkWorkbench({
+			toolbox: [],
+			subsets: [
+				{ sub: '', sup: 'L' },
+				{ sub: 'L′', sup: ' ' },
+				{ sub: '', sup: '' }
+			],
+			runnable: '',
+			goal: null
+		});
+		expect(issues.map((d) => d.target)).toEqual([
+			{ kind: 'subset', index: 0, side: 'sub' },
+			{ kind: 'subset', index: 1, side: 'sup' },
+			{ kind: 'subset', index: 2 }
 		]);
 	});
 
@@ -276,5 +299,34 @@ describe('checkWorkbench', () => {
 			'B ⊆ A and A ⊆ B: each one reads the other.'
 		]);
 		expect(issues.every((d) => d.severity === 'warning')).toBe(true);
+	});
+});
+
+describe('composeMessage', () => {
+	const inSubset = T('L', 'M', 'L′');
+	const quick = T('L′', 'M′', 'M');
+	const goal = T('L', 'M', 'M');
+
+	it('says what the composition gives', () => {
+		const c = compose(inSubset, quick, boot);
+		expect(composeMessage(inSubset, quick, c, goal)).toBe(
+			'T(L → M / L′) compiled with T(L′ → M′ / M) gives T(L → M / M′).'
+		);
+	});
+
+	it('says when the result is the goal', () => {
+		const step1 = compose(inSubset, quick, boot).result!;
+		const c = compose(inSubset, step1, boot);
+		expect(composeMessage(inSubset, step1, c, goal)).toBe(
+			'T(L → M / L′) compiled with T(L → M / M′) gives T(L → M / M). The goal is reached.'
+		);
+		expect(composeMessage(inSubset, step1, c, null)).not.toContain('goal');
+	});
+
+	it('says why a pair does not compose', () => {
+		const c = compose(quick, inSubset, boot);
+		expect(composeMessage(quick, inSubset, c, goal)).toBe(
+			'T(L′ → M′ / M) does not compose with T(L → M / L′). This compiler is written in M, but the translator reads L.'
+		);
 	});
 });

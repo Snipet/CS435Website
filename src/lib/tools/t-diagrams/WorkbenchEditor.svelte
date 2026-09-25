@@ -44,6 +44,9 @@
 		issues.filter((d) => d.target.kind === 'diagram' && d.target.index === index);
 	const subsetIssues = (index: number) =>
 		issues.filter((d) => d.target.kind === 'subset' && d.target.index === index);
+	/** The side of a half-filled subset declaration that is still blank. */
+	const blankSide = (list: readonly WorkbenchIssue[], side: 'sub' | 'sup') =>
+		list.some((d) => d.target.kind === 'subset' && d.target.side === side);
 	const goalIssues = $derived(issues.filter((d) => d.target.kind === 'goal'));
 	const badField = (list: readonly WorkbenchIssue[], field: TField) =>
 		list.some(
@@ -141,20 +144,23 @@
 			<ol class="rows">
 				{#each subsets as d, i (i)}
 					{@const list = subsetIssues(i)}
+					{@const errId = `${uid}-s${i}-err`}
 					<li class="row">
 						<div class="subset-fields" role="group" aria-label="Subset {i + 1}">
 							<LangInput
 								bind:value={d.sub}
 								label="Subset {i + 1}: smaller language"
 								placeholder="L′"
-								invalid={list.some((x) => x.severity === 'error') && !d.sub.trim()}
+								invalid={blankSide(list, 'sub')}
+								describedby={list.length ? errId : undefined}
 							/>
 							<span class="sym" aria-hidden="true">⊆</span>
 							<LangInput
 								bind:value={d.sup}
 								label="Subset {i + 1}: larger language"
 								placeholder="L"
-								invalid={list.some((x) => x.severity === 'error') && !d.sup.trim()}
+								invalid={blankSide(list, 'sup')}
+								describedby={list.length ? errId : undefined}
 							/>
 						</div>
 						<IconButton
@@ -164,7 +170,7 @@
 							onclick={() => subsets.splice(i, 1)}
 						/>
 						{#if list.length}
-							<p class="row-msg {list[0].severity}">{list[0].message}</p>
+							<p class="row-msg {list[0].severity}" id={errId}>{list[0].message}</p>
 						{/if}
 					</li>
 				{/each}

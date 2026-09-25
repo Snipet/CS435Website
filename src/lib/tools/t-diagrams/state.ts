@@ -1,13 +1,15 @@
 /**
  * The T-diagram tool's user-editable state, kept in the URL hash: the toolbox,
  * the language facts, the goal, the composition on the bench, the
- * walkthrough step, and the retargetable architecture's languages and
- * targets. No other tool links here yet, so the hash holds only this shape.
+ * walkthrough step, the preset it was loaded from, and the retargetable
+ * architecture's languages, targets and drawing. No other tool links here
+ * yet, so the hash holds only this shape.
  */
 import { MAX_LABEL, normalizeLang } from './labels';
 import { sameT, type SubsetDecl, type TDiagram } from './model';
 import {
 	presets,
+	presetById,
 	DEFAULT_PRESET_ID,
 	type TDiagramsPreset,
 	type TDiagramsPresetValue
@@ -26,6 +28,16 @@ export interface ToolboxItem extends TDiagram {
 	id: string;
 }
 
+/** How the retargetable architecture is drawn (slide 6). */
+export type ArchView = 'shared' | 'separate';
+
+/** The retargetable architecture's part of the state. */
+export interface ArchState {
+	languages: readonly string[];
+	targets: readonly string[];
+	archView?: ArchView;
+}
+
 export interface TDiagramsState {
 	toolbox: ToolboxItem[];
 	subsets: SubsetDecl[];
@@ -38,9 +50,13 @@ export interface TDiagramsState {
 	guide: 'bootstrap' | null;
 	/** Walkthrough step (0-based). */
 	step: number;
+	/** The preset the workbench was loaded from (its note shows while the state starts from it). */
+	preset: string | null;
 	/** Retargetable architecture (slide 6). */
 	languages: string[];
 	targets: string[];
+	/** Drawn with the shared optimizer, or as m × n separate compilers. */
+	archView: ArchView;
 }
 
 /** The next unused id: t1, t2, … */
@@ -63,13 +79,16 @@ export function withIds(diagrams: readonly TDiagram[]): ToolboxItem[] {
 	}));
 }
 
-/** The workbench part of a preset as state; the architecture is kept as given. */
+const SLIDE_ARCH: ArchState = { languages: SLIDE_LANGUAGES, targets: SLIDE_TARGETS };
+
+/**
+ * The workbench part of a preset as state, remembering the preset's `id`;
+ * the architecture is kept as given.
+ */
 export function stateFromPreset(
 	value: TDiagramsPresetValue,
-	arch: { languages: readonly string[]; targets: readonly string[] } = {
-		languages: SLIDE_LANGUAGES,
-		targets: SLIDE_TARGETS
-	}
+	arch: ArchState = SLIDE_ARCH,
+	id: string | null = null
 ): TDiagramsState {
 	return {
 		toolbox: withIds(value.toolbox),
@@ -79,8 +98,10 @@ export function stateFromPreset(
 		compose: null,
 		guide: value.guide,
 		step: 0,
+		preset: id,
 		languages: [...arch.languages],
-		targets: [...arch.targets]
+		targets: [...arch.targets],
+		archView: arch.archView ?? 'shared'
 	};
 }
 
@@ -88,7 +109,7 @@ const defaultPreset = presets.find((p) => p.id === DEFAULT_PRESET_ID)!;
 
 /** Bootstrapping (slide 8) with slide 6's architecture. */
 export function defaultState(): TDiagramsState {
-	return stateFromPreset(defaultPreset.value);
+	return stateFromPreset(defaultPreset.value, SLIDE_ARCH, defaultPreset.id);
 }
 
 /** What the hash may hold: a saved view; missing fields take their defaults. */
@@ -100,8 +121,10 @@ export interface TDiagramsHash {
 	compose?: { program: string; translator: string } | null;
 	guide?: 'bootstrap' | null;
 	step?: number;
+	preset?: string | null;
 	languages?: string[];
 	targets?: string[];
+	archView?: ArchView;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -123,7 +146,8 @@ const isStringArray = (v: unknown): v is string[] =>
 /** Accepts the saved shape with the right types; extra fields are ignored. */
 export function isTDiagramsHash(value: unknown): value is TDiagramsHash {
 	if (!isRecord(value)) return false;
-	const { toolbox, subsets, runnable, goal, compose, guide, step, languages, targets } = value;
+	const { toolbox, subsets, runnable, goal, compose, guide, step, preset, languages, targets } =
+		value;
 	if (!Array.isArray(toolbox) || !toolbox.every(isToolboxEntry)) return false;
 	if (
 		subsets !== undefined &&
@@ -153,8 +177,16 @@ export function isTDiagramsHash(value: unknown): value is TDiagramsHash {
 	if (step !== undefined && !(typeof step === 'number' && Number.isInteger(step) && step >= 0)) {
 		return false;
 	}
+	if (preset !== undefined && preset !== null && typeof preset !== 'string') return false;
 	if (languages !== undefined && !isStringArray(languages)) return false;
 	if (targets !== undefined && !isStringArray(targets)) return false;
+	if (
+		value.archView !== undefined &&
+		value.archView !== 'shared' &&
+		value.archView !== 'separate'
+	) {
+		return false;
+	}
 	return true;
 }
 
@@ -198,8 +230,10 @@ export function stateFromHash(value: TDiagramsHash): TDiagramsState {
 		compose,
 		guide: value.guide === 'bootstrap' ? 'bootstrap' : null,
 		step: value.step ?? 0,
+		preset: value.preset && presetById(value.preset) ? value.preset : null,
 		languages: sanitizeEnds(value.languages, SLIDE_LANGUAGES),
-		targets: sanitizeEnds(value.targets, SLIDE_TARGETS)
+		targets: sanitizeEnds(value.targets, SLIDE_TARGETS),
+		archView: value.archView === 'separate' ? 'separate' : 'shared'
 	};
 }
 
@@ -216,18 +250,67 @@ const sameRunnable = (a: string, b: string) => {
 	return set(a) === set(b);
 };
 
-/** The preset whose toolbox, facts and goal the state shows, if any. */
+type PresetView = Pick<TDiagramsState, 'toolbox' | 'subsets' | 'runnable' | 'goal'> & {
+	preset?: string | null;
+};
+
+/**
+ * Whether the state still starts from preset `p`: the preset's diagrams come
+ * first in the toolbox (diagrams added after them are fine), and its subsets,
+ * languages that run directly, and goal are unchanged.
+ */
+export function startsFrom(state: PresetView, p: TDiagramsPreset): boolean {
+	const v = p.value;
+	if (state.toolbox.length < v.toolbox.length) return false;
+	if (!v.toolbox.every((t, i) => sameT(t, state.toolbox[i]))) return false;
+	if (!sameSubsets(v.subsets, state.subsets)) return false;
+	if (!sameRunnable(v.runnable, state.runnable)) return false;
+	if (!v.goal || !state.goal) return !v.goal && !state.goal;
+	return sameT(v.goal, state.goal);
+}
+
+/**
+ * The preset the state starts from, if any: the one it was loaded from while
+ * that still holds, otherwise the first that does.
+ */
 export function matchPreset(
-	state: Pick<TDiagramsState, 'toolbox' | 'subsets' | 'runnable' | 'goal'>,
+	state: PresetView,
 	list: readonly TDiagramsPreset[] = presets
 ): TDiagramsPreset | undefined {
-	return list.find((p) => {
-		const v = p.value;
-		if (v.toolbox.length !== state.toolbox.length) return false;
-		if (!v.toolbox.every((t, i) => sameT(t, state.toolbox[i]))) return false;
-		if (!sameSubsets(v.subsets, state.subsets)) return false;
-		if (!sameRunnable(v.runnable, state.runnable)) return false;
-		if (!v.goal || !state.goal) return !v.goal && !state.goal;
-		return sameT(v.goal, state.goal);
-	});
+	const loaded = state.preset ? list.find((p) => p.id === state.preset) : undefined;
+	if (loaded && startsFrom(state, loaded)) return loaded;
+	return list.find((p) => startsFrom(state, p));
+}
+
+/** The Compose row's choices (toolbox ids). */
+export interface Picks {
+	program: string;
+	translator: string;
+}
+
+/**
+ * The choices among `ids`: an unknown program falls back to the first
+ * diagram, and an unknown translator to the first other one.
+ */
+export function resolvePicks(picks: Picks, ids: readonly string[]): Picks {
+	const program = ids.includes(picks.program) ? picks.program : (ids[0] ?? '');
+	const translator = ids.includes(picks.translator)
+		? picks.translator
+		: (ids.find((id) => id !== program) ?? ids[0] ?? '');
+	return { program, translator };
+}
+
+/**
+ * The choices after diagram `removed` is gone (`ids` are the ones left):
+ * settled on the remaining diagrams, so a diagram added later (which may be
+ * given the same id) is not chosen for anything.
+ */
+export function picksAfterRemove(picks: Picks, removed: string, ids: readonly string[]): Picks {
+	return resolvePicks(
+		{
+			program: picks.program === removed ? '' : picks.program,
+			translator: picks.translator === removed ? '' : picks.translator
+		},
+		ids
+	);
 }

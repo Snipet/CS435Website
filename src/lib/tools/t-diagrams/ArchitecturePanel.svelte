@@ -14,16 +14,22 @@
 		type Box
 	} from './architecture';
 	import EndList from './EndList.svelte';
+	import type { ArchView } from './state';
 
 	interface Props {
 		languages: string[];
 		targets: string[];
+		/** Drawn with the shared optimizer, or as m × n separate compilers. */
+		view?: ArchView;
 	}
 
-	let { languages = $bindable(), targets = $bindable() }: Props = $props();
+	let {
+		languages = $bindable(),
+		targets = $bindable(),
+		view = $bindable('shared')
+	}: Props = $props();
 
 	const uid = $props.id();
-	let view = $state<'shared' | 'separate'>('shared');
 
 	const layout = $derived(archLayout(languages, targets));
 	const n = $derived(counts(languages.length, targets.length));
