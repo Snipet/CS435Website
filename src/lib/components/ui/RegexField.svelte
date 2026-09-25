@@ -48,6 +48,8 @@
 		diagnostics?: readonly Diagnostic[];
 		/** Spans with this `source` index into `value` and get an excerpt (default null). */
 		source?: string | null;
+		/** Tints `value[start, end)`, e.g. the part of the expression selected elsewhere. */
+		highlight?: { start: number; end: number } | null;
 		size?: 'md' | 'lg';
 		disabled?: boolean;
 		id?: string;
@@ -66,6 +68,7 @@
 		aliases = DEFAULT_ALIASES,
 		diagnostics = [],
 		source = null,
+		highlight = null,
 		size = 'lg',
 		disabled = false,
 		id,
@@ -77,6 +80,21 @@
 	const uid = $props.id();
 	const inputId = $derived(id ?? `regex-${uid}`);
 	const hasError = $derived(diagnostics.some((d) => d.severity === 'error'));
+
+	// The highlight is drawn in a layer over the input that follows its scroll.
+	const mark = $derived.by(() => {
+		if (!highlight) return null;
+		const start = Math.max(0, Math.min(highlight.start, value.length));
+		const end = Math.max(start, Math.min(highlight.end, value.length));
+		return end > start ? { start, end } : null;
+	});
+	let scrollX = $state(0);
+	const syncScroll = () => {
+		if (element) scrollX = element.scrollLeft;
+	};
+	$effect(() => {
+		if (mark) syncScroll();
+	});
 	const items = $derived(
 		symbols.map((s) =>
 			typeof s === 'string'
@@ -186,32 +204,43 @@
 
 <div class={['regex-field', size, { invalid: hasError, disabled }]}>
 	{#if label}<label class="label" for={inputId}>{label}</label>{/if}
-	<input
-		bind:this={element}
-		id={inputId}
-		class="input"
-		type="text"
-		{value}
-		{placeholder}
-		{disabled}
-		aria-label={label ? undefined : ariaLabel}
-		aria-invalid={hasError ? 'true' : undefined}
-		aria-describedby={diagnostics.length ? `${uid}-diags` : undefined}
-		spellcheck="false"
-		autocomplete="off"
-		autocapitalize="off"
-		autocorrect="off"
-		oninput={handleInput}
-		onblur={remember}
-		onselect={remember}
-		onkeyup={remember}
-		onkeydown={(e) => {
-			if (e.key === 'Enter' && !e.isComposing && onsubmit) {
-				e.preventDefault();
-				onsubmit(value);
-			}
-		}}
-	/>
+	<div class="control">
+		<input
+			bind:this={element}
+			id={inputId}
+			class="input"
+			type="text"
+			{value}
+			{placeholder}
+			{disabled}
+			aria-label={label ? undefined : ariaLabel}
+			aria-invalid={hasError ? 'true' : undefined}
+			aria-describedby={diagnostics.length ? `${uid}-diags` : undefined}
+			spellcheck="false"
+			autocomplete="off"
+			autocapitalize="off"
+			autocorrect="off"
+			oninput={handleInput}
+			onblur={remember}
+			onselect={remember}
+			onkeyup={remember}
+			onscroll={syncScroll}
+			onkeydown={(e) => {
+				if (e.key === 'Enter' && !e.isComposing && onsubmit) {
+					e.preventDefault();
+					onsubmit(value);
+				}
+			}}
+		/>
+		{#if mark}
+			<div class="mark-layer" aria-hidden="true">
+				<span class="mark-text" style="transform: translateX({-scrollX}px)"
+					>{value.slice(0, mark.start)}<span class="mark">{value.slice(mark.start, mark.end)}</span
+					></span
+				>
+			</div>
+		{/if}
+	</div>
 	{#if items.length}
 		<div class="palette" role="toolbar" aria-label="Insert symbol" aria-controls={inputId}>
 			{#each items as item, i (i)}
@@ -275,6 +304,7 @@
 		color: var(--text-2);
 	}
 	.input {
+		display: block;
 		width: 100%;
 		min-width: 0;
 		padding: 0 14px;
@@ -308,6 +338,40 @@
 	}
 	.invalid .input {
 		border-color: var(--reject);
+	}
+	.control {
+		position: relative;
+		min-width: 0;
+	}
+	/* Same box and font as the input's text, so the tint lines up with it. */
+	.mark-layer {
+		position: absolute;
+		inset: 1px;
+		display: flex;
+		align-items: center;
+		padding: 0 14px;
+		overflow: hidden;
+		color: transparent;
+		font-family: var(--font-mono);
+		font-variant-ligatures: none;
+		font-feature-settings: normal;
+		white-space: pre;
+		pointer-events: none;
+	}
+	.lg .mark-layer {
+		font-size: 1.125rem;
+	}
+	.md .mark-layer {
+		padding: 0 12px;
+		font-size: 0.9375rem;
+	}
+	.mark-text {
+		flex: none;
+	}
+	.mark {
+		border-radius: 3px;
+		background: color-mix(in srgb, var(--accent) 20%, transparent);
+		box-shadow: inset 0 -2px 0 var(--accent);
 	}
 	.disabled {
 		opacity: 0.55;
