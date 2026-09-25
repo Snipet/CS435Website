@@ -11,7 +11,15 @@ export default defineConfig({
 					filename.split(/[/\\]/).includes('node_modules') ? undefined : true
 			},
 			// Cloudflare Pages serves 404.html for unknown paths; it renders src/routes/+error.svelte.
-			adapter: adapter({ fallback: '404.html' })
+			adapter: adapter({ fallback: '404.html' }),
+			prerender: {
+				// Cross-tool links carry encoded tool state in the hash (`#v1.…`, see
+				// url-state), not an element id. Every other missing anchor still fails.
+				handleMissingId: ({ id, message }) => {
+					if (/^v\d+\./.test(id)) return;
+					throw new Error(message);
+				}
+			}
 		})
 	],
 	test: {

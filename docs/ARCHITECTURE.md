@@ -640,8 +640,11 @@ saved state must accept its `LinkStates` shape (extra fields are allowed).
   `{ kind: 'state', id } | { kind: 'edge', key } | null`), callbacks
   `onchange(automaton, positions)`, `onstateclick(id)`,
   `ontransitionclick(transitionIds, edgeKey)`, plus `height` (px or `'auto'`),
-  `ariaLabel`, `startLabel` (text on the start arrow, e.g. `start`) and
-  `viewKey?`. Supports pan/zoom (arrow keys pan from the drawing or the zoom
+  `ariaLabel`, `startLabel` (text on the start arrow, e.g. `start`),
+  `viewKey?`, `hideNames?` (draw states without names, as on unlabeled slide
+  drawings) and `selectionActions?` (default true; false keeps only "Add state"
+  and the hints in the bar under an editable drawing, for pages with their own
+  inspector). Supports pan/zoom (arrow keys pan from the drawing or the zoom
   buttons) and "fit"; `fit()` is also a component export (`bind:this`).
   Passing a machine the view did not just report through `onchange` (compared
   by object, then by `layoutKey`) refits the view, clears the selection and
@@ -650,8 +653,9 @@ saved state must accept its `LinkStates` shape (extra fields are allowed).
   `viewKey` refits (a stepper passes a constant key to keep the user's zoom).
   Types are in `graph/types.ts`.
 - `TransitionTable.svelte` — table per §3.7: `automaton`, `classes?` (used as
-  given), `names?`, `highlight?: { state?, cell?: { state, column } }` (the ε
-  column comes last), `onCellClick?(state, column, symbols)` (`symbols` is null
+  given), `names?`, `highlight?: { state?, states?, cell?: { state, column } }`
+  (`states` marks several rows, e.g. an NFA's active set; the ε column comes
+  last), `onCellClick?(state, column, symbols)` (`symbols` is null
   for ε), `compact?`, `caption?` (visually hidden). Default columns come from
   `tableColumns` in `table.ts`: classes of Σ and every label, one per symbol
   when there are at most 16 symbols, and a class only reached through
