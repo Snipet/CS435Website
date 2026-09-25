@@ -125,7 +125,12 @@ rules and for the DFAs on the slides, as built and minimized.
 								<tr class={{ sub: r.sub }}>
 									<th scope="row">{r.label}</th>
 									<td class="num">{fmt(r.size.states)}</td>
-									<td class="num">{fmt(r.size.classes)}</td>
+									<td class="num">
+										{fmt(r.size.classes)}
+										{#if r.size.labelClasses > r.size.classes}
+											<span class="merged">merged from {fmt(r.size.labelClasses)}</span>
+										{/if}
+									</td>
 									<td class="num strong"
 										>{fmt(r.size.states)} × {fmt(r.size.classes)} = {fmt(r.size.cells)}</td
 									>
@@ -139,8 +144,9 @@ rules and for the DFAs on the slides, as built and minimized.
 			<p class="legend">
 				Symbol classes are the columns of T on the Table-driven tab: sets of characters that every
 				state treats alike (relop's <em>other</em> is every character without an edge of its own).
-				The last column counts a table indexed by the character itself (T: 2D int array [state,
-				char], slide 15) over the {ASCII_COLUMNS}
+				Label classes on which every state has the same next state share one column;
+				<em>merged from</em> gives the number of label classes before that. The last column counts a
+				table indexed by the character itself (T: 2D int array [state, char], slide 15) over the {ASCII_COLUMNS}
 				ASCII characters. Minimizing keeps accepting states with different tokens apart.
 			</p>
 			<SlideQuestions questions={QUESTIONS} />
@@ -200,6 +206,12 @@ rules and for the DFAs on the slides, as built and minimized.
 	}
 	.sizes .strong {
 		font-weight: 600;
+	}
+	.sizes .merged {
+		display: block;
+		color: var(--text-3);
+		font-family: var(--font-sans);
+		font-size: var(--text-xs);
 	}
 	.sizes tr.group th {
 		padding-top: 14px;

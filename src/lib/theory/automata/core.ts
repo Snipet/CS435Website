@@ -330,6 +330,46 @@ export function transitionTable(
 	return { classes, rows };
 }
 
+/**
+ * Merges the classes whose columns in `transitionTable(a, classes)` are the
+ * same: in every state's row the targets on each of them are equal (the ε
+ * column plays no part). Each result is the union of such classes, so
+ * `[A-Z]` and `[a-z]` become one class when every state treats them alike.
+ * Results are in ascending order of their first code point; empty classes are
+ * dropped. The table over the result has the same distinct columns as the
+ * table over `classes`.
+ */
+export function mergeEquivalentClasses(a: Automaton, classes: readonly CharSet[]): CharSet[] {
+	// cells[k]: state → targets on classes[k] (states with no target are left out).
+	const cells = classes.map(() => new Map<StateId, Set<StateId>>());
+	// Many transitions share a label object (a subset DFA labels them with its symbol classes).
+	const covered = new Map<CharSet, number[]>();
+	for (const t of a.transitions) {
+		if (!isLabeled(t) || !a.states[t.from] || !a.states[t.to]) continue;
+		let ks = covered.get(t.label);
+		if (!ks) {
+			ks = classes.flatMap((c, k) => (t.label.overlaps(c) ? [k] : []));
+			covered.set(t.label, ks);
+		}
+		for (const k of ks) {
+			let targets = cells[k].get(t.from);
+			if (!targets) cells[k].set(t.from, (targets = new Set()));
+			targets.add(t.to);
+		}
+	}
+	const merged = new Map<string, CharSet>();
+	classes.forEach((c, k) => {
+		if (c.isEmpty) return;
+		const key = [...cells[k]]
+			.sort(([x], [y]) => x - y)
+			.map(([from, targets]) => `${from}:${[...targets].sort((x, y) => x - y).join(',')}`)
+			.join(';');
+		const prev = merged.get(key);
+		merged.set(key, prev ? prev.union(c) : c);
+	});
+	return [...merged.values()].sort((x, y) => x.first()! - y.first()!);
+}
+
 // ---------------------------------------------------------------------------
 // Text format
 // ---------------------------------------------------------------------------

@@ -144,6 +144,46 @@ describe('Sizes tab', () => {
 		expect(t).toContain('2 × 2 = 4');
 		expect(t).toContain('relop (slide 16)');
 		expect(t).toContain('Hand code [dis]advantages?');
+		// Nothing to merge: A–Z and a–z lead to different states in the DFA as built.
+		expect(t).not.toMatch(/merged from \d/);
+	});
+
+	it('notes the label classes before merging where columns were merged', () => {
+		const model = loadState(DEFAULT_STATE, {
+			source: 'rules',
+			defs: "lower = 'a' | … | 'z'",
+			rules: [
+				{ name: 'Word', re: 'lower+' },
+				{ name: 'Never', re: "ɸ 'q'" }
+			],
+			input: 'ab'
+		});
+		const { built, names } = setup(model);
+		const t = text(render(SizesTab, { props: { model, built, names } }).body);
+		expect(t).toContain('R = Word | Never');
+		expect(t).toContain('3 × 1 = 3');
+		expect(t).toContain('1 merged from 2');
+		// relop and S, T, U have nothing to merge.
+		expect(t.match(/merged from \d/g)).toHaveLength(1);
+	});
+});
+
+describe('Table T', () => {
+	it('shows one column for label classes every state treats alike', () => {
+		const model = loadState(DEFAULT_STATE, {
+			source: 'rules',
+			defs: "lower = 'a' | … | 'z'",
+			rules: [
+				{ name: 'Word', re: 'lower+' },
+				{ name: 'Never', re: "ɸ 'q'" }
+			],
+			input: 'ab'
+		});
+		const t = text(
+			render(TableDrivenTab, { props: { model, ...setup(model), preset: null } }).body
+		);
+		expect(t).toContain('Table T 3 × 1');
+		expect(t).toContain('lower accept retract');
 	});
 });
 

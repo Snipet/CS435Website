@@ -3,6 +3,8 @@ import type { LinkStates } from '$lib/tools/links';
 import { isSavedState, loadState, type ScannerDfaState } from './state';
 import { sizesOf, tableSize } from './sizes';
 import { relopDfa, stuDfa } from './machines';
+import { buildRuleDfa, compileRules } from './rules';
+import { LEX2_DEFS, LEX2_RULES } from './presets';
 
 const BASE: ScannerDfaState = {
 	tab: 'switch',
@@ -85,8 +87,40 @@ describe('loadState', () => {
 
 describe('sizes', () => {
 	it('relop: 9 states × 4 columns', () => {
-		expect(tableSize(relopDfa())).toEqual({ states: 9, classes: 4, cells: 36, asciiCells: 1152 });
+		expect(tableSize(relopDfa())).toEqual({
+			states: 9,
+			classes: 4,
+			labelClasses: 4,
+			cells: 36,
+			asciiCells: 1152
+		});
 		expect(sizesOf(relopDfa()).minimal.states).toBe(9);
+	});
+
+	it('counts merged columns, and the label classes before merging', () => {
+		const compiled = compileRules("lower = 'a' | … | 'z'", [
+			{ name: 'Word', re: 'lower+' },
+			{ name: 'Never', re: "ɸ 'q'" }
+		]);
+		const built = buildRuleDfa(compiled.rules!);
+		if (!built.ok) throw new Error('too large');
+		// The ɸ rule's 'q' edge splits the letters into two label classes that no state tells apart.
+		expect(tableSize(built.full, compiled.names)).toEqual({
+			states: 3,
+			classes: 1,
+			labelClasses: 2,
+			cells: 3,
+			asciiCells: 384
+		});
+	});
+
+	it('Lexical Analysis II rules: A–Z and a–z stay apart as built (different next states), merge when minimized', () => {
+		const compiled = compileRules(LEX2_DEFS, LEX2_RULES);
+		const built = buildRuleDfa(compiled.rules!);
+		if (!built.ok) throw new Error('too large');
+		const s = sizesOf(built.full, compiled.names);
+		expect(s.built).toMatchObject({ states: 11, classes: 5, labelClasses: 5, cells: 55 });
+		expect(s.minimal).toMatchObject({ states: 5, classes: 4, labelClasses: 4, cells: 20 });
 	});
 
 	it('S, T, U: 3 × 2 = 6 cells (slide 14), 2 × 2 = 4 when minimized', () => {

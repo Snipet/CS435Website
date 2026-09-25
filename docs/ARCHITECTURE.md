@@ -332,6 +332,11 @@ interface TableRow {
 	epsilon: StateId[];
 } // cells[classIndex] = targets
 function transitionTable(a, classes?: CharSet[]): { classes: CharSet[]; rows: TableRow[] };
+// Unions of the classes whose columns in transitionTable(a, classes) are identical (same targets
+// in every state's row; ε-moves play no part), ascending by first code point, empty classes dropped:
+// [A-Z] and [a-z] become one class when every state moves to the same states on both. Distinct but
+// equivalent targets keep classes apart. subsetConstruction and minimize do not use it.
+function mergeEquivalentClasses(a, classes: CharSet[]): CharSet[];
 function parseAutomatonText(text: string): {
 	automaton: Automaton | null;
 	diagnostics: Diagnostic[];
@@ -662,9 +667,15 @@ saved state must accept its `LinkStates` shape (extra fields are allowed).
   (`states` marks several rows, e.g. an NFA's active set; the ε column comes
   last), `onCellClick?(state, column, symbols)` (`symbols` is null
   for ε), `compact?`, `caption?` (visually hidden). Default columns come from
-  `tableColumns` in `table.ts`: classes of Σ and every label, one per symbol
-  when there are at most 16 symbols, and a class only reached through
-  `display` labels headed by that text (`other`) and listed last.
+  `tableColumns` in `table.ts`: classes of Σ and every label, with classes that
+  every state treats alike merged into one column (`mergeEquivalentClasses`, so
+  separate `[A-Z]` and `[a-z]` transitions to the same states share a column,
+  headed by a named set such as `letter` when the merged class is one), one
+  column per symbol when there are at most 16 symbols (named sets, merged or
+  not, stay whole), and a class only reached through `display` labels headed
+  by that text (`other`), never merged, and listed last. Given `classes` are
+  used as they are. The scanner-dfa tool's table T merges its label classes
+  the same way (its `other` column is never merged, so EOF keeps its entry).
 - `layout.ts` — pure layout (`layoutAutomaton(a, { positions?, names?,
 startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
   `edgeKey`, the start arrow, and bounds; unit-tested. The start state ranks

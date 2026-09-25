@@ -5,8 +5,8 @@
  */
 import { partitionCharSets, type CharSet } from '$lib/theory/charset';
 import { formatLabel, type NamedSet } from '$lib/theory/chars';
-import { coReachableStates, isLabeled } from '$lib/theory/automata';
-import type { Automaton, StateId } from '$lib/theory/automata/types';
+import { coReachableStates, isLabeled, mergeEquivalentClasses } from '$lib/theory/automata';
+import type { Automaton, StateId, Transition } from '$lib/theory/automata/types';
 import { tableColumns } from '$lib/components/graph/table';
 
 /** `state` after T has no entry: the error state. */
@@ -30,8 +30,13 @@ export interface DriverTable {
 	columns: TableColumn[];
 	/** T[state][column]: the next state, or ERROR_STATE. */
 	T: StateId[][];
-	/** The transition behind T[state][column], or -1. */
+	/**
+	 * The transition behind T[state][column], or -1. A merged column can have
+	 * several (e.g. one on [A-Z], one on [a-z]); this is the first.
+	 */
 	via: number[][];
+	/** Labeled transitions out of each state, in the machine's order (`lookup` finds the one taken). */
+	out: (Transition & { label: CharSet })[][];
 	accept: boolean[];
 	retract: boolean[];
 	/** tokenFor (state): the token the state reports, or null when it names none. */
@@ -44,37 +49,55 @@ export interface DriverTable {
 	eofColumn: number | null;
 }
 
+/** The symbol classes of a machine's transition labels, ascending, before any are merged. */
+export function labelClasses(dfa: Automaton): CharSet[] {
+	const labels = new Map<string, CharSet>();
+	for (const label of new Set(dfa.transitions.filter(isLabeled).map((t) => t.label)))
+		labels.set(label.key(), label);
+	return partitionCharSets(labels.values());
+}
+
 /**
- * Columns are the symbol classes of the transition labels, ascending (with
- * complements such as [^0-9] after the rest), headed like the transition
- * table (named sets such as `digit`, or `other` when the machine labels that
- * class `other`, as relop does). A character in no column, and EOF when there
- * is no `other` column, has no entry in T: it leads to the error state.
+ * Columns are the symbol classes of the transition labels, with classes that
+ * every state treats alike merged into one column (`mergeEquivalentClasses`:
+ * [A-Z] and [a-z] make one `letter` column when every state has the same next
+ * state on both; distinct but equivalent next states keep them apart), in
+ * ascending order (with complements such as [^0-9] after the rest), headed
+ * like the transition table (named sets such as `digit`, or `other` when the
+ * machine labels that class `other`, as relop does; `other` is never merged).
+ * A character in no column, and EOF when there is no `other` column, has no
+ * entry in T: it leads to the error state.
  */
 export function driverTable(
 	dfa: Automaton,
 	opts: { names?: readonly NamedSet[] } = {}
 ): DriverTable {
-	const labels = new Map<string, CharSet>();
-	for (const label of new Set(dfa.transitions.filter(isLabeled).map((t) => t.label)))
-		labels.set(label.key(), label);
-	const parts = partitionCharSets(labels.values());
+	const parts = labelClasses(dfa);
 	const heads = tableColumns(dfa, { classes: parts, names: opts.names });
-	const cols = parts.map((set, i) => {
-		const plain = formatLabel(set, { names: opts.names });
-		return { set, header: heads[i].header, other: heads[i].header !== plain };
+	const header = (set: CharSet) => formatLabel(set, { names: opts.names });
+	const others: TableColumn[] = [];
+	const plain: CharSet[] = [];
+	parts.forEach((set, i) => {
+		if (heads[i].header === header(set)) plain.push(set);
+		else others.push({ set, header: heads[i].header, other: true });
 	});
+	const cols = mergeEquivalentClasses(dfa, plain).map((set): TableColumn => ({
+		set,
+		header: header(set),
+		other: false
+	}));
 	// Complements such as [^0-9] start at the first code point; list them after the plain classes.
 	const huge = (c: TableColumn) => c.set.size > 0x10000;
 	const columns: TableColumn[] = [
-		...cols.filter((c) => !c.other && !huge(c)),
-		...cols.filter((c) => !c.other && huge(c)),
-		...cols.filter((c) => c.other)
+		...cols.filter((c) => !huge(c)),
+		...cols.filter((c) => huge(c)),
+		...others
 	];
 
 	const n = dfa.states.length;
 	const T = dfa.states.map(() => columns.map(() => ERROR_STATE));
 	const via = dfa.states.map(() => columns.map(() => -1));
+	const out: DriverTable['out'] = dfa.states.map(() => []);
 	// Many transitions share a label object (a subset DFA labels them with its symbol classes).
 	const covered = new Map<CharSet, number[]>();
 	const columnsOf = (label: CharSet) => {
@@ -87,6 +110,7 @@ export function driverTable(
 	};
 	for (const t of dfa.transitions) {
 		if (!isLabeled(t) || t.from >= n) continue;
+		out[t.from].push(t);
 		for (const k of columnsOf(t.label)) {
 			if (T[t.from][k] === ERROR_STATE) {
 				T[t.from][k] = t.to;
@@ -102,6 +126,7 @@ export function driverTable(
 		columns,
 		T,
 		via,
+		out,
 		accept: dfa.states.map((s) => s.accepting),
 		retract: dfa.states.map((s) => s.retract ?? false),
 		token: dfa.states.map((s) => (s.accepting ? (s.accept?.token ?? null) : null)),
@@ -128,13 +153,16 @@ export interface Lookup {
 	transition: number | null;
 }
 
-/** T[from, ch]. */
+/** T[from, ch]; `transition` is the one whose label holds `ch` (EOF: the one behind the cell). */
 export function lookup(table: DriverTable, from: StateId, ch: Ch): Lookup {
 	const column = columnOf(table, ch);
 	if (column === null || from < 0) return { from, ch, column, to: ERROR_STATE, transition: null };
 	const to = table.T[from][column];
 	const via = table.via[from][column];
-	return { from, ch, column, to, transition: via < 0 ? null : via };
+	if (via < 0) return { from, ch, column, to, transition: null };
+	const cp = ch === EOF ? null : ch.codePointAt(0)!;
+	const taken = cp === null ? undefined : table.out[from]?.find((t) => t.label.has(cp));
+	return { from, ch, column, to, transition: taken?.id ?? via };
 }
 
 /** Display name of a state value, including the error state. */
