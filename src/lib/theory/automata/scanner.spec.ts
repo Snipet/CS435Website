@@ -138,6 +138,27 @@ describe('scan (Lexical Analysis II loop)', () => {
 		expect(scan([], 'x').stuck).toBe(0);
 	});
 
+	it('stops before a step once maxReads symbols have been read', () => {
+		// 'a'* 'b' stays viable to the end of "aaaa", so every step reads the rest.
+		const ab: TokenRule[] = [
+			{ name: 'AB', regex: cat(star(sym('a')), sym('b')) },
+			{ name: 'A', regex: sym('a') }
+		];
+		const full = scan(ab, 'aaaa');
+		expect(full.steps.map((s) => s.maxLen)).toEqual([4, 3, 2, 1]);
+		expect('cutoff' in full).toBe(false);
+
+		const cut = scan(ab, 'aaaa', { maxReads: 5 });
+		expect(cut.steps).toEqual(full.steps.slice(0, 2));
+		expect(cut.tokens).toEqual(full.tokens.slice(0, 2));
+		expect(cut.stuck).toBeNull();
+		expect(cut.cutoff).toBe(2);
+
+		// A budget that is not reached changes nothing.
+		expect(scan(ab, 'aaaa', { maxReads: 10 })).toEqual(full);
+		expect(scan(ab, 'aaaa', { maxReads: 0 })).toMatchObject({ steps: [], cutoff: 0 });
+	});
+
 	it('reads Σ as any symbol the rules use, or of the given alphabet', () => {
 		const withAny = [integer, { name: 'Other', regex: any() }];
 		expect(pairs(scan(withAny, '1x', { errorRule: true }))).toEqual([

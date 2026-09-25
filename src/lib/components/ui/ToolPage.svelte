@@ -105,6 +105,11 @@
 		padding: 0;
 		list-style: none;
 	}
+	/* Long citations (the Intro decks) shrink with an ellipsis instead of overflowing at 360 px. */
+	.cites li {
+		min-width: 0;
+		max-width: 100%;
+	}
 	.actions {
 		display: flex;
 		flex-wrap: wrap;
