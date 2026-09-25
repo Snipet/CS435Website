@@ -10,6 +10,7 @@
 import {
 	equationLayout,
 	FIGURE_METRICS,
+	minFitWidth,
 	tGeometry,
 	type EquationLayout,
 	type Metrics,
@@ -208,14 +209,30 @@ export interface FigureText {
 	lines: [string, string];
 }
 
+/**
+ * How the figure is arranged: as on the slide, or stacked for a phone so it
+ * does not have to shrink its labels.
+ */
+export type FigureLayout = 'slide' | 'narrow';
+
+export interface FigureArrow {
+	x1: number;
+	y1: number;
+	x2: number;
+	y2: number;
+	/** "Want this": centered above a horizontal arrow, start-anchored beside a vertical one. */
+	label: Point & { anchor: 'middle' | 'start' };
+}
+
 export interface BootstrapFigure {
+	layout: FigureLayout;
 	width: number;
 	height: number;
 	metrics: Metrics;
 	/** "Given machine M" / "and language L": first baseline and line height. */
 	given: FigureText;
 	/** The "Want this" arrow into the goal. */
-	arrow: { x1: number; x2: number; y: number; label: Point };
+	arrow: FigureArrow;
 	goal: { pos: Point; geom: TGeom };
 	/** "But tough" / "directly!", to the right of the goal. */
 	tough: FigureText;
@@ -226,15 +243,32 @@ const LABEL_W = 30;
 const ROW_GAP = 34;
 /** Room between the goal and "But tough directly!" (clears the check mark on the goal's corner). */
 const TOUGH_GAP = 20;
+/** Length of the "Want this" arrow when it points down into the goal (narrow layout). */
+const WANT_DROP = 32;
 /** Size of the figure's prose ("Given machine M…"), in px. */
 export const FIGURE_TEXT_SIZE = 16;
+/** Size of the "Want this" label, in px. */
+export const WANT_LABEL_SIZE = 14;
 /** Average advance of the sans-serif UI font, in em. */
 const SANS_ADVANCE = 0.56;
 
-/** Positions for the whole slide figure; rows line up their "=" and results. */
-export function bootstrapFigure(m: Metrics = FIGURE_METRICS): BootstrapFigure {
+/**
+ * Positions for the whole slide figure; rows line up their "=" and results.
+ *
+ * - `slide`: as on the slide. "Given machine M and language L" and the "Want
+ *   this" arrow lead into the goal from the left, "But tough directly!" is to
+ *   its right, and the rows' results form a column under the goal.
+ * - `narrow`: the prose is above the goal and the arrow points down into it;
+ *   each row's "=" and result go below its pair (see `equationLayout`'s
+ *   `stacked`). The goal, the programs and the results share one column.
+ */
+export function bootstrapFigure(
+	m: Metrics = FIGURE_METRICS,
+	layout: FigureLayout = 'slide'
+): BootstrapFigure {
 	const rows = bootstrapRows();
 	const u = m.unit;
+	const narrow = layout === 'narrow';
 	const built = rows.map((row) => {
 		const geoms = {
 			program: tGeometry(row.program, m),
@@ -244,27 +278,78 @@ export function bootstrapFigure(m: Metrics = FIGURE_METRICS): BootstrapFigure {
 		return {
 			row,
 			geoms,
-			eq: equationLayout(geoms.program, geoms.translator, geoms.result, { snapped: true })
+			eq: equationLayout(geoms.program, geoms.translator, geoms.result, {
+				snapped: true,
+				stacked: narrow
+			})
 		};
 	});
 	const column = Math.max(...built.map((b) => b.eq.result!.x));
+	/** Left edge of the rows: after the row labels, or (narrow) at 0, where "=" gives them a column. */
+	const ox = narrow ? 0 : LABEL_W;
 	const goalGeom = tGeometry(WANT, m);
-	const goalX = LABEL_W + column;
+	const goalX = ox + column;
 	const lines: [string, string] = ['Given machine M', 'and language L'];
 	const toughLines: [string, string] = ['But tough', 'directly!'];
 	const proseW = (l: readonly string[]) =>
 		Math.max(...l.map((s) => s.length * FIGURE_TEXT_SIZE * SANS_ADVANCE));
 	const textW = proseW(lines);
 	const lineHeight = Math.round(FIGURE_TEXT_SIZE * 1.35);
-	/** First baseline of two lines centered on the goal's crossbar. */
-	const proseY = Math.round(u / 2 - lineHeight / 2 + FIGURE_TEXT_SIZE * 0.36);
-	const toughX = goalX + goalGeom.width + TOUGH_GAP;
+	/** First baseline of two lines centered on the goal's crossbar, below the goal's top. */
+	const proseDy = Math.round(u / 2 - lineHeight / 2 + FIGURE_TEXT_SIZE * 0.36);
 
-	let y = 2 * u + ROW_GAP;
-	let right = toughX + proseW(toughLines);
+	let given: FigureText;
+	let arrow: FigureArrow;
+	let goalY: number;
+	if (narrow) {
+		given = { x: 0, y: Math.round(FIGURE_TEXT_SIZE * 0.8), lineHeight, lines };
+		const x = goalX + Math.round(goalGeom.stemX / 2);
+		const y1 = given.y + lineHeight + 9;
+		const y2 = y1 + WANT_DROP;
+		goalY = y2 + 6;
+		arrow = {
+			x1: x,
+			y1,
+			x2: x,
+			y2,
+			label: {
+				x: x + 9,
+				y: Math.round((y1 + y2) / 2 + WANT_LABEL_SIZE * 0.36),
+				anchor: 'start'
+			}
+		};
+	} else {
+		goalY = 0;
+		given = { x: 0, y: proseDy, lineHeight, lines };
+		const y = Math.round(u / 2);
+		arrow = {
+			x1: Math.round(textW + 10),
+			y1: y,
+			x2: goalX - 6,
+			y2: y,
+			label: {
+				x: Math.round((textW + 10 + goalX - 6) / 2),
+				y: Math.round(u / 2 - 7),
+				anchor: 'middle'
+			}
+		};
+	}
+	const tough: FigureText = {
+		x: goalX + goalGeom.width + TOUGH_GAP,
+		y: goalY + proseDy,
+		lineHeight,
+		lines: toughLines
+	};
+	const wantW = 'Want this'.length * WANT_LABEL_SIZE * SANS_ADVANCE;
+
+	let y = goalY + 2 * u + ROW_GAP;
+	let right = Math.max(
+		tough.x + proseW(toughLines),
+		textW,
+		arrow.label.anchor === 'start' ? arrow.label.x + wantW : arrow.label.x + wantW / 2
+	);
 	const figureRows: FigureRow[] = built.map((b) => {
 		const shift = column - b.eq.result!.x;
-		const ox = LABEL_W;
 		const oy = y;
 		const layout: EquationLayout = {
 			program: { x: ox + b.eq.program.x, y: oy + b.eq.program.y },
@@ -286,18 +371,32 @@ export function bootstrapFigure(m: Metrics = FIGURE_METRICS): BootstrapFigure {
 	});
 
 	return {
+		layout,
 		width: Math.ceil(right),
 		height: y - ROW_GAP,
 		metrics: m,
-		given: { x: 0, y: proseY, lineHeight, lines },
-		arrow: {
-			x1: Math.round(textW + 10),
-			x2: goalX - 6,
-			y: Math.round(u / 2),
-			label: { x: Math.round((textW + 10 + goalX - 6) / 2), y: Math.round(u / 2 - 7) }
-		},
-		goal: { pos: { x: goalX, y: 0 }, geom: goalGeom },
-		tough: { x: toughX, y: proseY, lineHeight, lines: toughLines },
+		given,
+		arrow,
+		goal: { pos: { x: goalX, y: goalY }, geom: goalGeom },
+		tough,
 		rows: figureRows
 	};
 }
+
+/** Room the figure's SVG leaves around the drawing (the goal's check mark pokes out above it). */
+export const FIGURE_PAD = { left: 6, top: 16, right: 8, bottom: 8 } as const;
+
+/** Width of the figure's SVG viewBox, in drawing units. */
+export function figureViewWidth(fig: BootstrapFigure): number {
+	return fig.width + FIGURE_PAD.left + FIGURE_PAD.right;
+}
+
+/**
+ * Below this box width (px) the slide layout would draw its T-diagram labels
+ * under `MIN_LABEL_PX`, so the figure switches to the narrow layout.
+ * BootstrapFigure.svelte's container query uses this number.
+ */
+export const FIGURE_NARROW_BELOW = minFitWidth(
+	figureViewWidth(bootstrapFigure()),
+	FIGURE_METRICS.font
+);

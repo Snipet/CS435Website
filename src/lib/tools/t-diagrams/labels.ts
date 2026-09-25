@@ -3,8 +3,10 @@
  * and subscripts (`M_OTHER`, drawn as M with a subscript OTHER).
  *
  * Typing: `'` (or `’`) is a prime and `_` starts a subscript (`M_OTHER` or
- * `M_{OTHER}`). Two names are the same language when their normalized forms
- * match (case matters: `x86` and `X86` are different names).
+ * `M_{OTHER}`). A run of primes is written with one glyph however it was
+ * typed: `L''`, `L′′` and `L″` are all `L″`, and three primes are `L‴`. Two
+ * names are the same language when their normalized forms match (case
+ * matters: `x86` and `X86` are different names).
  */
 
 /** Longest language name a field accepts. */
@@ -23,11 +25,39 @@ export interface LangParts {
 	sub: string;
 }
 
-const PRIME_SPELLINGS = /['’]/g;
+/** How many primes each spelling stands for (`'` and `’` as typed, the rest as drawn). */
+const PRIME_COUNT: Readonly<Record<string, number>> = {
+	"'": 1,
+	'’': 1,
+	'′': 1,
+	'″': 2,
+	'‴': 3,
+	'⁗': 4
+};
+const PRIME_RUN = /['’′″‴⁗]+/g;
+/** Glyphs for one, two and three primes. */
+const PRIME_GLYPH = ['', '′', '″', '‴'];
 
-/** Splits a name into its main part and subscript, with primes as `′`. */
+/** `n` primes in as few glyphs as possible: ′, ″, ‴, then ‴′, ‴″, ‴‴, … */
+export function primeGlyphs(n: number): string {
+	if (n <= 0) return '';
+	return '‴'.repeat(Math.floor(n / 3)) + PRIME_GLYPH[n % 3];
+}
+
+/**
+ * Primes in their canonical spelling: every run of `'`, `’`, `′`, `″`, `‴` or
+ * `⁗` becomes the glyph for its total count (`L''` and `L′′` → `L″`).
+ * Everything else is kept as typed.
+ */
+export function normalizePrimes(text: string): string {
+	return text.replace(PRIME_RUN, (run) =>
+		primeGlyphs([...run].reduce((n, c) => n + (PRIME_COUNT[c] ?? 0), 0))
+	);
+}
+
+/** Splits a name into its main part and subscript, with primes in their canonical spelling. */
 export function parseLang(text: string): LangParts {
-	const t = text.trim().replace(/\s+/g, ' ').replace(PRIME_SPELLINGS, '′');
+	const t = normalizePrimes(text.trim().replace(/\s+/g, ' '));
 	const i = t.indexOf('_');
 	if (i <= 0) return { main: t, sub: '' };
 	const main = t.slice(0, i).trim();
@@ -37,20 +67,25 @@ export function parseLang(text: string): LangParts {
 }
 
 /**
- * The canonical spelling of a name: primes as `′`, single spaces, and the
- * subscript as `_SUB`. Used to compare languages and to print them in text.
+ * The canonical spelling of a name: primes as `′`, `″` or `‴`, single spaces,
+ * and the subscript as `_SUB`. Used to compare languages and to print them in
+ * text.
  */
 export function normalizeLang(text: string): string {
 	const { main, sub } = parseLang(text);
 	return sub ? `${main}_${sub}` : main;
 }
 
-/** Only the prime spellings replaced, so a field keeps what was typed otherwise. */
-export function normalizePrimes(text: string): string {
-	return text.replace(PRIME_SPELLINGS, '′');
-}
-
 const glyphs = (s: string) => [...s].length;
+
+/**
+ * Width of a name field, in characters: what it holds (or its placeholder
+ * when empty), at least one. Browsers without `field-sizing: content` size
+ * the field from this.
+ */
+export function fieldChars(value: string, placeholder = ''): number {
+	return Math.max(1, glyphs(value || placeholder));
+}
 
 /** Width of a name drawn in the monospace font at `fontSize` px (subscript included). */
 export function labelWidth(text: string, fontSize: number): number {

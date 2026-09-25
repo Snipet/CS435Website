@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+	fieldChars,
 	labelWidth,
 	MONO_ADVANCE,
 	normalizeLang,
 	normalizePrimes,
 	parseLang,
+	primeGlyphs,
 	spokenLang,
 	SUB_SCALE
 } from './labels';
@@ -14,6 +16,13 @@ describe('parseLang', () => {
 		expect(parseLang("L'")).toEqual({ main: 'L′', sub: '' });
 		expect(parseLang('M’')).toEqual({ main: 'M′', sub: '' });
 		expect(parseLang('L′')).toEqual({ main: 'L′', sub: '' });
+	});
+
+	it('writes a run of primes as one glyph', () => {
+		expect(parseLang("L''")).toEqual({ main: 'L″', sub: '' });
+		expect(parseLang('L′′')).toEqual({ main: 'L″', sub: '' });
+		expect(parseLang("L'''")).toEqual({ main: 'L‴', sub: '' });
+		expect(parseLang("M''_x")).toEqual({ main: 'M″', sub: 'x' });
 	});
 
 	it('splits a subscript at the first underscore (slide 4: M_OTHER, M_NATIVE)', () => {
@@ -46,6 +55,17 @@ describe('normalizeLang', () => {
 	it('is case-sensitive', () => {
 		expect(normalizeLang('x86')).not.toBe(normalizeLang('X86'));
 	});
+
+	it('spells every run of primes the same way', () => {
+		for (const s of ["L''", 'L′′', 'L″', "L'′", 'L’’', "L’'"])
+			expect(normalizeLang(s), s).toBe('L″');
+		for (const s of ["L'''", 'L′′′', 'L‴', "L″'", "L'″", 'L′″']) {
+			expect(normalizeLang(s), s).toBe('L‴');
+		}
+		expect(normalizeLang("L''")).not.toBe(normalizeLang("L'"));
+		expect(normalizeLang("L''")).not.toBe(normalizeLang("L'''"));
+		expect(normalizeLang("M''_{x'}")).toBe('M″_x′');
+	});
 });
 
 describe('normalizePrimes', () => {
@@ -53,12 +73,53 @@ describe('normalizePrimes', () => {
 		expect(normalizePrimes("  L' ")).toBe('  L′ ');
 		expect(normalizePrimes('M_{OTHER}')).toBe('M_{OTHER}');
 	});
+
+	it("merges a run of primes into one glyph (L'' → L″, not L′′)", () => {
+		expect(normalizePrimes("L'")).toBe('L′');
+		expect(normalizePrimes("L''")).toBe('L″');
+		expect(normalizePrimes("L'''")).toBe('L‴');
+		expect(normalizePrimes('L′′')).toBe('L″');
+		expect(normalizePrimes('L′′′')).toBe('L‴');
+		expect(normalizePrimes("L″'")).toBe('L‴');
+		expect(normalizePrimes('L⁗')).toBe('L‴′');
+		expect(normalizePrimes("L''''")).toBe('L‴′');
+	});
+
+	it('keeps separate runs apart and is idempotent', () => {
+		expect(normalizePrimes("L' M''")).toBe('L′ M″');
+		expect(normalizePrimes("x'y''")).toBe('x′y″');
+		for (const s of ["L''", "L'''", 'L′′', "L' M''", "L''''''"]) {
+			expect(normalizePrimes(normalizePrimes(s)), s).toBe(normalizePrimes(s));
+		}
+	});
+});
+
+describe('primeGlyphs', () => {
+	it('uses ′, ″ and ‴, then repeats ‴', () => {
+		expect([0, 1, 2, 3, 4, 5, 6].map(primeGlyphs)).toEqual(['', '′', '″', '‴', '‴′', '‴″', '‴‴']);
+	});
+});
+
+describe('fieldChars', () => {
+	it('counts the characters a name field holds', () => {
+		expect(fieldChars('M_NATIVE')).toBe(8);
+		expect(fieldChars('L′')).toBe(2);
+		expect(fieldChars('M_{NATIVE}')).toBe(10);
+	});
+
+	it('falls back to the placeholder, and to one character', () => {
+		expect(fieldChars('', 'L′')).toBe(2);
+		expect(fieldChars('')).toBe(1);
+		expect(fieldChars('', '')).toBe(1);
+	});
 });
 
 describe('labelWidth', () => {
 	it('measures monospace glyphs, subscripts at their smaller size', () => {
 		expect(labelWidth('L', 10)).toBeCloseTo(MONO_ADVANCE * 10);
 		expect(labelWidth('L′', 10)).toBeCloseTo(2 * MONO_ADVANCE * 10);
+		expect(labelWidth("L''", 10)).toBeCloseTo(labelWidth('L″', 10));
+		expect(labelWidth("L''", 10)).toBeCloseTo(2 * MONO_ADVANCE * 10);
 		expect(labelWidth('M_OTHER', 10)).toBeCloseTo(MONO_ADVANCE * 10 * (1 + SUB_SCALE * 5));
 		expect(labelWidth('', 10)).toBe(0);
 	});
