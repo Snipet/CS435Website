@@ -19,13 +19,12 @@
 		type RowId,
 		type View
 	} from './groupings';
-	import { phaseNotes } from './notes';
+	import { capList, phaseNotes, slideFootnoteIndex } from './notes';
 	import type { Compilation, PhaseId } from './pipeline';
 	import QuadTable from './QuadTable.svelte';
 	import { tokenName, type TokenKind } from './scanner';
 	import TreeView from './TreeView.svelte';
 	import { annotatedForest, astForest, countNodes, parseDiagram, type DisplayNode } from './trees';
-	import { formatInstr } from './vax';
 
 	interface Props {
 		compilation: Compilation;
@@ -142,10 +141,8 @@
 	const annotated = $derived(c.semantic ? annotatedForest(c.semantic.stmts) : []);
 	const diagram = $derived(program ? parseDiagram(program) : []);
 
-	/** The note under the code generator's output, as the slide's example needs it. */
-	const cvtIndex = $derived(
-		c.code?.findIndex((i) => formatInstr(i) === 'CVTLF B1,r2' && i.kind === 'op') ?? -1
-	);
+	/** The note under the code generator's output, for the slide's own code only. */
+	const cvtIndex = $derived(slideFootnoteIndex(c.code));
 	const codeMarks = $derived(new Map(cvtIndex >= 0 ? [[cvtIndex, '*']] : []));
 	const showFootnote = $derived(cvtIndex >= 0);
 
@@ -202,18 +199,23 @@
 	{/if}
 {/snippet}
 
+{#snippet more(n: number, what: string)}
+	{#if n > 0}<li class="more">and {n} more {what}</li>{/if}
+{/snippet}
+
 {#snippet errors(phase: PhaseId)}
-	{@const list = c.diagnostics.filter(
-		(d) =>
-			d.severity === 'error' &&
-			((phase === 'scanner' && c.scan.diagnostics.includes(d)) ||
-				(phase === 'parser' && (c.parse?.diagnostics.includes(d) ?? false)) ||
-				(phase === 'semantic' && (c.semantic?.diagnostics.includes(d) ?? false)))
-	)}
+	{@const source =
+		phase === 'scanner'
+			? c.scan.diagnostics
+			: phase === 'parser'
+				? (c.parse?.diagnostics ?? [])
+				: (c.semantic?.diagnostics ?? [])}
+	{@const list = capList(source.filter((d) => d.severity === 'error'))}
 	<ul class="errors">
-		{#each list as d, i (i)}
+		{#each list.shown as d, i (i)}
 			<li><Icon name="error" size={15} label="Error" /> {d.message}</li>
 		{/each}
+		{@render more(list.more, list.more === 1 ? 'error' : 'errors')}
 		{#if phase === 'semantic' && c.declarations.hasErrors}
 			<li>
 				<Icon name="error" size={15} label="Error" /> The declarations table has a problem; see the marked
@@ -225,8 +227,10 @@
 
 {#snippet noteList(phase: PhaseId)}
 	{#if notes[phase]?.length}
+		{@const list = capList(notes[phase] ?? [])}
 		<ul class="notes">
-			{#each notes[phase] ?? [] as n, i (i)}<li>{n}</li>{/each}
+			{#each list.shown as n, i (i)}<li>{n}</li>{/each}
+			{@render more(list.more, list.more === 1 ? 'note' : 'notes')}
 		</ul>
 	{/if}
 {/snippet}
@@ -308,8 +312,9 @@
 		{@render noteList('semantic')}
 	{:else if id === 'semantics'}
 		{#if c.semantic}
+			{@const list = capList(c.semantic.checks)}
 			<ul class="checks">
-				{#each c.semantic.checks as check, i (i)}
+				{#each list.shown as check, i (i)}
 					<li class={{ bad: !check.ok }}>
 						<Icon
 							name={check.ok ? 'check' : 'error'}
@@ -319,6 +324,7 @@
 						<span>{check.text}</span>
 					</li>
 				{/each}
+				{@render more(list.more, list.more === 1 ? 'check' : 'checks')}
 			</ul>
 			{#if c.semantic.checks.length === 0}<p class="muted">Nothing to check.</p>{/if}
 		{/if}
@@ -617,7 +623,7 @@
 		font-size: var(--text-xs);
 		line-height: 1.5;
 	}
-	.notes li::before {
+	.notes li:not(.more)::before {
 		content: '';
 		position: absolute;
 		left: 2px;
@@ -627,8 +633,18 @@
 		border-radius: 50%;
 		background: var(--border-strong);
 	}
-	.errors li,
-	.checks li {
+	.more {
+		color: var(--text-3);
+		font-size: var(--text-xs);
+		font-style: italic;
+	}
+	/* Under the text of the items, past their icons. */
+	.errors .more,
+	.checks .more {
+		padding-left: 21px;
+	}
+	.errors li:not(.more),
+	.checks li:not(.more) {
 		display: flex;
 		align-items: flex-start;
 		gap: 6px;

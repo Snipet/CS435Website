@@ -185,21 +185,31 @@ function defs(i: Instr): string[] {
 	return i.args.slice(1, 2).filter(isRegister);
 }
 
-/** Registers live after each instruction (backward dataflow over the branches). */
+const NONE: ReadonlySet<string> = new Set();
+
+/**
+ * Registers live after each instruction (backward dataflow over the branches).
+ * The generated code only branches forward, and then one backward sweep is
+ * exact; code with a backward branch is swept until nothing changes.
+ */
 export function liveAfter(code: readonly Instr[]): Set<string>[] {
 	const labelAt = new Map<string, number>();
 	code.forEach((i, k) => {
 		if (i.kind === 'label') labelAt.set(i.label, k);
 	});
+	let backward = false;
 	const succ = code.map((i, k) => {
 		const next = k + 1 < code.length ? [k + 1] : [];
 		if (i.kind !== 'op' || !BRANCHES.has(i.op)) return next;
 		const target = labelAt.get(i.args[0]);
+		if (target !== undefined && target <= k) backward = true;
 		const jump = target === undefined ? [] : [target];
 		return i.op === 'BRB' ? jump : [...next, ...jump];
 	});
-	const liveIn = code.map(() => new Set<string>());
-	const liveOut = code.map(() => new Set<string>());
+	const used = code.map(uses);
+	const defined = code.map(defs);
+	const liveIn: ReadonlySet<string>[] = code.map(() => NONE);
+	const liveOut: Set<string>[] = code.map(() => new Set<string>());
 	let changed = true;
 	while (changed) {
 		changed = false;
@@ -207,12 +217,13 @@ export function liveAfter(code: readonly Instr[]): Set<string>[] {
 			const out = new Set<string>();
 			for (const s of succ[k]) for (const r of liveIn[s]) out.add(r);
 			const inn = new Set(out);
-			for (const r of defs(code[k])) inn.delete(r);
-			for (const r of uses(code[k])) inn.add(r);
+			for (const r of defined[k]) inn.delete(r);
+			for (const r of used[k]) inn.add(r);
 			if (inn.size !== liveIn[k].size || out.size !== liveOut[k].size) changed = true;
 			liveIn[k] = inn;
 			liveOut[k] = out;
 		}
+		if (!backward) break;
 	}
 	return liveOut;
 }
@@ -225,15 +236,45 @@ export function liveAfter(code: readonly Instr[]): Set<string>[] {
  * - jump: drop a branch to the instruction right after it.
  */
 export function peephole(input: readonly Instr[]): PeepholeOutput {
-	const code = input.map((i) => (i.kind === 'op' ? { ...i, args: [...i.args] } : { ...i }));
-	const rewritten = code.map(() => false);
+	// A doubly linked list, so a rewrite takes constant time.
+	interface Node {
+		instr: Instr;
+		rewritten: boolean;
+		prev: Node | null;
+		next: Node | null;
+	}
+	let head: Node | null = null;
+	let tail: Node | null = null;
+	for (const i of input) {
+		const n: Node = {
+			instr: i.kind === 'op' ? { ...i, args: [...i.args] } : { ...i },
+			rewritten: false,
+			prev: tail,
+			next: null
+		};
+		if (tail) tail.next = n;
+		else head = n;
+		tail = n;
+	}
+	const remove = (n: Node) => {
+		if (n.prev) n.prev.next = n.next;
+		else head = n.next;
+		if (n.next) n.next.prev = n.prev;
+		else tail = n.prev;
+	};
+	const nodes = (): Node[] => {
+		const out: Node[] = [];
+		for (let n = head; n; n = n.next) out.push(n);
+		return out;
+	};
+
 	const rewrites: Rewrite[] = [];
 	// Registers live after each instruction, computed once per pass. A rewrite
 	// only shortens live ranges before it, so the table stays safe to use.
 	let live = new Map<Instr, Set<string>>();
 
-	const tryAt = (k: number): boolean => {
-		const a = code[k];
+	const tryAt = (n: Node): boolean => {
+		const a = n.instr;
 		if (a.kind !== 'op') return false;
 
 		if ((a.op === 'MOVL' || a.op === 'MOVF') && a.args[0] === a.args[1]) {
@@ -243,32 +284,29 @@ export function peephole(input: readonly Instr[]): PeepholeOutput {
 				after: [],
 				reason: `it moves ${a.args[0]} to itself`
 			});
-			code.splice(k, 1);
-			rewritten.splice(k, 1);
+			remove(n);
 			return true;
 		}
 
 		if (BRANCHES.has(a.op)) {
-			for (let j = k + 1; j < code.length; j++) {
-				const next = code[j];
-				if (next.kind !== 'label') break;
-				if (next.label === a.args[0]) {
+			for (let m = n.next; m && m.instr.kind === 'label'; m = m.next) {
+				if (m.instr.label === a.args[0]) {
 					rewrites.push({
 						rule: 'jump',
 						before: [formatInstr(a)],
 						after: [],
 						reason: `${a.args[0]} is the next instruction`
 					});
-					code.splice(k, 1);
-					rewritten.splice(k, 1);
+					remove(n);
 					return true;
 				}
 			}
 			return false;
 		}
 
-		const b = code[k + 1];
-		if ((a.op !== 'MOVL' && a.op !== 'MOVF') || !b || b.kind !== 'op') return false;
+		const next = n.next;
+		const b = next?.instr;
+		if ((a.op !== 'MOVL' && a.op !== 'MOVF') || !next || !b || b.kind !== 'op') return false;
 		const [src, reg] = a.args;
 		if (!isRegister(reg) || src === reg) return false;
 		if (b.args.filter((x) => x === reg).length !== 1) return false;
@@ -277,7 +315,7 @@ export function peephole(input: readonly Instr[]): PeepholeOutput {
 		if (live.get(b)?.has(reg) ?? true) return false;
 		const folded: Instr = op(
 			b.op,
-			b.args.map((x, n) => (n === at.index ? src : x))
+			b.args.map((x, k) => (k === at.index ? src : x))
 		);
 		live.set(folded, live.get(b)!);
 		rewrites.push({
@@ -286,22 +324,32 @@ export function peephole(input: readonly Instr[]): PeepholeOutput {
 			after: [formatInstr(folded)],
 			reason: `${reg} is not used afterwards`
 		});
-		code.splice(k, 2, folded);
-		rewritten.splice(k, 2, true);
+		n.instr = folded;
+		n.rewritten = true;
+		remove(next);
 		return true;
 	};
 
 	let changed = true;
 	while (changed) {
 		changed = false;
+		const code = nodes().map((n) => n.instr);
 		const after = liveAfter(code);
 		live = new Map(code.map((i, k) => [i, after[k]]));
-		for (let k = 0; k < code.length; k++) {
-			if (tryAt(k)) {
+		for (let n = head; n;) {
+			const before: Node | null = n.prev;
+			if (tryAt(n)) {
 				changed = true;
-				k = Math.max(-1, k - 2);
-			}
+				// Look again from the instruction before the rewrite: a rewrite can
+				// make a window that ends there.
+				n = before ?? head;
+			} else n = n.next;
 		}
 	}
-	return { code, rewritten, rewrites };
+	const final = nodes();
+	return {
+		code: final.map((n) => n.instr),
+		rewritten: final.map((n) => n.rewritten),
+		rewrites
+	};
 }

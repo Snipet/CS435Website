@@ -11,7 +11,14 @@
  * instruction).
  */
 import type { BinOp, RelOp } from './parser';
-import { formatConstant, type DeclInfo, type TExpr, type TStmt, type Type } from './semantic';
+import {
+	formatConstant,
+	inIntRange,
+	type DeclInfo,
+	type TExpr,
+	type TStmt,
+	type Type
+} from './semantic';
 
 export type QuadOp = BinOp | RelOp | 'int2fp' | ':=' | 'if_false' | 'goto' | 'label';
 
@@ -108,7 +115,8 @@ export interface OptimizedQuad extends Quad {
 }
 
 export interface Change {
-	kind: 'propagate' | 'fold' | 'copy';
+	/** `keep`: an operation on constants that is not folded. */
+	kind: 'propagate' | 'fold' | 'keep' | 'copy';
 	text: string;
 }
 
@@ -120,7 +128,8 @@ export interface OptimizeOutput {
 /** Value of an immediate operand, `#2.3` → 2.3. */
 const immediateValue = (a: string) => Number(a.slice(1));
 
-function fold(op: QuadOp, x: number, y: number, type: Type): number | null {
+/** The value of `x op y`, or why it is not computed at compile time. */
+function fold(op: QuadOp, x: number, y: number, type: Type): number | { keep: string } | null {
 	let v: number;
 	switch (op) {
 		case '+':
@@ -133,13 +142,15 @@ function fold(op: QuadOp, x: number, y: number, type: Type): number | null {
 			v = x * y;
 			break;
 		case '/':
-			if (y === 0) return null;
+			if (y === 0) return { keep: 'division by zero' };
 			v = type === 'int' ? Math.trunc(x / y) : x / y;
 			break;
 		default:
 			return null;
 	}
-	if (!Number.isFinite(v) || (type === 'int' && !Number.isSafeInteger(v))) return null;
+	if (type === 'int' && !inIntRange(v))
+		return { keep: 'the result does not fit in an int (32 bits)' };
+	if (!Number.isFinite(v)) return { keep: 'the result is too large for a float' };
 	return v;
 }
 
@@ -189,7 +200,7 @@ export function optimizeTac(
 			}
 			if (isArith(out.op) && isImmediate(out.arg1) && isImmediate(out.arg2)) {
 				const v = fold(out.op, immediateValue(out.arg1), immediateValue(out.arg2), out.type);
-				if (v !== null) {
+				if (typeof v === 'number') {
 					const value = `#${formatConstant(v, out.type)}`;
 					known.set(out.result, value);
 					changes.push({
@@ -198,6 +209,11 @@ export function optimizeTac(
 					});
 					continue;
 				}
+				if (v)
+					changes.push({
+						kind: 'keep',
+						text: `${out.arg1} ${out.op} ${out.arg2} is not folded: ${v.keep}.`
+					});
 			}
 		}
 		pass.push(out);

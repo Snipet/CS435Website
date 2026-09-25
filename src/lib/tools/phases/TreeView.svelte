@@ -1,9 +1,12 @@
 <!--
-	A small tree or forest drawn as SVG at its natural size; a wide tree scrolls
-	inside its own box. `orientation="up"` puts the root at the bottom and
-	`alignLeaves` puts every leaf in the top row (a sentence diagram).
+	A small tree or forest drawn as SVG at its natural size. A tree wider than
+	its box shrinks to fit, down to MIN_SCALE; a still wider one scrolls inside
+	its box, which then takes keyboard focus. `orientation="up"` puts the root
+	at the bottom and `alignLeaves` puts every leaf in the top row (a sentence
+	diagram).
 -->
 <script lang="ts">
+	import { scrollRegion } from './scroll-region';
 	import { layoutTree } from './tree-layout';
 	import { treeText, type DisplayNode } from './trees';
 
@@ -20,6 +23,8 @@
 	const layout = $derived(layoutTree(roots, { orientation, alignLeaves }));
 	const text = $derived(`${label}: ${roots.map(treeText).join('; ')}`);
 	const BOXED = new Set(['node', 'convert', 'error']);
+	/** Smallest scale a tree is drawn at (13 px labels become about 10 px). */
+	const MIN_SCALE = 0.75;
 
 	/** Where an edge meets a node: its top or bottom edge. */
 	function end(i: number, towardsBelow: boolean) {
@@ -28,11 +33,12 @@
 	}
 </script>
 
-<div class="tree-scroll">
+<div class="tree-scroll" {@attach scrollRegion(label)}>
 	<svg
 		class="tree"
 		width={layout.width}
 		height={layout.height}
+		style:min-width="{Math.ceil(layout.width * MIN_SCALE)}px"
 		viewBox="0 0 {layout.width} {layout.height}"
 		role="img"
 		aria-label={text}
@@ -65,6 +71,8 @@
 	}
 	.tree {
 		display: block;
+		max-width: 100%;
+		height: auto;
 		overflow: visible;
 	}
 	.edges line {

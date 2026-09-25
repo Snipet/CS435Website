@@ -228,6 +228,41 @@ describe('other programs', () => {
 	});
 });
 
+describe('constants that do not fit', () => {
+	const ints: Decl[] = [
+		{ name: 'x', type: 'int', value: '' },
+		{ name: 'F', type: 'float', value: '' },
+		{ name: 'E', type: 'float', value: '1000000000000000000000' }
+	];
+
+	it('folds an int operation only when the result fits in 32 bits', () => {
+		expect(phases('x = 2147483646 + 1;', ints).optimized).toEqual([':= #2147483647 _ x']);
+		const p = phases('x = 2147483647 + 1;', ints);
+		expect(p.optimized).toEqual(['+ #2147483647 #1 x']);
+		expect(p.c.optimized!.changes[0]).toEqual({
+			kind: 'keep',
+			text: '#2147483647 + #1 is not folded: the result does not fit in an int (32 bits).'
+		});
+		expect(phases('x = 65536 * 65536;', ints).optimized).toEqual(['* #65536 #65536 x']);
+		expect(phases('x = 0 - 2147483647 - 1;', ints).optimized).toEqual([':= #-2147483648 _ x']);
+	});
+
+	it('does not fold a division by zero', () => {
+		const p = phases('x = 1 / 0;', ints);
+		expect(p.optimized).toEqual(['/ #1 #0 x']);
+		expect(p.c.optimized!.changes.map((c) => c.text)).toEqual([
+			'#1 / #0 is not folded: division by zero.',
+			't1 removed: / writes x directly instead of copying t1 to it.'
+		]);
+	});
+
+	it('writes a large float constant without an exponent', () => {
+		const p = phases('F = E;', ints);
+		expect(p.optimized).toEqual([':= #1000000000000000000000.0 _ F']);
+		expect(p.peephole).toEqual(['MOVF #1000000000000000000000.0,F']);
+	});
+});
+
 describe('optimizeTac', () => {
 	it('removes a copy only right after the quad that computes the temporary', () => {
 		const quads: Quad[] = [
@@ -276,6 +311,38 @@ describe('peephole rules', () => {
 		];
 		expect(liveAfter(code)[1].has('r1')).toBe(true);
 		expect(run(code)).toEqual(code.map(formatInstr));
+	});
+
+	it('follows a branch back to an earlier label', () => {
+		const code: Instr[] = [
+			{ kind: 'label', label: 'L1' },
+			op('MOVL', ['r1', 'a']),
+			op('MOVL', ['#2', 'r1']),
+			op('ADDL2', ['r1', 'r2']),
+			op('BNEQ', ['L1']),
+			op('MOVL', ['r2', 'b'])
+		];
+		const live = liveAfter(code);
+		// r1 is read again after the branch back to L1.
+		expect(live[3].has('r1')).toBe(true);
+		expect(live[4].has('r1')).toBe(true);
+		expect(live[5].size).toBe(0);
+		expect(run(code)).toEqual(code.map(formatInstr));
+	});
+
+	it('rewrites long code in one pass over it', () => {
+		const code: Instr[] = [op('MOVL', ['a', 'r2'])];
+		for (let k = 0; k < 2000; k++) code.push(op('MOVL', ['b', 'r1']), op('ADDL2', ['r1', 'r2']));
+		code.push(op('MOVL', ['r2', 'x']));
+		const out = peephole(code);
+		expect(out.code).toHaveLength(2002);
+		expect(out.code.slice(0, 3).map(formatInstr)).toEqual([
+			'MOVL a,r2',
+			'ADDL2 b,r2',
+			'ADDL2 b,r2'
+		]);
+		expect(out.rewritten.filter(Boolean)).toHaveLength(2000);
+		expect(out.rewrites).toHaveLength(2000);
 	});
 });
 

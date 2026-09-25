@@ -224,15 +224,44 @@ export function parse(tokens: readonly Token[], sourceLength: number): ParseOutp
 
 const PREC: Record<BinOp, number> = { '+': 1, '-': 1, '*': 2, '/': 2 };
 
+/** `text` of an operand of `op`, in parentheses when the operand needs them. */
+function operand(e: Expr, op: BinOp, right: boolean, text: string): string {
+	if (e.kind !== 'bin') return text;
+	const inner = PREC[e.op];
+	const outer = PREC[op];
+	return inner < outer || (inner === outer && right) ? `(${text})` : text;
+}
+
 /**
  * Source-like text of an expression with the parentheses it needs (a - (b - c)
  * keeps them; (a * b) + c drops them).
  */
-export function exprText(e: Expr, parent?: { prec: number; right: boolean }): string {
+export function exprText(e: Expr): string {
 	if (e.kind === 'id') return e.name;
 	if (e.kind === 'num') return e.text;
-	const prec = PREC[e.op];
-	const text = `${exprText(e.left, { prec, right: false })} ${e.op} ${exprText(e.right, { prec, right: true })}`;
-	const wrap = parent && (prec < parent.prec || (prec === parent.prec && parent.right));
-	return wrap ? `(${text})` : text;
+	return binaryText(e, exprText(e.left), exprText(e.right), Infinity);
+}
+
+/** Longest expression text in messages; longer text is cut off with '…'. */
+export const MAX_TEXT = 40;
+
+export function clipText(text: string, max = MAX_TEXT): string {
+	return text.length <= max ? text : `${text.slice(0, max - 1).trimEnd()}…`;
+}
+
+/**
+ * Text of a binary expression from the texts of its operands, cut off at
+ * `max` characters. The work per node is bounded, so building the text of
+ * every node bottom-up takes linear time.
+ */
+export function binaryText(
+	e: Extract<Expr, { kind: 'bin' }>,
+	left: string,
+	right: string,
+	max = MAX_TEXT
+): string {
+	return clipText(
+		`${operand(e.left, e.op, false, left)} ${e.op} ${operand(e.right, e.op, true, right)}`,
+		max
+	);
 }

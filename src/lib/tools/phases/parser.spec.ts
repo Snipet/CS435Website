@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { exprText, MAX_NESTING, parse, type Expr, type Program, type Stmt } from './parser';
+import {
+	binaryText,
+	clipText,
+	exprText,
+	MAX_NESTING,
+	MAX_TEXT,
+	parse,
+	type Expr,
+	type Program,
+	type Stmt
+} from './parser';
 import { scan } from './scanner';
 
 function program(source: string): Program {
@@ -106,5 +116,28 @@ describe('exprText', () => {
 		expect(text('(a * b) + c')).toBe('a * b + c');
 		expect(text('a - (b - c)')).toBe('a - (b - c)');
 		expect(text('(a + b) * c')).toBe('(a + b) * c');
+	});
+});
+
+describe('binaryText', () => {
+	const value = (s: string) => {
+		const st = program(`x = ${s};`).stmts[0];
+		if (st.kind !== 'assign' || st.value.kind !== 'bin') throw new Error('shape');
+		return st.value;
+	};
+
+	it('puts the operand texts together with the parentheses the tree needs', () => {
+		expect(binaryText(value('a - (b - c)'), 'a', 'b - c')).toBe('a - (b - c)');
+		expect(binaryText(value('(a * b) + c'), 'a * b', 'c')).toBe('a * b + c');
+		expect(binaryText(value('(a + b) * c'), 'a + b', 'c')).toBe('(a + b) * c');
+	});
+
+	it('cuts long text off at MAX_TEXT characters', () => {
+		const long = 'a + '.repeat(30) + 'a';
+		const text = binaryText(value('(a + b) * c'), long, 'c');
+		expect(text.length).toBeLessThanOrEqual(MAX_TEXT);
+		expect(text.startsWith('(a + a + a')).toBe(true);
+		expect(text.endsWith('…')).toBe(true);
+		expect(clipText('short')).toBe('short');
 	});
 });

@@ -3,14 +3,42 @@
  */
 import type { Compilation, PhaseId } from './pipeline';
 import { isTemp } from './tac';
+import { formatInstr, type Instr } from './vax';
 
 export type PhaseNotes = Partial<Record<PhaseId, string[]>>;
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** `t1, t2 and t3`; a long list keeps its first three items and its last: `t1, t2, t3, …, t40`. */
 function list(items: string[]): string {
 	if (items.length <= 1) return items.join('');
+	if (items.length > 6) return `${items.slice(0, 3).join(', ')}, …, ${items[items.length - 1]}`;
 	return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** Most items a list under a phase shows; the rest are counted. */
+export const MAX_LISTED = 20;
+
+/** The first `max` items and how many are left out. */
+export function capList<T>(items: readonly T[], max = MAX_LISTED): { shown: T[]; more: number } {
+	return { shown: items.slice(0, max), more: Math.max(0, items.length - max) };
+}
+
+/** The code generator's output on Intro (cont'd), compiler architecture, slide 4. */
+export const SLIDE_4_CODE: readonly string[] = [
+	'CVTLF B1,r2',
+	'MOVF #2.3,r1',
+	'ADDF2 r1,r2',
+	'MOVF r2,A'
+];
+
+/**
+ * The instruction the slide's footnote is about (CVTLF B1,r2), or -1 unless
+ * the code is exactly the slide's.
+ */
+export function slideFootnoteIndex(code: readonly Instr[] | null): number {
+	if (!code || code.length !== SLIDE_4_CODE.length) return -1;
+	return code.every((i, k) => formatInstr(i) === SLIDE_4_CODE[k]) ? 0 : -1;
 }
 
 export function phaseNotes(c: Compilation): PhaseNotes {

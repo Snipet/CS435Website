@@ -4,6 +4,7 @@
 	rewrote are highlighted.
 -->
 <script lang="ts">
+	import { scrollRegion } from './scroll-region';
 	import type { Quad, QuadField } from './tac';
 
 	interface Props {
@@ -20,7 +21,7 @@
 {#if quads.length === 0}
 	<p class="empty">No quads.</p>
 {:else}
-	<div class="scroll">
+	<div class="scroll" {@attach scrollRegion(caption)}>
 		<table class="quads">
 			<caption class="visually-hidden">{caption}</caption>
 			<thead>

@@ -5,12 +5,21 @@
  * Types are int and float. An operation with a float operand is a float
  * operation, and its int operands are wrapped in `int2fp` (Intro (cont'd),
  * slide 4: "B1 is int, A and C are floats"). Errors: an undeclared
- * identifier, a float value assigned to an int variable, and an assignment to
- * a declared constant.
+ * identifier (or one named like a temporary, label, or register), an int
+ * literal that does not fit in 32 bits, a float value assigned to an int
+ * variable, and an assignment to a declared constant.
  */
 import type { Diagnostic } from '$lib/theory/diagnostics';
 import type { Span } from '$lib/theory/regex/ast';
-import { exprText, type BinOp, type Expr, type Program, type RelOp, type Stmt } from './parser';
+import {
+	binaryText,
+	clipText,
+	type BinOp,
+	type Expr,
+	type Program,
+	type RelOp,
+	type Stmt
+} from './parser';
 
 export type Type = 'int' | 'float';
 
@@ -46,6 +55,11 @@ const INT = /^[+-]?\d+$/;
 const FLOAT = /^[+-]?(\d+(\.\d*)?|\.\d+)$/;
 const KEYWORDS = new Set(['if', 'then', 'else']);
 
+/** An int is a 32-bit longword (MOVL, ADDL2, …). */
+export const INT_MIN = -(2 ** 31);
+export const INT_MAX = 2 ** 31 - 1;
+export const inIntRange = (v: number) => Number.isInteger(v) && v >= INT_MIN && v <= INT_MAX;
+
 /** Names the later phases generate: temporaries, labels, and registers. */
 export function reservedFor(name: string): string | null {
 	if (/^t\d+$/.test(name)) return 'temporaries';
@@ -74,9 +88,12 @@ export function checkDeclarations(decls: readonly Decl[]): DeclCheck {
 		else if (table.has(name)) p.name = `${name} is already declared`;
 		let constant: number | null = null;
 		if (value !== '') {
+			const v = Number(value);
 			if (d.type === 'int' && !INT.test(value)) p.value = 'An int constant is a whole number';
+			else if (d.type === 'int' && !inIntRange(v)) p.value = 'Out of range for an int (32 bits)';
 			else if (d.type === 'float' && !FLOAT.test(value)) p.value = 'Not a number';
-			else constant = Number(value);
+			else if (d.type === 'float' && !Number.isFinite(v)) p.value = 'Too large for a float';
+			else constant = v;
 		}
 		if (p.name || p.value) hasErrors = true;
 		if (!p.name) table.set(name, { name, type: d.type, constant });
@@ -85,11 +102,26 @@ export function checkDeclarations(decls: readonly Decl[]): DeclCheck {
 	return { table, problems, hasErrors };
 }
 
-/** Text of a constant as an immediate operand: `#2.3`, `#2`, floats keep a decimal point. */
+/** `1e+21` → `1000000000000000000000`, `1.5e-7` → `0.00000015`; other text is kept. */
+function withoutExponent(text: string): string {
+	const m = /^(-?)(\d+)(?:\.(\d+))?e([+-]\d+)$/.exec(text);
+	if (!m) return text;
+	const [, sign, whole, fraction = '', exponent] = m;
+	const digits = whole + fraction;
+	const point = whole.length + Number(exponent);
+	if (point <= 0) return `${sign}0.${'0'.repeat(-point)}${digits}`;
+	if (point >= digits.length) return `${sign}${digits}${'0'.repeat(point - digits.length)}`;
+	return `${sign}${digits.slice(0, point)}.${digits.slice(point)}`;
+}
+
+/**
+ * Text of a constant as an immediate operand, in the literal syntax of the
+ * source (no exponent): `#2.3`, `#2`; floats keep a decimal point.
+ */
 export function formatConstant(value: number, type: Type): string {
 	if (type === 'int') return String(Math.trunc(value));
-	if (Number.isInteger(value)) return value.toFixed(1);
-	return String(Number(value.toPrecision(12)));
+	const text = withoutExponent(String(Number(value.toPrecision(12))));
+	return text.includes('.') ? text : `${text}.0`;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +139,15 @@ export type TExpr =
 			/** Set when the identifier is not declared. */
 			error?: string;
 	  }
-	| { kind: 'num'; text: string; value: number; type: Type; span: Span }
+	| {
+			kind: 'num';
+			text: string;
+			value: number;
+			type: Type;
+			span: Span;
+			/** Set when an int literal does not fit in 32 bits. */
+			error?: string;
+	  }
 	| { kind: 'bin'; op: BinOp; left: TExpr; right: TExpr; type: Type | null; span: Span }
 	| { kind: 'int2fp'; arg: TExpr; type: 'float'; span: Span };
 
@@ -161,12 +201,23 @@ export function analyze(program: Program, table: ReadonlyMap<string, DeclInfo>):
 			? info.type
 			: `${info.type} constant ${formatConstant(info.constant, info.type)}`;
 
+	/** Why an identifier has no declaration: `not declared`, or a reserved name. */
+	const missing = new Map<string, string>();
+
 	function lookup(name: string, span: Span): DeclInfo | null {
 		const info = table.get(name) ?? null;
 		if (!seen.has(name)) {
 			seen.add(name);
-			if (info) checks.push({ text: `${name} is declared: ${describe(info)}.`, ok: true });
-			else error(`${name} is not declared.`, span);
+			const shown = clipText(name);
+			const reserved = info ? null : reservedFor(name);
+			if (info) checks.push({ text: `${shown} is declared: ${describe(info)}.`, ok: true });
+			else if (reserved) {
+				missing.set(name, 'reserved');
+				error(`${shown} is reserved for ${reserved}; use another name.`, span);
+			} else {
+				missing.set(name, 'not declared');
+				error(`${shown} is not declared.`, span);
+			}
 		}
 		return info;
 	}
@@ -174,40 +225,51 @@ export function analyze(program: Program, table: ReadonlyMap<string, DeclInfo>):
 	const toFloat = (e: TExpr): TExpr =>
 		e.type === 'int' ? { kind: 'int2fp', arg: e, type: 'float', span: e.span } : e;
 
-	function expr(e: Expr): TExpr {
-		if (e.kind === 'num')
-			return {
-				kind: 'num',
-				text: e.text,
-				value: e.value,
-				type: e.float ? 'float' : 'int',
-				span: e.span
-			};
+	/**
+	 * The typed expression and its text for messages. Each node's text is built
+	 * from its operands' (cut off at MAX_TEXT), so the analysis stays linear.
+	 */
+	function expr(e: Expr): { node: TExpr; text: string } {
+		if (e.kind === 'num') {
+			const text = clipText(e.text);
+			const type: Type = e.float ? 'float' : 'int';
+			const node: TExpr = { kind: 'num', text: e.text, value: e.value, type, span: e.span };
+			if (type === 'int' && !inIntRange(e.value)) {
+				node.error = 'out of range';
+				error(`${text} is out of range for an int (32 bits).`, e.span);
+			}
+			return { node, text };
+		}
 		if (e.kind === 'id') {
 			const info = lookup(e.name, e.span);
-			return {
+			const node: TExpr = {
 				kind: 'id',
 				name: e.name,
 				type: info?.type ?? null,
 				constant: info?.constant ?? null,
 				span: e.span,
-				...(info ? {} : { error: 'not declared' })
+				...(info ? {} : { error: missing.get(e.name) ?? 'not declared' })
 			};
+			return { node, text: clipText(e.name) };
 		}
-		let left = expr(e.left);
-		let right = expr(e.right);
+		const l = expr(e.left);
+		const r = expr(e.right);
+		const text = binaryText(e, l.text, r.text);
+		let left = l.node;
+		let right = r.node;
 		if (left.type === null || right.type === null)
-			return { kind: 'bin', op: e.op, left, right, type: null, span: e.span };
-		const text = exprText({ ...e, parens: 0 });
+			return { node: { kind: 'bin', op: e.op, left, right, type: null, span: e.span }, text };
 		if (left.type === right.type) {
 			checks.push({
 				text: `${text}: ${left.type} ${e.op} ${right.type} gives ${left.type}.`,
 				ok: true
 			});
-			return { kind: 'bin', op: e.op, left, right, type: left.type, span: e.span };
+			return {
+				node: { kind: 'bin', op: e.op, left, right, type: left.type, span: e.span },
+				text
+			};
 		}
-		const intSide = left.type === 'int' ? e.left : e.right;
-		const converted = exprText({ ...intSide, parens: 0 });
+		const converted = left.type === 'int' ? l.text : r.text;
 		checks.push({
 			text: `${text}: ${left.type} ${e.op} ${right.type} gives float; ${converted} is converted with int2fp.`,
 			ok: true
@@ -215,23 +277,24 @@ export function analyze(program: Program, table: ReadonlyMap<string, DeclInfo>):
 		conversions.push(`${converted} is int in the float operation ${text}`);
 		left = toFloat(left);
 		right = toFloat(right);
-		return { kind: 'bin', op: e.op, left, right, type: 'float', span: e.span };
+		return { node: { kind: 'bin', op: e.op, left, right, type: 'float', span: e.span }, text };
 	}
 
 	function stmt(s: Stmt): TStmt {
 		if (s.kind === 'if') {
-			let left = expr(s.cond.left);
-			let right = expr(s.cond.right);
+			const l = expr(s.cond.left);
+			const r = expr(s.cond.right);
+			let left = l.node;
+			let right = r.node;
 			let operandType: Type | null = null;
 			if (left.type !== null && right.type !== null) {
-				const text = `${exprText({ ...s.cond.left, parens: 0 })} ${s.cond.op} ${exprText({ ...s.cond.right, parens: 0 })}`;
+				const text = `${l.text} ${s.cond.op} ${r.text}`;
 				if (left.type === right.type) {
 					operandType = left.type;
 					checks.push({ text: `${text} compares ${left.type} with ${right.type}.`, ok: true });
 				} else {
 					operandType = 'float';
-					const intSide = left.type === 'int' ? s.cond.left : s.cond.right;
-					const converted = exprText({ ...intSide, parens: 0 });
+					const converted = left.type === 'int' ? l.text : r.text;
 					checks.push({
 						text: `${text} compares ${left.type} with ${right.type}; ${converted} is converted with int2fp.`,
 						ok: true
@@ -253,16 +316,16 @@ export function analyze(program: Program, table: ReadonlyMap<string, DeclInfo>):
 		}
 
 		const info = lookup(s.target.name, s.target.span);
-		let value = expr(s.value);
+		let value = expr(s.value).node;
 		const target = {
 			name: s.target.name,
 			type: info?.type ?? null,
 			span: s.target.span,
-			...(info ? {} : { error: 'not declared' })
+			...(info ? {} : { error: missing.get(s.target.name) ?? 'not declared' })
 		};
 		const node: TStmt = { kind: 'assign', target, value, span: s.span };
 		if (!info) return node;
-		const name = s.target.name;
+		const name = clipText(s.target.name);
 		if (info.constant !== null) {
 			node.error = `${name} is a constant`;
 			error(`${name} is a constant; it cannot be assigned.`, s.target.span);

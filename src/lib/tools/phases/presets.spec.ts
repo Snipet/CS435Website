@@ -4,7 +4,8 @@ import { tool } from '$lib/tools/catalog/phases';
 import { compile, MAX_SOURCE } from './pipeline';
 import { DEFAULT_PRESET, PRESETS, presetFor } from './presets';
 import { scan, tokenName } from './scanner';
-import { phaseNotes } from './notes';
+import { capList, MAX_LISTED, phaseNotes, slideFootnoteIndex } from './notes';
+import type { Decl } from './semantic';
 
 describe('presets', () => {
 	it('have unique ids and cite real decks', () => {
@@ -91,6 +92,31 @@ describe('compile', () => {
 		expect(c.source.length).toBe(MAX_SOURCE);
 	});
 
+	it('compiles 4000-character expressions quickly, with short notes and checks', () => {
+		const decls: Decl[] = [
+			{ name: 'x', type: 'int', value: '' },
+			{ name: 'a', type: 'int', value: '' },
+			{ name: 'F', type: 'float', value: '' },
+			{ name: 'G', type: 'float', value: '' }
+		];
+		for (const source of [
+			`x = a${'+a'.repeat(1990)};`,
+			`F = G${'+a'.repeat(1990)};`,
+			`A = C${'+B1'.repeat(1320)};`
+		]) {
+			const d = source.startsWith('A') ? DEFAULT_PRESET.value.decls : decls;
+			compile(source, d);
+			const t0 = performance.now();
+			const c = compile(source, d);
+			const notes = phaseNotes(c);
+			expect(performance.now() - t0).toBeLessThan(200);
+			expect(c.truncated).toBe(false);
+			expect(c.stoppedAt).toBeNull();
+			const texts = [...c.semantic!.checks.map((k) => k.text), ...Object.values(notes).flat()];
+			for (const text of texts) expect(text.length).toBeLessThanOrEqual(200);
+		}
+	});
+
 	it('handles a long program quickly', () => {
 		const source = Array.from(
 			{ length: 60 },
@@ -118,6 +144,43 @@ describe('phaseNotes', () => {
 		expect(notes.peephole).toEqual([
 			'MOVF #2.3,r1 ; ADDF2 r1,r2 → ADDF2 #2.3,r2 (r1 is not used afterwards).'
 		]);
+	});
+
+	it('shortens a long list of temporaries and labels', () => {
+		const source = 'if B1 < 1 then A = B1 + B1 + B1; '.repeat(4);
+		const notes = phaseNotes(compile(source, DEFAULT_PRESET.value.decls));
+		expect(notes.icg).toEqual([
+			'28 quads; temporaries t1, t2, t3, …, t16; labels L1, L2, L3, …, L8.'
+		]);
+	});
+});
+
+describe('slideFootnoteIndex', () => {
+	const index = (source: string) =>
+		slideFootnoteIndex(compile(source, DEFAULT_PRESET.value.decls).code);
+
+	it('marks CVTLF only in the slide’s own code', () => {
+		expect(index('A= B1   +C;')).toBe(0);
+		expect(index('A = B1 + C;')).toBe(0);
+		expect(index('if B1 < C then A = C; else A = B1;')).toBe(-1);
+		expect(index('A = B1;')).toBe(-1);
+		expect(index('A = B1 * 2.5;')).toBe(-1);
+		expect(index('A = B1 + B1;')).toBe(-1);
+	});
+
+	it('applies to the seven-phase preset only', () => {
+		const marked = PRESETS.filter(
+			(p) => slideFootnoteIndex(compile(p.value.source, p.value.decls).code) >= 0
+		);
+		expect(marked.map((p) => p.id)).toEqual(['seven-phases']);
+	});
+});
+
+describe('capList', () => {
+	it('keeps the first items and counts the rest', () => {
+		const items = Array.from({ length: MAX_LISTED + 5 }, (_, i) => i);
+		expect(capList(items)).toEqual({ shown: items.slice(0, MAX_LISTED), more: 5 });
+		expect(capList([1, 2])).toEqual({ shown: [1, 2], more: 0 });
 	});
 });
 

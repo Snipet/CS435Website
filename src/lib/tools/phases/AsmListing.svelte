@@ -4,6 +4,7 @@
 	highlighted; `marks` adds a footnote sign after a line.
 -->
 <script lang="ts">
+	import { scrollRegion } from './scroll-region';
 	import type { Instr } from './vax';
 
 	interface Props {
@@ -21,7 +22,7 @@
 {#if code.length === 0}
 	<p class="empty">No instructions.</p>
 {:else}
-	<div class="scroll">
+	<div class="scroll" {@attach scrollRegion(label)}>
 		<ol class="asm" aria-label={label}>
 			{#each code as instr, i (i)}
 				{@const mark = marks?.get(i)}

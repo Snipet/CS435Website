@@ -64,7 +64,7 @@ function typedExpr(e: TExpr): DisplayNode {
 			if (e.error) return leaf(e.name, 'error', e.error);
 			return leaf(e.name, 'leaf', e.constant !== null ? `${e.type} const` : (e.type ?? undefined));
 		case 'num':
-			return leaf(e.text, 'leaf', e.type);
+			return e.error ? leaf(e.text, 'error', e.error) : leaf(e.text, 'leaf', e.type);
 		case 'int2fp':
 			return { label: 'int2fp', note: 'float', tone: 'convert', children: [typedExpr(e.arg)] };
 		case 'bin':
