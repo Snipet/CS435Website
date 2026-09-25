@@ -111,7 +111,11 @@ function compile(spec: FlexSpec): CompiledSpec {
 	const globals: Stmt[] = [];
 	const functions = new Map<string, FnDef>();
 	const names = new Set<string>(PROVIDED);
-	for (const sc of spec.startConditions) names.add(sc.name);
+	const constants = new Set<string>(['EOF', 'NULL', 'INITIAL']);
+	for (const sc of spec.startConditions) {
+		names.add(sc.name);
+		constants.add(sc.name);
+	}
 	const declared = new Set<string>();
 	const numeric = new Set<string>();
 	for (const item of top) {
@@ -152,13 +156,17 @@ function compile(spec: FlexSpec): CompiledSpec {
 			}
 			if (!s.extern) globals.push(s);
 		} else if (s.k === 'enum') {
-			for (const it of s.items) names.add(it.name);
+			for (const it of s.items) {
+				names.add(it.name);
+				constants.add(it.name);
+			}
 			globals.push(s);
 		}
 	}
 
 	const scope = {
 		globals: names,
+		constants,
 		functions: new Map(
 			[...functions].map(([n, f]) => [n, { params: f.params.length, variadic: f.variadic }])
 		)

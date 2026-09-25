@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { OutputChunk } from './runtime';
+	import { outputRuns } from './view';
 
 	interface Props {
 		output: readonly OutputChunk[];
@@ -27,6 +28,7 @@
 	}: Props = $props();
 
 	const shown = $derived(upTo === null ? output : output.filter((c) => c.at <= upTo));
+	const runs = $derived(outputRuns(shown));
 	const hasEcho = $derived(shown.some((c) => c.echo));
 	const hasErr = $derived(shown.some((c) => c.stream === 'stderr'));
 
@@ -45,22 +47,29 @@
 		{#if shown.length === 0}
 			<p class="empty">{empty}</p>
 		{:else}
+			<!-- Each run of stderr or ECHO output starts with its name for screen readers. -->
 			<pre><code
-					>{#each shown as chunk, i (i)}{#if chunk.echo}{#each parts(chunk.text) as part, k (k)}<span
-									class={[
-										'chunk',
-										'echo',
-										chunk.stream,
-										{ now: current !== null && chunk.at === current }
-									]}
-									>{part.endsWith('\n') ? part.slice(0, -1) : part}{#if part.endsWith('\n')}<span
-											class="nl"
-											aria-hidden="true">↵</span
-										>{/if}</span
-								>{#if part.endsWith('\n')}{NEWLINE}{/if}{/each}{:else}<span
-								class={['chunk', chunk.stream, { now: current !== null && chunk.at === current }]}
-								>{chunk.text}</span
-							>{/if}{/each}</code
+					>{#each runs as run, r (r)}<span class={['run', run.stream]}
+							>{#if run.label}<span class="visually-hidden run-label"
+									>[{run.label}] </span>{/if}{#each run.chunks as chunk, i (i)}{#if chunk.echo}{#each parts(chunk.text) as part, k (k)}<span
+											class={[
+												'chunk',
+												'echo',
+												chunk.stream,
+												{ now: current !== null && chunk.at === current }
+											]}
+											>{part.endsWith('\n')
+												? part.slice(0, -1)
+												: part}{#if part.endsWith('\n')}<span class="nl" aria-hidden="true">↵</span
+												>{/if}</span
+										>{#if part.endsWith('\n')}{NEWLINE}{/if}{/each}{:else}<span
+										class={[
+											'chunk',
+											chunk.stream,
+											{ now: current !== null && chunk.at === current }
+										]}>{chunk.text}</span
+									>{/if}{/each}</span
+						>{/each}</code
 				></pre>
 		{/if}
 	</div>
@@ -84,6 +93,7 @@
 		min-width: 0;
 	}
 	.console {
+		position: relative;
 		max-height: calc(var(--max-rows) * 1.6em + 2 * var(--space-3));
 		overflow: auto;
 		padding: var(--space-3) var(--space-4);
@@ -113,6 +123,17 @@
 	}
 	.stderr {
 		color: var(--reject);
+	}
+	/* stderr is marked by a bar at the start of each of its lines, not only by color. */
+	.run.stderr,
+	.swatch.stderr {
+		padding-left: 0.5ch;
+		border-left: 2px solid var(--reject);
+		-webkit-box-decoration-break: clone;
+		box-decoration-break: clone;
+	}
+	.run-label {
+		user-select: none;
 	}
 	.echo {
 		border-radius: 2px;

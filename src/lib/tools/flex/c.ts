@@ -23,6 +23,7 @@ import {
 	INT,
 	typeName,
 	type CType,
+	type Declarator,
 	type Expr,
 	type FnDef,
 	type Loc,
@@ -237,6 +238,8 @@ export class CMachine {
 	private depth = 0;
 	private retVal: Val = VOID;
 	private readonly literals = new WeakMap<Expr, Mem>();
+	/** Block-scope static variables, created the first time their declaration runs. */
+	private readonly statics = new WeakMap<Declarator, Slot>();
 
 	constructor(private readonly opts: MachineOptions) {
 		const g = this.globals.vars;
@@ -400,7 +403,19 @@ export class CMachine {
 				this.eval(s.e, env);
 				return NORMAL;
 			case 'decl':
-				for (const decl of s.decls) this.declare(decl, env);
+				if (s.static && env !== this.globals) {
+					// Block-scope static: one variable for the whole run, initialized once.
+					for (const decl of s.decls) {
+						let slot = this.statics.get(decl);
+						if (!slot) {
+							slot = this.makeSlot(decl, env);
+							this.statics.set(decl, slot);
+						}
+						env.vars.set(decl.name, slot);
+					}
+					return NORMAL;
+				}
+				for (const decl of s.decls) env.vars.set(decl.name, this.makeSlot(decl, env));
 				return NORMAL;
 			case 'enum': {
 				let next = 0;
@@ -412,7 +427,7 @@ export class CMachine {
 				return NORMAL;
 			}
 			case 'block': {
-				const inner = new Env(env);
+				const inner = s.inline ? env : new Env(env);
 				for (const st of s.body) {
 					const c = this.exec(st, inner);
 					if (c !== NORMAL) return c;
@@ -490,7 +505,8 @@ export class CMachine {
 		return i(0);
 	}
 
-	private declare(decl: import('./c-ast').Declarator, env: Env): void {
+	/** A new variable for `decl`, initialized (initializers are evaluated in `env`). */
+	private makeSlot(decl: Declarator, env: Env): Slot {
 		if (decl.array === undefined) {
 			let val: Val;
 			if (!decl.init) val = this.zero(decl.type);
@@ -499,8 +515,7 @@ export class CMachine {
 					throw new CRuntimeError(`${decl.name} is not an array`, decl.init.loc);
 				val = this.convert(this.eval(decl.init.items[0], env), decl.type, decl.loc);
 			} else val = this.convert(this.eval(decl.init, env), decl.type, decl.init.loc);
-			env.vars.set(decl.name, { type: decl.type, val });
-			return;
+			return { type: decl.type, val };
 		}
 		const init = decl.init;
 		let len: number | null = decl.array
@@ -536,7 +551,7 @@ export class CMachine {
 				throw new CRuntimeError(`too many initializers for ${decl.name}[${len}]`, init.loc);
 			init.items.forEach((item, k) => this.storeMem(mem, k, this.eval(item, env), item.loc));
 		}
-		env.vars.set(decl.name, { type: elem, val: { t: 'p', m: mem, o: 0 }, arr: mem });
+		return { type: elem, val: { t: 'p', m: mem, o: 0 }, arr: mem };
 	}
 
 	// ---------------------------------------------------------------------------

@@ -18,7 +18,7 @@
 	import StepView from '$lib/tools/flex/StepView.svelte';
 	import WordCount from '$lib/tools/flex/WordCount.svelte';
 	import { hasCurlyQuotes, straightenQuotes } from '$lib/tools/flex/c-lexer';
-	import { specTokens, type Focus } from '$lib/tools/flex/highlight';
+	import { specLineClasses, specTokens, type Focus } from '$lib/tools/flex/highlight';
 	import { presetById, presets, type FlexPreset } from '$lib/tools/flex/presets';
 	import { compileSpec } from '$lib/tools/flex/program';
 	import { runScanner } from '$lib/tools/flex/runtime';
@@ -34,16 +34,24 @@
 	import { WC_GLOBALS } from '$lib/tools/flex/wc';
 	import { syncToHash } from '$lib/url-state';
 
+	const WATCHED: readonly string[] = WC_GLOBALS;
+	const UNWATCHED: readonly string[] = [];
+
 	let flex = $state<Required<FlexState>>(defaultState());
 	/** The spec and input the results were computed from (typing is debounced). */
 	let settled = $state({ spec: flex.spec, input: flex.input });
 
-	const compiled = $derived(compileSpec(flex.spec));
-	const runCompiled = $derived(settled.spec === flex.spec ? compiled : compileSpec(settled.spec));
-	const watch = $derived(
-		WC_GLOBALS.every((n) => runCompiled.numeric.has(n)) ? [...WC_GLOBALS] : []
+	// The run reads only the settled text, so typing in either editor never re-runs the
+	// scanner; `compiled` follows every keystroke for highlighting and diagnostics. The
+	// strings are derived on their own so that settling one leaves the other's results alone.
+	const settledSpec = $derived(settled.spec);
+	const settledInput = $derived(settled.input);
+	const runCompiled = $derived(compileSpec(settledSpec));
+	const compiled = $derived(flex.spec === settledSpec ? runCompiled : compileSpec(flex.spec));
+	const watchCounters = $derived(WC_GLOBALS.every((n) => runCompiled.numeric.has(n)));
+	const run = $derived(
+		runScanner(runCompiled, settledInput, { watch: watchCounters ? WATCHED : UNWATCHED })
 	);
-	const run = $derived(runScanner(runCompiled, settled.input, { watch }));
 	const fresh = $derived(settled.spec === flex.spec && settled.input === flex.input);
 
 	const stepper = new Stepper(() => run.steps.length);
@@ -115,6 +123,7 @@
 		const f = focus;
 		return (text: string) => specTokens(text === spec.text ? spec : parseSpec(text), f);
 	});
+	const lineClasses = $derived(specLineClasses(compiled.spec));
 	const editorDiagnostics = $derived([
 		...compiled.diagnostics,
 		...(fresh ? run.diagnostics.filter((d) => d.span) : [])
@@ -186,6 +195,7 @@
 						ariaLabel="spec.l, the flex specification"
 						language="flex"
 						{highlight}
+						{lineClasses}
 						diagnostics={editorDiagnostics}
 						minRows={16}
 						maxRows={30}
@@ -193,7 +203,7 @@
 					/>
 					<ul class="outline" aria-label="Sections of the spec">
 						<li>
-							<span class="dot defs" aria-hidden="true"></span>Definitions
+							<span class="swatch band defs" aria-hidden="true"></span>Definitions
 							<span class="where"
 								>{lineRange(sections.definitions)} · {defCount} definition{defCount === 1
 									? ''
@@ -202,7 +212,7 @@
 						</li>
 						{#if sections.rules}
 							<li>
-								<span class="dot rules" aria-hidden="true"></span>Rules
+								<span class="swatch band rules" aria-hidden="true"></span>Rules
 								<span class="where"
 									>{lineRange(sections.rules)} · {ruleCount} rule{ruleCount === 1 ? '' : 's'}</span
 								>
@@ -210,10 +220,14 @@
 						{/if}
 						{#if sections.user}
 							<li>
-								<span class="dot user" aria-hidden="true"></span>User code
+								<span class="swatch band user" aria-hidden="true"></span>User code
 								<span class="where">{lineRange(sections.user)}</span>
 							</li>
 						{/if}
+						<li>
+							<span class="swatch code" aria-hidden="true"></span>C code
+							<span class="where">copied into lex.yy.c as written</span>
+						</li>
 					</ul>
 					{#snippet footer()}
 						{#if preset}
@@ -364,7 +378,7 @@
 											</section>
 										{/if}
 									{:else if id === 'step'}
-										<StepView {run} spec={runCompiled.spec} input={settled.input} {stepper} />
+										<StepView {run} spec={runCompiled.spec} input={settledInput} {stepper} />
 									{:else}
 										<RulesTable spec={compiled.spec} onreveal={revealRule} />
 									{/if}
@@ -378,7 +392,7 @@
 
 		{#if run.ran && run.watch}
 			<Panel title="Word count" subtitle="nl, wd, ch next to wc">
-				<WordCount {run} spec={runCompiled.spec} input={settled.input} />
+				<WordCount {run} spec={runCompiled.spec} input={settledInput} />
 			</Panel>
 		{/if}
 	</div>
@@ -386,6 +400,10 @@
 
 <style>
 	.flex-tool {
+		--sec-defs: var(--info);
+		--sec-rules: var(--accent);
+		--sec-user: var(--epsilon);
+		--code-bg: var(--surface-2);
 		display: flex;
 		flex-direction: column;
 		gap: var(--space-5);
@@ -443,19 +461,43 @@
 		color: var(--text-3);
 		font-weight: 400;
 	}
-	.dot {
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
+	/* Keys for the section bands in the editor's gutter and the C code background. */
+	.swatch {
+		flex: none;
 	}
-	.dot.defs {
-		background: var(--syn-name);
+	.swatch.band {
+		width: 3px;
+		height: 0.875rem;
+		border-radius: 2px;
 	}
-	.dot.rules {
-		background: var(--syn-operator);
+	.swatch.defs {
+		background: var(--sec-defs);
 	}
-	.dot.user {
-		background: var(--syn-keyword);
+	.swatch.rules {
+		background: var(--sec-rules);
+	}
+	.swatch.user {
+		background: var(--sec-user);
+	}
+	.swatch.code {
+		width: 0.875rem;
+		height: 0.875rem;
+		border: 1px solid var(--border-strong);
+		border-radius: 3px;
+		background: var(--code-bg);
+	}
+	.flex-tool :global(.ln.fx-sec-defs) {
+		box-shadow: inset 3px 0 0 var(--sec-defs);
+	}
+	.flex-tool :global(.ln.fx-sec-rules) {
+		box-shadow: inset 3px 0 0 var(--sec-rules);
+	}
+	.flex-tool :global(.ln.fx-sec-user) {
+		box-shadow: inset 3px 0 0 var(--sec-user);
+	}
+	.flex-tool :global(.lt.fx-line-code),
+	.flex-tool :global(.fx-code) {
+		background: var(--code-bg);
 	}
 	.preset-note {
 		display: flex;

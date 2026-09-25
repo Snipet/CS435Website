@@ -12,10 +12,14 @@ export interface CheckScope {
 	globals: ReadonlySet<string>;
 	/** User functions: parameter count and whether they take `...`. */
 	functions: ReadonlyMap<string, { params: number; variadic: boolean }>;
+	/** Names in `globals` that are constants (enum constants, start conditions, EOF, …). */
+	constants?: ReadonlySet<string>;
 }
 
 interface Frame {
 	names: Set<string>;
+	/** Enum constants declared in this block. */
+	constants: Set<string>;
 }
 
 class Checker {
@@ -47,8 +51,8 @@ class Checker {
 		});
 	}
 
-	push(names: Iterable<string> = []): void {
-		this.frames.push({ names: new Set(names) });
+	push(names: Iterable<string> = [], constants: Iterable<string> = []): void {
+		this.frames.push({ names: new Set(names), constants: new Set(constants) });
 	}
 	pop(): void {
 		this.frames.pop();
@@ -66,6 +70,42 @@ class Checker {
 		return this.scope.globals.has(name) || BUILTIN_VALUES.has(name);
 	}
 
+	/** Whether `name` is a constant where it is used (not a variable). */
+	private constantName(name: string): boolean {
+		for (let k = this.frames.length - 1; k >= 0; k--) {
+			const f = this.frames[k];
+			if (f.names.has(name)) return f.constants.has(name);
+		}
+		return !!this.scope.constants?.has(name);
+	}
+
+	/**
+	 * A constant expression, as a static variable's initializer must be.
+	 * Addresses (`&x`) are accepted without checking what they point to.
+	 */
+	private constant(e: Expr): boolean {
+		switch (e.k) {
+			case 'num':
+			case 'char':
+			case 'str':
+			case 'sizeof':
+				return true;
+			case 'id':
+				return this.constantName(e.name);
+			case 'unary':
+				return e.op === '&' || (e.op !== '*' && this.constant(e.arg));
+			case 'cast':
+				return this.constant(e.arg);
+			case 'binary':
+			case 'logical':
+				return this.constant(e.left) && this.constant(e.right);
+			case 'cond':
+				return this.constant(e.test) && this.constant(e.then) && this.constant(e.else);
+			default:
+				return false;
+		}
+	}
+
 	stmts(body: Stmt[]): void {
 		for (const s of body) this.stmt(s);
 	}
@@ -79,8 +119,11 @@ class Checker {
 				for (const d of s.decls) {
 					if (d.array) this.expr(d.array);
 					if (d.init) {
-						if (d.init.k === 'list') d.init.items.forEach((e) => this.expr(e));
-						else this.expr(d.init);
+						const items = d.init.k === 'list' ? d.init.items : [d.init];
+						items.forEach((e) => this.expr(e));
+						const bad = s.static ? items.find((e) => !this.constant(e)) : undefined;
+						if (bad)
+							this.error(`${d.name} is static, so its initializer must be a constant`, bad.loc);
 					}
 					this.declare(d.name, d.loc);
 				}
@@ -89,9 +132,14 @@ class Checker {
 				for (const item of s.items) {
 					if (item.value) this.expr(item.value);
 					this.declare(item.name, item.loc);
+					this.frames[this.frames.length - 1].constants.add(item.name);
 				}
 				break;
 			case 'block':
+				if (s.inline) {
+					this.stmts(s.body);
+					break;
+				}
 				this.push();
 				this.stmts(s.body);
 				this.pop();
@@ -110,6 +158,8 @@ class Checker {
 				break;
 			case 'for':
 				this.push();
+				if (s.init?.k === 'decl' && s.init.static)
+					this.error('a for loop cannot declare a static variable', s.init.loc);
 				if (s.init) this.stmt(s.init);
 				if (s.test) this.expr(s.test);
 				if (s.update) this.expr(s.update);
@@ -238,13 +288,20 @@ export function checkScanner(
 	pc.push();
 	pc.stmts(prologue);
 	const locals = new Set<string>();
-	for (const s of prologue) {
+	const constants = new Set<string>();
+	const collect = (s: Stmt): void => {
 		if (s.k === 'decl') s.decls.forEach((d) => locals.add(d.name));
-		if (s.k === 'enum') s.items.forEach((it) => locals.add(it.name));
-	}
+		if (s.k === 'enum')
+			s.items.forEach((it) => {
+				locals.add(it.name);
+				constants.add(it.name);
+			});
+		if (s.k === 'block' && s.inline) s.body.forEach(collect);
+	};
+	prologue.forEach(collect);
 	const out = actions.map((body) => {
 		const c = new Checker(scope, true, false);
-		c.push(locals);
+		c.push(locals, constants);
 		c.push();
 		c.stmts(body);
 		return c.diagnostics;

@@ -1,18 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { printFlexPattern } from '$lib/theory/regex';
-import { specTokens } from './highlight';
+import { specLineClasses, specTokens } from './highlight';
 import { presetById } from './presets';
 import { compileSpec } from './program';
-import { runScanner } from './runtime';
+import { runScanner, type OutputChunk } from './runtime';
 import { parseSpec } from './spec';
 import { defaultState, fromLink, isFlexState } from './state';
 import {
 	MAX_EXPANDED,
+	definitionRows,
 	describeInput,
 	describeStep,
 	expandedSize,
 	formatReturn,
 	inputWindow,
+	outputRuns,
 	stepAt,
 	stepHighlights,
 	visible
@@ -102,11 +104,47 @@ describe('spec highlighting', () => {
 		expect(at('{DIGIT}+')).toBe('hl-name');
 		expect(at('+ ', text.indexOf('{DIGIT}+'))).toBe('hl-operator');
 		expect(at('#include')).toBe('hl-special');
-		expect(at('printf')).toBeUndefined();
-		expect(at('"number')).toBe('hl-string');
-		expect(at('yytext')).toBe('hl-name');
+		// Actions also get the C code background.
+		expect(at('printf')).toBe('fx-code');
+		expect(at('"number')).toBe('hl-string fx-code');
+		expect(at('yytext')).toBe('hl-name fx-code');
 		expect(at('int main')).toBe('hl-keyword');
 		expect(at('return')).toBe('hl-keyword');
+		// The blanks between a pattern and its action are not part of either.
+		expect(at('  { printf')).toBeUndefined();
+	});
+
+	it('marks each line with its section and C code lines', () => {
+		const lines = specLineClasses(parseSpec(presetById('example-3')!.value.spec));
+		const code = 'fx-line-code';
+		expect(lines.slice(0, 5)).toEqual([
+			`fx-sec-defs ${code}`,
+			`fx-sec-defs ${code}`,
+			`fx-sec-defs ${code}`,
+			'fx-sec-defs',
+			'fx-sec-defs'
+		]);
+		expect(lines[8]).toBe('fx-sec-rules'); // %%
+		expect(lines[10]).toBe('fx-sec-rules'); // {DIGIT}+ { … }: the action is marked per token
+		expect(lines[16]).toBe('fx-sec-user'); // %%
+		expect(lines.slice(17, 21)).toEqual(Array(4).fill(`fx-sec-user ${code}`));
+
+		const multi = specLineClasses(
+			parseSpec('%{\nint n;\n%}\n%%\n  int k;\nx  {\n  n++;\n}\ny  { }\n%%\n')
+		);
+		expect(multi).toEqual([
+			`fx-sec-defs ${code}`,
+			`fx-sec-defs ${code}`,
+			`fx-sec-defs ${code}`,
+			'fx-sec-rules',
+			`fx-sec-rules ${code}`,
+			'fx-sec-rules',
+			`fx-sec-rules ${code}`,
+			`fx-sec-rules ${code}`,
+			'fx-sec-rules',
+			'fx-sec-user',
+			'fx-sec-user'
+		]);
 	});
 
 	it('adds the focus class on top of the syntax color', () => {
@@ -117,7 +155,7 @@ describe('spec highlighting', () => {
 		const inside = tokens.filter((t) => t.from >= r.actionStart && t.to <= r.actionEnd);
 		expect(inside.length).toBeGreaterThan(0);
 		expect(inside.every((t) => t.className.includes('fx-focus'))).toBe(true);
-		expect(tokens.some((t) => t.className === 'hl-string fx-focus')).toBe(true);
+		expect(tokens.some((t) => t.className === 'hl-string fx-code fx-focus')).toBe(true);
 	});
 });
 
@@ -128,6 +166,79 @@ describe('expanded patterns', () => {
 			'[A-Za-z]([A-Za-z]|[0-9])*'
 		);
 		expect(printFlexPattern(spec.rules[0].pattern!, { expandRefs: true })).toBe('[0-9]+');
+	});
+});
+
+describe('console runs', () => {
+	const chunk = (stream: 'stdout' | 'stderr', text: string, echo = false, at = 0): OutputChunk => ({
+		stream,
+		text,
+		echo,
+		at,
+		inAction: true
+	});
+
+	it('groups chunks by stream and ECHO and labels each run', () => {
+		const runs = outputRuns([
+			chunk('stdout', 'a', true, 0),
+			chunk('stdout', 'b', true, 1),
+			chunk('stdout', 'x\n', false, 2),
+			chunk('stderr', 'oops\n', false, 3),
+			chunk('stderr', 'again\n', false, 4),
+			chunk('stdout', 'y', false, 5)
+		]);
+		expect(runs.map((r) => [r.label, r.chunks.map((c) => c.text).join('')])).toEqual([
+			['ECHO', 'ab'],
+			['stdout', 'x\n'],
+			['stderr', 'oops\nagain\n'],
+			['stdout', 'y']
+		]);
+	});
+
+	it('does not label plain stdout', () => {
+		const runs = outputRuns([chunk('stdout', 'a', false, 0), chunk('stdout', 'b', false, 1)]);
+		expect(runs).toHaveLength(1);
+		expect(runs[0].label).toBeNull();
+	});
+
+	it('labels the Comments preset’s stderr message', () => {
+		const p = presetById('comments')!;
+		const run = runScanner(compileSpec(p.value.spec), 'a /* never closed');
+		const runs = outputRuns(run.output);
+		expect(runs.map((r) => r.label)).toEqual(['ECHO', 'stderr']);
+		expect(runs[1].chunks.map((c) => c.text).join('')).toBe(
+			'error: comment is never closed\n1 comment(s) removed\n'
+		);
+	});
+});
+
+describe('definition rows', () => {
+	it('lists every definition line, with {NAME} expanded', () => {
+		const rows = definitionRows(parseSpec(presetById('example-3')!.value.spec));
+		expect(rows.map((r) => [r.name, r.expanded, r.duplicateOf])).toEqual([
+			['DIGIT', null, null],
+			['LETTER', null, null],
+			['ID', '[A-Za-z]([A-Za-z]|[0-9])*', null]
+		]);
+	});
+
+	it('keeps a repeated name as its own row with a unique key', () => {
+		// A copy-pasted definition line: the table keys rows, so keys must differ.
+		const spec = parseSpec('DIGIT [0-9]\nID    {DIGIT}+\nDIGIT [0-9]\n%%\n{ID}  { }\n');
+		const rows = definitionRows(spec);
+		expect(rows.map((r) => r.name)).toEqual(['DIGIT', 'ID', 'DIGIT']);
+		expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
+		expect(rows.map((r) => r.duplicateOf)).toEqual([null, null, 1]);
+		expect(rows[1].expanded).toBe('[0-9]+');
+	});
+
+	it('does not print an expansion that is too large', () => {
+		const lines = ['D0 x'];
+		for (let k = 1; k <= 12; k++) lines.push(`D${k} {D${k - 1}}{D${k - 1}}`);
+		const rows = definitionRows(parseSpec(`${lines.join('\n')}\n%%\n{D12}  { }\n`));
+		const last = rows.at(-1)!;
+		expect(last.tooLong).toBe(true);
+		expect(last.expanded).toBeNull();
 	});
 });
 

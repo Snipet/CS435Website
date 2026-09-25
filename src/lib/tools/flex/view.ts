@@ -1,8 +1,8 @@
 /** Text and layout helpers for the Flex Playground page. */
 import type { HighlightRange } from '$lib/components/ui/types';
 import { formatString } from '$lib/theory/chars';
-import { children, type Regex } from '$lib/theory/regex';
-import type { FlexRun, MatchStep } from './runtime';
+import { children, printRegex, refsIn, type Regex } from '$lib/theory/regex';
+import type { FlexRun, MatchStep, OutputChunk } from './runtime';
 import type { FlexSpec } from './spec';
 
 /** Whitespace made visible: · for space, ⇥ for tab, ↵ for newline. */
@@ -157,5 +157,64 @@ export function expandedSize(r: Regex, memo: Map<Regex, number> = new Map()): nu
 	return n;
 }
 
+/** Consecutive output chunks written the same way (same stream, ECHO or not). */
+export interface OutputRun {
+	stream: 'stdout' | 'stderr';
+	echo: boolean;
+	chunks: OutputChunk[];
+	/** Name read by screen readers at the start of the run; null when all output is plain stdout. */
+	label: string | null;
+}
+
+/** Groups output chunks into runs, so the console can mark where stderr and ECHO output start. */
+export function outputRuns(chunks: readonly OutputChunk[]): OutputRun[] {
+	const runs: OutputRun[] = [];
+	for (const c of chunks) {
+		const last = runs[runs.length - 1];
+		if (last && last.stream === c.stream && last.echo === c.echo) last.chunks.push(c);
+		else runs.push({ stream: c.stream, echo: c.echo, chunks: [c], label: null });
+	}
+	if (runs.some((r) => r.stream === 'stderr' || r.echo))
+		for (const r of runs)
+			r.label = r.echo ? (r.stream === 'stderr' ? 'ECHO to stderr' : 'ECHO') : r.stream;
+	return runs;
+}
+
 /** Largest expansion (in regex nodes) the rules view prints. */
 export const MAX_EXPANDED = 400;
+
+/** A row of the rules view's definitions table. */
+export interface DefinitionRow {
+	/** Position in the definitions section: unique even when a name is repeated. */
+	key: number;
+	name: string;
+	line: number;
+	text: string;
+	/** The pattern with {NAME} expanded; null when it uses no names or could not be built. */
+	expanded: string | null;
+	/** The expansion has more than MAX_EXPANDED nodes, so it is not printed. */
+	tooLong: boolean;
+	/** Line of an earlier definition with the same name; this one is not used. */
+	duplicateOf: number | null;
+}
+
+/** One row per definition line, in source order, repeated names included. */
+export function definitionRows(spec: FlexSpec): DefinitionRow[] {
+	const first = new Map<string, number>();
+	return spec.defs.entries.map((e, key) => {
+		const prior = first.get(e.name);
+		if (prior === undefined) first.set(e.name, e.line);
+		const hasRefs = !!e.regex && refsIn(e.regex).length > 0;
+		const tooLong = hasRefs && expandedSize(e.regex!) > MAX_EXPANDED;
+		return {
+			key,
+			name: e.name,
+			line: e.line,
+			text: e.text,
+			expanded:
+				hasRefs && !tooLong ? printRegex(e.regex!, { dialect: 'flex', expandRefs: true }) : null,
+			tooLong,
+			duplicateOf: prior ?? null
+		};
+	});
+}

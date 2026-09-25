@@ -189,6 +189,7 @@ export class Parser {
 		type: CType;
 		typedef: boolean;
 		ext: boolean;
+		stat: boolean;
 		enumItems: { name: string; value: Expr | null; loc: Loc }[] | null;
 		start: Token;
 	} {
@@ -199,6 +200,7 @@ export class Parser {
 		let base: Base | null = null;
 		let typedef = false;
 		let ext = false;
+		let stat = false;
 		let ptr = 0;
 		let enumItems: { name: string; value: Expr | null; loc: Loc }[] | null = null;
 		let any = false;
@@ -208,6 +210,7 @@ export class Parser {
 				const w = t.text;
 				if (QUALIFIERS.has(w)) {
 					if (w === 'extern') ext = true;
+					if (w === 'static') stat = true;
 					this.i++;
 					continue;
 				}
@@ -260,7 +263,7 @@ export class Parser {
 		else if (short) b = signed === false ? 'ushort' : 'short';
 		else if (longs > 0) b = signed === false ? 'ulong' : 'long';
 		else b = signed === false ? 'uint' : 'int';
-		return { type: { base: b, ptr }, typedef, ext, enumItems, start };
+		return { type: { base: b, ptr }, typedef, ext, stat, enumItems, start };
 	}
 
 	private enumBody(): { name: string; value: Expr | null; loc: Loc }[] | null {
@@ -449,7 +452,8 @@ export class Parser {
 		}
 		this.expect(';', 'the declaration');
 		const decl: Stmt = { k: 'decl', decls, extern: spec.ext, loc: this.loc(spec.start) };
-		return enumStmt ? { k: 'block', body: [enumStmt, decl], loc: decl.loc } : decl;
+		if (spec.stat) decl.static = true;
+		return enumStmt ? { k: 'block', body: [enumStmt, decl], inline: true, loc: decl.loc } : decl;
 	}
 
 	private block(): Stmt {

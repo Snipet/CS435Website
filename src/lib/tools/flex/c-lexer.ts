@@ -158,6 +158,14 @@ export interface LexResult {
  */
 export function lexC(text: string, start: number, end: number, macros: Macros): LexResult {
 	const raw: Token[] = [];
+	const tokens: Token[] = [];
+	/** Tokens of `raw` before this index are expanded into `tokens`. */
+	let expanded = 0;
+	/** Expands the tokens read so far with the macros as they are now (before a #define / #undef). */
+	const flush = () => {
+		tokens.push(...expand(raw.slice(expanded), macros));
+		expanded = raw.length;
+	};
 	const diagnostics: Diagnostic[] = [];
 	const error = (message: string, s: number, e: number) =>
 		diagnostics.push({ severity: 'error', message, span: { start: s, end: e, source: null } });
@@ -394,19 +402,23 @@ export function lexC(text: string, start: number, end: number, macros: Macros): 
 			const body = inner.tokens.filter((t) => t.kind !== 'eof');
 			if (body.some((t) => t.kind === 'id' && t.text === dm[1]))
 				warn(`${dm[1]} is defined in terms of itself`, nameStart, nameStart + dm[1].length);
+			flush();
 			macros.set(dm[1], body);
 			return j;
 		}
 		if (name === 'undef') {
 			const um = /^\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(text.slice(bodyStart, j));
-			if (um) macros.delete(um[1]);
+			if (um) {
+				flush();
+				macros.delete(um[1]);
+			}
 			return j;
 		}
 		error(`#${name} is not supported here`, from, from + m[0].length);
 		return j;
 	}
 
-	const tokens = expand(raw, macros);
+	flush();
 	tokens.push({ kind: 'eof', text: '', start: end, end });
 	return { tokens, diagnostics };
 }

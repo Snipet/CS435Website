@@ -169,6 +169,40 @@ describe('C expressions', () => {
 			}`;
 		expect(out(code)).toBe('0 5 6 3 hi 3\n3.5\n');
 	});
+
+	it('keeps a variable declared with its enum in scope', () => {
+		expect(out(main('enum { A, B } x = B; x++; printf("%d %d\\n", x, A);'))).toBe('2 0\n');
+		const compiled = compileSpec(
+			'%%\n\tenum { OFF, ON } mode = ON;\nx  { printf("%d", mode); }\n%%\n'
+		);
+		expect(compiled.ok).toBe(true);
+		expect(outputText(runScanner(compiled, 'x'))).toBe('1');
+	});
+
+	it('applies #define and #undef from where they appear', () => {
+		const spec = `%{
+#define N 10
+int a = N;
+#undef N
+#define N 20
+int b = N;
+%}
+%%
+%%
+#define TWICE N * 2
+int c = TWICE;
+#undef N
+#define N 1
+int main() { printf("%d %d %d %d\\n", a, b, c, TWICE); return 0; }
+`;
+		const compiled = compileSpec(spec);
+		expect(compiled.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+		expect(outputText(runScanner(compiled, ''))).toBe('10 20 40 2\n');
+		// A name used before its #define is not replaced.
+		expect(compileErrors('int f(void) { return LATER; }\n#define LATER 1\n')).toEqual([
+			'LATER is undeclared'
+		]);
+	});
 });
 
 describe('C statements', () => {
@@ -229,6 +263,47 @@ describe('C statements', () => {
 		expect(run.exitStatus).toBe(3);
 	});
 
+	it('keeps static local variables between calls', () => {
+		const code = `
+			#include <stdio.h>
+			int counter(void) { static int n = 0; return ++n; }
+			int ids(void) { static int next = 100, seen[3]; seen[next % 3]++; return next++; }
+			int fresh(void) { int n = 0; return ++n; }
+			int main() {
+				counter(); counter();
+				printf("%d %d|", counter(), fresh() + fresh());
+				ids(); ids();
+				printf("%d\\n", ids());
+				return 0;
+			}`;
+		expect(out(code)).toBe('3 2|102\n');
+	});
+
+	it('keeps a static in an action between matches', () => {
+		const compiled = compileSpec(
+			'%%\n.  { static int n = 0; n++; printf("%d ", n); }\n\\n { }\n%%\n'
+		);
+		expect(compiled.ok).toBe(true);
+		expect(outputText(runScanner(compiled, 'abc\n'))).toBe('1 2 3 ');
+		// Each run starts over.
+		expect(outputText(runScanner(compiled, 'ab\n'))).toBe('1 2 ');
+	});
+
+	it('keeps a static in the code before the first rule between yylex calls', () => {
+		const spec = `%%
+	static int calls = 0;
+	calls++;
+[a-z]+  { printf("%d:%s ", calls, yytext); return 1; }
+\\n      { }
+%%
+`;
+		const compiled = compileSpec(spec);
+		expect(compiled.ok).toBe(true);
+		// The blank is ECHOed by the default rule inside the second call.
+		expect(outputText(runScanner(compiled, 'ab cd\n'))).toBe('1:ab  2:cd ');
+		expect(runScanner(compiled, 'ab cd\n').calls.length).toBe(3);
+	});
+
 	it('writes stderr separately and stops at exit()', () => {
 		const run = runC(
 			main(
@@ -257,6 +332,29 @@ describe('C errors', () => {
 		]);
 		expect(compileErrors(main('break;'))).toEqual(['break is not inside a loop or switch']);
 		expect(compileErrors(main('int a; int a;'))).toEqual(['a is already declared here']);
+	});
+
+	it('requires constant initializers for static locals', () => {
+		expect(compileErrors(main('int k = 2; static int n = k;'))).toEqual([
+			'n is static, so its initializer must be a constant'
+		]);
+		expect(compileErrors(main('static int n = yyleng;'))).toEqual([
+			'n is static, so its initializer must be a constant'
+		]);
+		expect(compileErrors(main('static int a[2] = { 1, atoi("2") };'))).toEqual([
+			'a is static, so its initializer must be a constant'
+		]);
+		expect(
+			compileErrors(
+				'#define BASE 10\nenum { RED = 3 };\n' +
+					main(
+						'enum { LOCAL = 1 }; static int n = BASE * 2 + RED - LOCAL, m = sizeof(int), c = \'a\'; static char *s = "x";'
+					)
+			)
+		).toEqual([]);
+		expect(compileErrors(main('for (static int i = 0; i < 2; i++) { }'))).toEqual([
+			'a for loop cannot declare a static variable'
+		]);
 	});
 
 	it('reports unsupported features clearly', () => {

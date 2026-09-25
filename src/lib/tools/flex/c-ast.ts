@@ -66,9 +66,17 @@ export interface Declarator {
 
 export type Stmt =
 	| { k: 'expr'; e: Expr; loc: Loc }
-	| { k: 'decl'; decls: Declarator[]; extern?: boolean; loc: Loc }
+	/**
+	 * `static` in a function or action: the variable is created and initialized
+	 * once and keeps its value between calls. (At file scope it changes nothing here.)
+	 */
+	| { k: 'decl'; decls: Declarator[]; extern?: boolean; static?: boolean; loc: Loc }
 	| { k: 'enum'; items: { name: string; value: Expr | null; loc: Loc }[]; loc: Loc }
-	| { k: 'block'; body: Stmt[]; loc: Loc }
+	/**
+	 * `inline`: not a `{ … }` block but one declaration split in two
+	 * (`enum { A, B } x;`), so its names belong to the enclosing scope.
+	 */
+	| { k: 'block'; body: Stmt[]; inline?: boolean; loc: Loc }
 	| { k: 'if'; test: Expr; then: Stmt; else: Stmt | null; loc: Loc }
 	| { k: 'while'; test: Expr; body: Stmt; loc: Loc }
 	| { k: 'do'; body: Stmt; test: Expr; loc: Loc }

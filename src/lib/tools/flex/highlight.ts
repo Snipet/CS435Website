@@ -1,7 +1,8 @@
 /**
  * Token coloring for the spec editor: section delimiters, directives,
  * definition names, flex patterns, and C code, plus an optional focus range
- * (the pattern and action of the rule the step view is on).
+ * (the pattern and action of the rule the step view is on). Line classes mark
+ * the section of each line and the lines of C code.
  */
 import type { HighlightToken } from '$lib/components/ui/types';
 import { KEYWORDS } from './c-lexer';
@@ -157,6 +158,60 @@ export interface Focus {
 	end: number;
 }
 
+/** Token class for the text of an action (C code inside a rule line). */
+export const CODE_CLASS = 'fx-code';
+
+export type SectionName = 'defs' | 'rules' | 'user';
+
+/** Line class for each section of the spec (the editor draws a band in the gutter). */
+export const sectionClass = (s: SectionName): string => `fx-sec-${s}`;
+
+/** Line class for lines of C code copied into lex.yy.c as they are. */
+export const CODE_LINE_CLASS = 'fx-line-code';
+
+/**
+ * A class list per line of the spec (index 0 = line 1): the section the
+ * line belongs to, plus CODE_LINE_CLASS for lines of C code — %top{ … },
+ * %{ … %}, indented code, the lines after the first of a multi-line action,
+ * and the user code section.
+ */
+export function specLineClasses(spec: FlexSpec): string[] {
+	const text = spec.text;
+	const starts = [0];
+	for (let k = 0; k < text.length; k++) if (text[k] === '\n') starts.push(k + 1);
+	const lineAt = (offset: number): number => {
+		let lo = 0;
+		let hi = starts.length - 1;
+		while (lo < hi) {
+			const mid = (lo + hi + 1) >> 1;
+			if (starts[mid] <= offset) lo = mid;
+			else hi = mid - 1;
+		}
+		return lo;
+	};
+	const code: boolean[] = new Array(starts.length).fill(false);
+	const mark = (from: number, to: number) => {
+		const last = lineAt(Math.max(from, to - 1));
+		for (let l = lineAt(from); l <= last; l++) code[l] = true;
+	};
+	for (const b of spec.blocks) if (b.end > b.start) mark(b.start, b.end);
+	for (const r of spec.regions)
+		if (r.kind === 'delimiter' && text.slice(r.start, r.end) !== '%%') mark(r.start, r.end);
+	for (const r of spec.rules) {
+		if (r.bar || r.actionEnd <= r.actionStart) continue;
+		const first = lineAt(r.actionStart);
+		const last = lineAt(r.actionEnd - 1);
+		for (let l = first + 1; l <= last; l++) code[l] = true;
+	}
+	const { rules, user } = spec.sections;
+	return starts.map((_, l) => {
+		const n = l + 1;
+		const section: SectionName =
+			user && n >= user[0] ? 'user' : rules && n >= rules[0] ? 'rules' : 'defs';
+		return code[l] ? `${sectionClass(section)} ${CODE_LINE_CLASS}` : sectionClass(section);
+	});
+}
+
 /**
  * Highlight tokens for the spec editor. `focus` ranges get the `fx-focus`
  * class on top of their syntax color.
@@ -170,6 +225,14 @@ export function specTokens(spec: FlexSpec, focus: readonly Focus[] = []): Highli
 		else if (r.kind === 'pattern' || r.kind === 'def-pattern')
 			colorPattern(text, r.start, r.end, cls);
 		else if (r.kind === 'code' || r.kind === 'action') colorC(text, r.start, r.end, cls);
+	}
+	// Actions are C code: they get the code background, so patterns and actions stand apart.
+	for (const r of spec.regions) {
+		if (r.kind !== 'action') continue;
+		for (let k = r.start; k < Math.min(text.length, r.end); k++) {
+			if (text[k] === '\n') continue;
+			cls[k] = cls[k] ? `${cls[k]} ${CODE_CLASS}` : CODE_CLASS;
+		}
 	}
 	for (const f of focus) {
 		for (let k = Math.max(0, f.start); k < Math.min(text.length, f.end); k++) {

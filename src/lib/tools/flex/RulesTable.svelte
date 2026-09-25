@@ -1,10 +1,10 @@
 <script lang="ts">
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import { toneStyle } from '$lib/components/ui/tones';
-	import { printFlexPattern, printRegex, refsIn } from '$lib/theory/regex';
+	import { printFlexPattern, refsIn } from '$lib/theory/regex';
 	import { toolLink } from '$lib/tools/links';
 	import type { FlexSpec } from './spec';
-	import { MAX_EXPANDED, expandedSize } from './view';
+	import { MAX_EXPANDED, definitionRows, expandedSize } from './view';
 
 	const TOO_LONG = 'too long to show';
 
@@ -16,17 +16,7 @@
 
 	let { spec, onreveal }: Props = $props();
 
-	const definitions = $derived(
-		spec.defs.entries.map((e) => {
-			const expanded =
-				e.regex && refsIn(e.regex).length
-					? expandedSize(e.regex) > MAX_EXPANDED
-						? TOO_LONG
-						: printRegex(e.regex, { dialect: 'flex', expandRefs: true })
-					: null;
-			return { name: e.name, text: e.text, expanded };
-		})
-	);
+	const definitions = $derived(definitionRows(spec));
 
 	const rows = $derived(
 		spec.rules.map((r) => {
@@ -45,6 +35,7 @@
 		})
 	);
 	const showSc = $derived(spec.startConditions.length > 0 || spec.rules.some((r) => r.sc));
+	const hasEol = $derived(spec.rules.some((r) => r.pattern?.eol));
 </script>
 
 <div class="rules-view">
@@ -61,12 +52,18 @@
 						</tr>
 					</thead>
 					<tbody>
-						{#each definitions as d (d.name)}
-							<tr>
+						{#each definitions as d (d.key)}
+							<tr class={{ unused: d.duplicateOf !== null }}>
 								<th scope="row" class="mono name">{d.name}</th>
 								<td class="mono">{d.text}</td>
 								<td class="mono">
-									{#if d.expanded}{d.expanded}{:else}<span class="same">same</span>{/if}
+									{#if d.duplicateOf !== null}
+										<span class="same"
+											>not used: {d.name} is already defined on line {d.duplicateOf}</span
+										>
+									{:else if d.tooLong}
+										<span class="same">{TOO_LONG}</span>
+									{:else if d.expanded}{d.expanded}{:else}<span class="same">same</span>{/if}
 								</td>
 							</tr>
 						{/each}
@@ -142,6 +139,13 @@
 					</tbody>
 				</table>
 			</div>
+			{#if hasEol}
+				<p class="note">
+					A pattern ending in <code>$</code> matches only just before a newline: <code>r$</code>
+					is <code>r/\n</code>, as in flex. At the end of input with no final newline it does not
+					match.
+				</p>
+			{/if}
 		{/if}
 	</section>
 </div>
@@ -217,6 +221,11 @@
 		font-weight: 600;
 		white-space: nowrap;
 	}
+	.unused > th,
+	.unused > td:not(:last-child) {
+		color: var(--text-3);
+		text-decoration: line-through;
+	}
 	.sc {
 		color: var(--epsilon);
 		white-space: nowrap;
@@ -279,9 +288,13 @@
 	.num-chip:hover {
 		box-shadow: 0 0 0 1px var(--tone-fg);
 	}
-	.empty {
+	.empty,
+	.note {
 		margin: 0;
 		color: var(--text-2);
 		font-size: var(--text-sm);
+	}
+	.note {
+		max-width: 70ch;
 	}
 </style>
