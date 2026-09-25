@@ -31,6 +31,8 @@ export interface GroupShape {
 	labelAnchor: 'start' | 'end';
 	/** Outline plus label. */
 	bounds: Box;
+	/** Drawn lighter and dashed (`AutomatonGroup.faint`). */
+	faint: boolean;
 }
 
 const BASE_PAD = 10;
@@ -234,7 +236,17 @@ export function groupShapes(
 		const bounds = new BoundsBuilder();
 		bounds.box(outline);
 		if (label) bounds.box(boxOf(best));
-		out.push({ id: g.id, label, tone, kind, d, labelPos, labelAnchor, bounds: bounds.result() });
+		out.push({
+			id: g.id,
+			label,
+			tone,
+			kind,
+			d,
+			labelPos,
+			labelAnchor,
+			bounds: bounds.result(),
+			faint: g.faint === true
+		});
 	});
 	return out;
 }

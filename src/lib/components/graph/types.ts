@@ -23,6 +23,8 @@ export interface AutomatonGroup {
 	states: Iterable<StateId>;
 	/** Palette index 0–5 (wraps). Defaults to the group's position in the list. */
 	tone?: number;
+	/** Draws the outline lighter and dashed, e.g. finished parts inside the current fragment. */
+	faint?: boolean;
 }
 
 export type GraphSelection = { kind: 'state'; id: StateId } | { kind: 'edge'; key: string } | null;

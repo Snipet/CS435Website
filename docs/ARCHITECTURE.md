@@ -632,8 +632,10 @@ saved state must accept its `LinkStates` shape (extra fields are allowed).
   `positions?` (pinned; otherwise automatic left-to-right layout),
   `highlight?: { active?, taken?, dim?, dimTransitions?, tone? }` (`taken` and
   `dimTransitions` hold transition ids; `tone` maps a state to `'accept'`,
-  `'reject'` or `'info'`), `groups?: { id, label?, states, tone? }[]`
-  (fragment outlines, partition blocks; `tone` is a palette index 0–5),
+  `'reject'` or `'info'`), `groups?: { id, label?, states, tone?, faint? }[]`
+  (fragment outlines, partition blocks; `tone` is a palette index 0–5; `faint`
+  draws a lighter, dashed outline), `extent?` (a box, in user units, that
+  "fit" always includes, so a machine drawn step by step keeps its scale),
   `names?: NamedSet[]` for labels, `editable?`, `selected?` (bindable:
   `{ kind: 'state', id } | { kind: 'edge', key } | null`), callbacks
   `onchange(automaton, positions)`, `onstateclick(id)`,
