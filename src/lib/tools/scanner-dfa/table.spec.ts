@@ -5,6 +5,7 @@ import { EOF, ERROR_STATE, columnOf, driverTable, labelClasses, lookup, stateNam
 import { RELOP_POSITIONS, relopDfa, stuDfa } from './machines';
 import { LEX2_DEFS, LEX2_RULES } from './presets';
 import { buildRuleDfa, compileRules, minimalRuleDfa, nameGroups, withTokenNames } from './rules';
+import { tableSize } from './sizes';
 
 describe('relop table', () => {
 	const t = driverTable(relopDfa());
@@ -138,6 +139,29 @@ describe('columns', () => {
 			expect(lookup(t, 1, '7')).toMatchObject({ column: 0, to: 1, transition: 2 });
 			expect(lookup(t, 0, '7')).toMatchObject({ column: 0, to: E, transition: null });
 			expect(lookup(t, 0, EOF)).toMatchObject({ column: null, to: E, transition: null });
+		});
+
+		it('keep a named set out of an unnamed column', () => {
+			// 0 moves to 1 on digit and on _; 1 loops on letter.
+			const u: Automaton = {
+				states: dfa.states,
+				transitions: [
+					{ id: 0, from: 0, to: 1, label: CharSet.range('0', '9') },
+					{ id: 1, from: 0, to: 1, label: CharSet.of('_') },
+					{ id: 2, from: 1, to: 1, label: letter }
+				],
+				start: 0
+			};
+			expect(driverTable(u).columns.map((c) => c.header)).toEqual(['0–9,_', 'A–Z,a–z']);
+			const named = driverTable(u, { names });
+			expect(named.columns.map((c) => c.header)).toEqual(['digit', 'letter', '_']);
+			expect(named.T).toEqual([
+				[1, E, 1],
+				[E, 1, E]
+			]);
+			expect(lookup(named, 0, '_')).toMatchObject({ column: 2, to: 1, transition: 1 });
+			expect(tableSize(u, names)).toMatchObject({ classes: 3, labelClasses: 3 });
+			expect(tableSize(u)).toMatchObject({ classes: 2, labelClasses: 3 });
 		});
 
 		it('never include the other column, so EOF keeps its entry', () => {

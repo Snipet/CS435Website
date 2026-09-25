@@ -43,10 +43,13 @@ function displayHeaders(a: Automaton, classes: readonly CharSet[]): Map<CharSet,
  * Given `classes`, those are the columns, in that order. Otherwise the columns
  * are the classes of the declared alphabet and every label, with classes that
  * every state treats alike merged into one (`mergeEquivalentClasses`, so
- * `[A-Z]` and `[a-z]` can share a column), in ascending order. When there are
- * at most SPLIT_LIMIT symbols they are split into single symbols (named sets,
- * merged or not, stay whole). A class reached only through labels displayed
- * as, say, `other` is headed `other`, is never merged, and comes last.
+ * `[A-Z]` and `[a-z]` can share a column), in ascending order. Named sets keep
+ * their names whatever the number of symbols: classes merge into an unnamed
+ * union only apart from the named sets they make up (`digit` and `_` stay two
+ * columns unless their union is named). When there are at most SPLIT_LIMIT
+ * symbols the columns are split into single symbols (named sets stay whole).
+ * A class reached only through labels displayed as, say, `other` is headed
+ * `other`, is never merged, and comes last.
  */
 export function tableColumns(
 	a: Automaton,
@@ -63,21 +66,20 @@ export function tableColumns(
 	const labels = a.transitions.flatMap((t) => (t.label ? [t.label] : []));
 	const parts = partitionCharSets(a.alphabet ? [a.alphabet, ...labels] : labels);
 	const heads = displayHeaders(a, parts);
-	const plainParts = parts.filter((c) => !heads.has(c));
-	const merged = mergeEquivalentClasses(a, plainParts);
-	const total = plainParts.reduce((n, c) => n + c.size, 0);
+	const merged = mergeEquivalentClasses(
+		a,
+		parts.filter((c) => !heads.has(c)),
+		{ names: opts.names }
+	);
+	const total = merged.reduce((n, c) => n + c.size, 0);
 	const named = (c: CharSet) => opts.names?.some((n) => n.set.equals(c)) ?? false;
-	let plain = merged;
-	if (total <= SPLIT_LIMIT) {
-		// One column per symbol, as on the slides, except for named sets.
-		const whole = merged.filter(named);
-		plain = [
-			...whole,
-			...plainParts
-				.filter((p) => !whole.some((w) => p.isSubsetOf(w)))
-				.flatMap((p) => (named(p) ? [p] : [...p.codePoints()].map((cp) => CharSet.single(cp))))
-		].sort((x, y) => x.first()! - y.first()!);
-	}
+	// One column per symbol, as on the slides, except for named sets.
+	const plain =
+		total <= SPLIT_LIMIT
+			? merged
+					.flatMap((c) => (named(c) ? [c] : [...c.codePoints()].map((cp) => CharSet.single(cp))))
+					.sort((x, y) => x.first()! - y.first()!)
+			: merged;
 	return [
 		...plain.map((c) => column(c)),
 		...parts.filter((c) => heads.has(c)).map((c) => column(c, heads.get(c)))

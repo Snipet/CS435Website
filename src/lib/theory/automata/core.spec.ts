@@ -413,6 +413,86 @@ describe('mergeEquivalentClasses', () => {
 		expect(mergeEquivalentClasses(a, [])).toEqual([]);
 	});
 
+	describe('with names', () => {
+		const digit = { name: 'digit', set: CharSet.range('0', '9') };
+		const letter = { name: 'letter', set: CharSet.range('A', 'Z').union(CharSet.range('a', 'z')) };
+		const lower = { name: 'lower', set: CharSet.range('a', 'z') };
+		// Every class leads A to B: without names, all of them merge into one.
+		const a = automatonFromText(`
+			start: A
+			A [0-9] B
+			A [A-Z] B
+			A _ B
+			A [a-z] B
+		`);
+		const classes = symbolClasses(a);
+
+		it('keeps a named class out of a union that is not named', () => {
+			expect(text(mergeEquivalentClasses(a, classes))).toEqual(['[0-9A-Z_a-z]']);
+			const b = automatonFromText('start: A\nA [0-9] B\nA _ B\nB [A-Za-z] B');
+			expect(text(mergeEquivalentClasses(b, symbolClasses(b)))).toEqual(['[0-9_]', '[A-Za-z]']);
+			expect(text(mergeEquivalentClasses(b, symbolClasses(b), { names: [digit, letter] }))).toEqual(
+				['[0-9]', '[A-Za-z]', '_']
+			);
+		});
+
+		it('splits a union into the named sets made of its classes and the rest', () => {
+			expect(text(mergeEquivalentClasses(a, classes, { names: [digit, letter] }))).toEqual([
+				'[0-9]',
+				'[A-Za-z]',
+				'_'
+			]);
+			// Only digit is named: [A-Z], _ and [a-z] still share one class.
+			expect(text(mergeEquivalentClasses(a, classes, { names: [digit] }))).toEqual([
+				'[0-9]',
+				'[A-Z_a-z]'
+			]);
+		});
+
+		it('takes the largest named set first and never overlaps two', () => {
+			for (const names of [
+				[lower, letter],
+				[letter, lower]
+			])
+				expect(text(mergeEquivalentClasses(a, classes, { names }))).toEqual(['[0-9_]', '[A-Za-z]']);
+			// lower alone: [A-Z] is left over with 0–9 and _.
+			expect(text(mergeEquivalentClasses(a, classes, { names: [lower] }))).toEqual([
+				'[0-9A-Z_]',
+				'[a-z]'
+			]);
+		});
+
+		it('keeps a union whole when it is named', () => {
+			const word = { name: 'word', set: CharSet.of('_').union(letter.set).union(digit.set) };
+			expect(text(mergeEquivalentClasses(a, classes, { names: [digit, letter, word] }))).toEqual([
+				'[0-9A-Z_a-z]'
+			]);
+			expect(text(mergeEquivalentClasses(a, classes, { names: [letter] }))).toEqual([
+				'[0-9_]',
+				'[A-Za-z]'
+			]);
+		});
+
+		it('never splits a class, even when a named set covers only part of it', () => {
+			const b = automatonFromText('start: A\nA [0-9_] B\nA [A-Za-z] B');
+			expect(text(mergeEquivalentClasses(b, symbolClasses(b), { names: [digit] }))).toEqual([
+				'[0-9A-Z_a-z]'
+			]);
+			const c = automatonFromText('start: A\nA [0-9_] B\nA [A-Za-z] C');
+			expect(text(mergeEquivalentClasses(c, symbolClasses(c), { names: [digit] }))).toEqual([
+				'[0-9_]',
+				'[A-Za-z]'
+			]);
+		});
+
+		it('changes nothing when no union is formed', () => {
+			const c = automatonFromText('start: A\nA [0-9] B\nA _ C\nA [A-Za-z] D');
+			expect(text(mergeEquivalentClasses(c, symbolClasses(c), { names: [digit, letter] }))).toEqual(
+				['[0-9]', '[A-Za-z]', '_']
+			);
+		});
+	});
+
 	it('leaves the lecture tables alone: 0 and 1 stay two columns', () => {
 		const nfa = lectureNfa();
 		const classes = symbolClasses(nfa);

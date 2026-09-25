@@ -2,8 +2,9 @@
 @component
 The arrays of the table-driven scanner: T[state, char] (rows are states,
 columns are symbol classes, merged where every state has the same next state
-on them), then accept[state] (the token tokenFor returns,
-or —) and retract[state] (✓ or —). Start row →, accepting rows ◎.
+on them unless a named set would go into an unnamed column), then
+accept[state] (the token tokenFor returns, or —) and retract[state] (✓ or —).
+Start row →, accepting rows ◎.
 -->
 <script lang="ts" module>
 	export interface DriverTableHighlight {

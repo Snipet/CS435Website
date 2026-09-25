@@ -144,9 +144,10 @@ rules and for the DFAs on the slides, as built and minimized.
 			<p class="legend">
 				Symbol classes are the columns of T on the Table-driven tab: sets of characters that every
 				state treats alike (relop's <em>other</em> is every character without an edge of its own).
-				Label classes on which every state has the same next state share one column;
-				<em>merged from</em> gives the number of label classes before that. The last column counts a
-				table indexed by the character itself (T: 2D int array [state, char], slide 15) over the {ASCII_COLUMNS}
+				Label classes on which every state has the same next state share one column, but a named set
+				such as <em>digit</em> never goes into an unnamed column; <em>merged from</em> gives the
+				number of label classes before that. The last column counts a table indexed by the character
+				itself (T: 2D int array [state, char], slide 15) over the {ASCII_COLUMNS}
 				ASCII characters. Minimizing keeps accepting states with different tokens apart.
 			</p>
 			<SlideQuestions questions={QUESTIONS} />

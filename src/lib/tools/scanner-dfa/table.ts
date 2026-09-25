@@ -61,10 +61,11 @@ export function labelClasses(dfa: Automaton): CharSet[] {
  * Columns are the symbol classes of the transition labels, with classes that
  * every state treats alike merged into one column (`mergeEquivalentClasses`:
  * [A-Z] and [a-z] make one `letter` column when every state has the same next
- * state on both; distinct but equivalent next states keep them apart), in
- * ascending order (with complements such as [^0-9] after the rest), headed
- * like the transition table (named sets such as `digit`, or `other` when the
- * machine labels that class `other`, as relop does; `other` is never merged).
+ * state on both; distinct but equivalent next states keep them apart; a named
+ * set such as `digit` never merges into an unnamed union), in ascending order
+ * (with complements such as [^0-9] after the rest), headed like the
+ * transition table (named sets such as `digit`, or `other` when the machine
+ * labels that class `other`, as relop does; `other` is never merged).
  * A character in no column, and EOF when there is no `other` column, has no
  * entry in T: it leads to the error state.
  */
@@ -81,11 +82,13 @@ export function driverTable(
 		if (heads[i].header === header(set)) plain.push(set);
 		else others.push({ set, header: heads[i].header, other: true });
 	});
-	const cols = mergeEquivalentClasses(dfa, plain).map((set): TableColumn => ({
-		set,
-		header: header(set),
-		other: false
-	}));
+	const cols = mergeEquivalentClasses(dfa, plain, { names: opts.names }).map(
+		(set): TableColumn => ({
+			set,
+			header: header(set),
+			other: false
+		})
+	);
 	// Complements such as [^0-9] start at the first code point; list them after the plain classes.
 	const huge = (c: TableColumn) => c.set.size > 0x10000;
 	const columns: TableColumn[] = [
