@@ -29,11 +29,21 @@ export interface Citation {
 	slide?: number | readonly [number, number];
 }
 
+/**
+ * A citation's two parts: the deck ("Lexical Analysis III", or "Intro (cont’d):
+ * Compiler architecture" for the Intro decks, whose titles repeat) and the
+ * slides ("slide 8", "slides 17–19"; null when none are given).
+ */
+export function citationParts(c: Citation): { deck: string; slides: string | null } {
+	const d = decks[c.deck];
+	const deck = d.title.startsWith('Intro') ? `${d.title}: ${d.topic}` : d.title;
+	if (c.slide === undefined) return { deck, slides: null };
+	if (typeof c.slide === 'number') return { deck, slides: `slide ${c.slide}` };
+	return { deck, slides: `slides ${c.slide[0]}–${c.slide[1]}` };
+}
+
 /** "Lexical Analysis III · slide 8", "Intro (cont’d): Compiler architecture · slides 17–19". */
 export function formatCitation(c: Citation): string {
-	const d = decks[c.deck];
-	const title = d.title.startsWith('Intro') ? `${d.title}: ${d.topic}` : d.title;
-	if (c.slide === undefined) return title;
-	if (typeof c.slide === 'number') return `${title} · slide ${c.slide}`;
-	return `${title} · slides ${c.slide[0]}–${c.slide[1]}`;
+	const { deck, slides } = citationParts(c);
+	return slides ? `${deck} · ${slides}` : deck;
 }
