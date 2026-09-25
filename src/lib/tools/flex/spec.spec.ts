@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { presetById } from './presets';
+import { presetById, presets } from './presets';
 import { compileSpec } from './program';
 import { activeRules, eofRule, parseSpec, patternEnd, scName } from './spec';
 
@@ -165,6 +165,61 @@ describe('parseSpec: diagnostics', () => {
 		expect(d.message).toBe('expected ; after printf(…)');
 		expect(text.slice(0, d.span!.start)).toBe('%%\na  { printf("x")');
 		expect(c.ok).toBe(false);
+	});
+
+	it('keeps every span inside the text, for every prefix of every preset', () => {
+		const texts: string[] = [];
+		for (const p of presets) {
+			const s = p.value.spec;
+			for (let n = 0; n <= s.length; n++) texts.push(s.slice(0, n), s.slice(0, n).trimEnd());
+		}
+		const outside: string[] = [];
+		for (const t of texts) {
+			for (const d of compileSpec(t).diagnostics) {
+				if (d.span && (d.span.start < 0 || d.span.start > d.span.end || d.span.end > t.length))
+					outside.push(`${d.message} at ${d.span.start}–${d.span.end} of ${t.length}`);
+			}
+		}
+		expect(outside).toEqual([]);
+	});
+
+	it('gives a problem at the very end of the spec a zero-width span at the end', () => {
+		const atEnd = (text: string, message: string) => {
+			const d = compileSpec(text).diagnostics.find((x) => x.message === message);
+			expect(d, message).toBeDefined();
+			expect(d!.span).toEqual({ start: text.length, end: text.length, source: null });
+		};
+		atEnd('DIGIT [0-9]', 'missing %%: a flex spec needs a line with %% before its rules');
+		atEnd('%%\n[0-9]+  { printf (', 'expected an expression but the code ended');
+		atEnd('%%\nx  printf("a"', 'expected ) to close the call but found the end of the code');
+		atEnd(
+			'%%\n%%\nint main(',
+			'expected ) to close the parameter list but found the end of the code'
+		);
+		atEnd('%%\n%%\nint', 'expected a name but found the end of the code');
+		atEnd('%x C\n%%\n<C>', 'a pattern must follow the start conditions directly');
+	});
+
+	it('points an unfinished action’s end-of-code error where the action ends', () => {
+		const text = '%%\nx  printf("a"\ny  ECHO;\n%%\n';
+		const d = compileSpec(text).diagnostics.find((x) => x.severity === 'error')!;
+		expect(d.message).toBe('expected ) to close the call but found the end of the code');
+		expect(text.slice(0, d.span!.start)).toBe('%%\nx  printf("a"');
+		expect(d.span!.end).toBe(d.span!.start);
+		// A start condition with nothing after it on its line.
+		const sc = '%x C\n%%\n<C>\n%%\n';
+		const e = parseSpec(sc).diagnostics[0];
+		expect(e.message).toBe('a pattern must follow the start conditions directly');
+		expect(e.span).toMatchObject({ start: sc.indexOf('<C>') + 3, end: sc.indexOf('<C>') + 3 });
+	});
+
+	it('keeps an unclosed action’s spans on its {', () => {
+		const text = '%%\nx  { int a = 1;';
+		const c = compileSpec(text);
+		expect(c.diagnostics.map((d) => [d.message, text.slice(d.span!.start, d.span!.end)])).toEqual([
+			['this { is never closed, so the action runs to the end of the file', '{'],
+			['{ is never closed', '{']
+		]);
 	});
 
 	it('reports flex globals declared without extern', () => {

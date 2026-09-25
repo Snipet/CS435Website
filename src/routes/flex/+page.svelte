@@ -15,6 +15,7 @@
 	import BuildStrip from '$lib/tools/flex/BuildStrip.svelte';
 	import ConsoleView from '$lib/tools/flex/ConsoleView.svelte';
 	import RulesTable from '$lib/tools/flex/RulesTable.svelte';
+	import RunMessages from '$lib/tools/flex/RunMessages.svelte';
 	import StepView from '$lib/tools/flex/StepView.svelte';
 	import WordCount from '$lib/tools/flex/WordCount.svelte';
 	import { hasCurlyQuotes, straightenQuotes } from '$lib/tools/flex/c-lexer';
@@ -30,7 +31,7 @@
 		type FlexState,
 		type FlexView
 	} from '$lib/tools/flex/state';
-	import { describeInput, formatReturn, visible } from '$lib/tools/flex/view';
+	import { describeInput, formatReturn, runMessages, visible } from '$lib/tools/flex/view';
 	import { WC_GLOBALS } from '$lib/tools/flex/wc';
 	import { syncToHash } from '$lib/url-state';
 
@@ -128,6 +129,7 @@
 		...compiled.diagnostics,
 		...(fresh ? run.diagnostics.filter((d) => d.span) : [])
 	]);
+	const messages = $derived(runMessages(run, settledSpec));
 	const sections = $derived(compiled.spec.sections);
 	const ruleCount = $derived(compiled.spec.rules.length);
 	const defCount = $derived(compiled.spec.definitions.length);
@@ -139,6 +141,15 @@
 	]);
 
 	let specEditor: HTMLTextAreaElement | undefined = $state();
+
+	/** Selects a run message's span in the spec editor. */
+	function revealSpan(span: { start: number; end: number }) {
+		const ta = specEditor;
+		if (!ta) return;
+		ta.focus({ preventScroll: true });
+		ta.setSelectionRange(span.start, span.end);
+		ta.scrollIntoView({ block: 'nearest' });
+	}
 
 	function revealRule(index: number) {
 		const r = compiled.spec.rules[index];
@@ -331,6 +342,7 @@
 											{#if run.stopped}
 												<Callout tone="error" title="The program stopped">{run.stopped}</Callout>
 											{/if}
+											<RunMessages {messages} onreveal={fresh ? revealSpan : undefined} />
 											<section class="calls" aria-labelledby="calls-title">
 												<h3 id="calls-title" class="section-label">yylex() calls</h3>
 												{#if run.calls.length === 0}
