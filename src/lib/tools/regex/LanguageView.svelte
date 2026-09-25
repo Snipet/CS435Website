@@ -5,7 +5,8 @@
 <script lang="ts">
 	import Badge from '$lib/components/ui/Badge.svelte';
 	import StringSetView from '$lib/components/ui/StringSetView.svelte';
-	import { COUNT_LENGTH, groupDigits, LIST_LIMIT, type LanguageListing } from './analysis';
+	import { formatString } from '$lib/theory/chars';
+	import { groupDigits, LIST_LIMIT, type LanguageListing } from './analysis';
 	import { MAX_LENGTH_LIMIT } from './state';
 
 	interface Props {
@@ -19,7 +20,13 @@
 
 	const uid = $props.id();
 	const limited = $derived(listing.strings.length >= LIST_LIMIT);
-	const lengths = $derived(listing.counts.map((_, k) => k));
+	/** Every string is longer than the list goes: the shortest one, and its length. */
+	const beyond = $derived(
+		listing.strings.length === 0 && listing.shortest !== null
+			? { text: listing.shortest, length: [...listing.shortest].length }
+			: null
+	);
+	const symbolsText = (n: number) => `${n} ${n === 1 ? 'symbol' : 'symbols'}`;
 </script>
 
 <div class="language">
@@ -54,11 +61,20 @@
 	</div>
 
 	<div class="set">
-		<StringSetView prefix="L(R) =" strings={listing.strings} more={listing.truncated} />
+		{#if beyond}
+			<p class="beyond">
+				L(R) has no strings of up to {symbolsText(maxLength)}. Its shortest string has
+				{symbolsText(beyond.length)}:
+				<span class="formal">{formatString(beyond.text)}</span>.
+			</p>
+		{:else}
+			<StringSetView prefix="L(R) =" strings={listing.strings} more={listing.truncated} />
+		{/if}
 	</div>
 	<p class="caption">
-		Shortlex order: shorter strings first, then by symbol. Strings of up to {maxLength}
-		{maxLength === 1 ? 'symbol' : 'symbols'}{limited ? `; the first ${LIST_LIMIT} are listed` : ''}.
+		Shortlex order: shorter strings first, then by symbol. Strings of up to {symbolsText(
+			maxLength
+		)}{limited ? `; the first ${LIST_LIMIT} are listed` : ''}.
 	</p>
 
 	<div class="counts-wrap">
@@ -66,21 +82,20 @@
 			<caption>Number of strings of each length</caption>
 			<thead>
 				<tr>
-					<th scope="row">Length</th>
-					{#each lengths as k (k)}<th scope="col">{k}</th>{/each}
+					<th scope="col">Length</th>
+					<th scope="col" class="num">Strings</th>
 				</tr>
 			</thead>
 			<tbody>
-				<tr>
-					<th scope="row">Strings</th>
-					{#each listing.counts as c, k (k)}
-						<td class={{ zero: c === 0n }}>{groupDigits(c)}</td>
-					{/each}
-				</tr>
+				{#each listing.counts as c, k (k)}
+					<tr>
+						<th scope="row">{k}</th>
+						<td class={['num', { zero: c === 0n }]}>{groupDigits(c)}</td>
+					</tr>
+				{/each}
 			</tbody>
 		</table>
 	</div>
-	<p class="caption">Lengths 0 to {COUNT_LENGTH}.</p>
 </div>
 
 <style>
@@ -163,19 +178,31 @@
 	}
 	.counts th,
 	.counts td {
-		padding: 6px 10px;
-		text-align: right;
+		padding: 4px 12px;
+		text-align: left;
 		white-space: nowrap;
 	}
+	.counts .num {
+		text-align: right;
+	}
 	.counts thead th {
+		padding-top: 6px;
 		border-bottom: 1px solid var(--border);
 		color: var(--text-3);
 		font-weight: 500;
 	}
+	.counts tbody tr + tr {
+		border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+	}
+	.counts tbody tr:last-child > * {
+		padding-bottom: 6px;
+	}
 	.counts th[scope='row'] {
+		width: 5rem;
 		color: var(--text-2);
-		font-weight: 500;
-		text-align: left;
+		font-family: var(--font-mono);
+		font-size: 0.8125rem;
+		font-weight: 400;
 	}
 	.counts td {
 		font-family: var(--font-mono);
@@ -183,5 +210,18 @@
 	}
 	.counts td.zero {
 		color: var(--text-3);
+	}
+	.beyond {
+		margin: 0;
+		color: var(--text-2);
+		font-size: var(--text-sm);
+		line-height: 1.55;
+	}
+	.formal {
+		color: var(--text);
+		font-family: var(--font-mono);
+		font-variant-ligatures: none;
+		overflow-wrap: break-word;
+		white-space: pre-wrap;
 	}
 </style>

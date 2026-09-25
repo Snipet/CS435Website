@@ -31,7 +31,10 @@
 	const uid = $props.id();
 	const rowId = (key: string) => `${uid}-row${key ? `-${key}` : ''}`;
 
-	/** Nodes the user opened or closed; others follow `expandedByDefault`. */
+	/**
+	 * Nodes the user opened or closed; others follow `expandedByDefault`. The page
+	 * mounts a new tree when a preset or a link replaces R, which clears them.
+	 */
 	const overrides = new SvelteMap<string, boolean>();
 	const selectedKey = $derived(pathKey(selected));
 	const isAncestor = (key: string, of: string) =>
@@ -122,8 +125,10 @@
 		{@const isSelected = row.key === selectedKey}
 		{@const expr = text(row.node)}
 		{@const clause = clauseName(row.node)}
+		{@const id = rowId(row.key)}
+		<!-- The name is the sub-expression and clause; the rule and, when selected, the strings describe it. -->
 		<div
-			id={rowId(row.key)}
+			{id}
 			class={['row', { selected: isSelected }]}
 			style="--depth: {Math.min(row.depth, 14)}"
 			role="treeitem"
@@ -131,6 +136,7 @@
 			aria-selected={isSelected}
 			aria-expanded={row.hasChildren ? row.expanded : undefined}
 			aria-label="{expr}, {clause}"
+			aria-describedby={isSelected && sample ? `${id}-rule ${id}-detail` : `${id}-rule`}
 			tabindex={row.key === focusKey ? 0 : -1}
 			onclick={() => onselect(row.path)}
 			onkeydown={(e) => onkeydown(e, row, i)}
@@ -154,9 +160,9 @@
 					<code class="expr">{expr}</code>
 					<span class="clause">{clause}</span>
 				</span>
-				<span class="rule">{rule(row.node)}</span>
+				<span class="rule" id="{id}-rule">{rule(row.node)}</span>
 				{#if isSelected && sample}
-					<span class="detail">
+					<span class="detail" id="{id}-detail">
 						{#if sample.ok}
 							<StringSetView
 								prefix={setPrefix(row.node)}

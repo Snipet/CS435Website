@@ -10,12 +10,12 @@
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import IconButton from '$lib/components/ui/IconButton.svelte';
 	import type { HighlightRange } from '$lib/components/ui/types';
-	import { formatLabel, formatString, showChar, type NamedSet } from '$lib/theory/chars';
+	import { formatString, showChar, type NamedSet } from '$lib/theory/chars';
 	import type { CharSet } from '$lib/theory/charset';
 	import type { TestResult } from './analysis';
 	import DerivationView from './DerivationView.svelte';
 	import { brackets, type Bracket } from './derive';
-	import type { Rejection } from './explain';
+	import { describeSymbols, type Rejection } from './explain';
 	import { escapeTest, MAX_TESTS, unescapeTest } from './state';
 
 	interface Props {
@@ -38,8 +38,12 @@
 	let editing = $state<{ index: number; text: string } | null>(null);
 	const shown = (i: number) => (editing?.index === i ? editing.text : escapeTest(tests[i]));
 
+	/** The row typed in since it took focus; its membership is announced as it changes. */
+	let typing = $state<number | null>(null);
+
 	function input(i: number, text: string) {
 		editing = { index: i, text };
+		typing = i;
 		tests[i] = unescapeTest(text);
 	}
 
@@ -52,6 +56,7 @@
 
 	async function remove(i: number) {
 		editing = null;
+		typing = null;
 		tests.splice(i, 1);
 		await tick();
 		const next = document.getElementById(inputId(Math.min(i, tests.length - 1)));
@@ -60,8 +65,17 @@
 	}
 
 	const sym = (c: string) => `'${showChar(c, 'quoted')}'`;
-	const symbols = (set: CharSet) =>
-		set.size === 1 ? sym(set.firstChar()!) : formatLabel(set, { names, separator: ', ' });
+	const symbols = (set: CharSet) => describeSymbols(set, names);
+
+	const status = (r: TestResult) => (r.member ? 'in L(R)' : 'not in L(R)');
+	/**
+	 * One live region for all rows: it follows the row being typed in, so a
+	 * change to R does not announce every row at once.
+	 */
+	const live = $derived.by(() => {
+		const r = typing === null ? null : results[typing];
+		return typing !== null && r ? `Test string ${typing + 1}: ${status(r)}` : '';
+	});
 
 	function highlights(s: string, r: Rejection): HighlightRange[] {
 		if (r.kind === 'fails')
@@ -139,12 +153,16 @@
 								value={shown(i)}
 								placeholder="empty string &quot;&quot;"
 								aria-label="Test string {i + 1}"
+								aria-describedby={r ? `${inputId(i)}-status` : undefined}
 								spellcheck="false"
 								autocomplete="off"
 								autocapitalize="off"
 								oninput={(e) => input(i, e.currentTarget.value)}
 								onfocus={() => (editing = { index: i, text: escapeTest(s) })}
-								onblur={() => (editing = null)}
+								onblur={() => {
+									editing = null;
+									typing = null;
+								}}
 								onkeydown={(e) => {
 									if (e.key === 'Enter' && !e.isComposing) {
 										e.preventDefault();
@@ -157,9 +175,7 @@
 							<Badge tone={r.member ? 'accept' : 'reject'} mono aria-hidden="true">
 								{r.member ? '∈ L(R)' : '∉ L(R)'}
 							</Badge>
-							<span class="visually-hidden" aria-live="polite"
-								>{r.member ? 'in L(R)' : 'not in L(R)'}</span
-							>
+							<span class="visually-hidden" id="{inputId(i)}-status">{status(r)}</span>
 						{/if}
 						<IconButton
 							icon="x"
@@ -196,6 +212,7 @@
 			{/each}
 		</ol>
 	{/if}
+	<p class="visually-hidden" aria-live="polite">{live}</p>
 	<div class="foot">
 		<Button id="{uid}-add" size="sm" onclick={add} disabled={tests.length >= MAX_TESTS}>
 			{#snippet icon()}<Icon name="plus" size={15} />{/snippet}

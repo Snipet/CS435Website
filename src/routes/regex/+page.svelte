@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import {
 		Button,
 		CitationTag,
@@ -30,6 +30,7 @@
 		evaluateTest,
 		listLanguage,
 		namedSymbolSets,
+		parseCompare,
 		thompsonState
 	} from '$lib/tools/regex/analysis';
 	import type { Bracket } from '$lib/tools/regex/derive';
@@ -58,12 +59,13 @@
 	import SyntaxTree from '$lib/tools/regex/SyntaxTree.svelte';
 	import TestStrings from '$lib/tools/regex/TestStrings.svelte';
 
-	let model = $state<RegexToolState>(applyPreset(presetById(DEFAULT_PRESET_ID)!, blankState()));
+	const initial = applyPreset(presetById(DEFAULT_PRESET_ID)!, blankState());
+	let model = $state<RegexToolState>(initial);
 
 	syncToHash<RegexLinkState>(() => model, {
 		onLoad: (v) => {
 			Object.assign(model, normalizeState(v));
-			defsOpen = false;
+			replaced();
 		},
 		validate: isRegexState
 	});
@@ -101,33 +103,113 @@
 	});
 	const showDefs = $derived(defsOpen || model.defs.trim() !== '');
 
+	/** Bumped when a preset or a link replaces the inputs; the tree starts over (open nodes reset). */
+	let loads = $state(0);
+
+	/** A preset or a link replaced the inputs. */
+	function replaced() {
+		defsOpen = false;
+		loads++;
+		settleNow();
+	}
+
 	function load(preset: RegexPreset) {
 		Object.assign(model, applyPreset(preset, model));
-		defsOpen = false;
+		replaced();
 	}
 
 	function setDialect(to: Dialect) {
 		const from = model.dialect;
 		if (from === to) return;
-		Object.assign(model, convertDialect(model, from, to), { dialect: to, node: [] });
+		Object.assign(model, convertDialect(model, from, to, model.alphabet), {
+			dialect: to,
+			node: []
+		});
+		settleNow();
 	}
 
 	// ---- Analysis --------------------------------------------------------------
+	// Parsing is cheap and follows every keystroke (the fields' diagnostics). The
+	// views build automata, which takes longer for large expressions, so they
+	// follow a settled copy of the inputs: at once while builds are quick, and
+	// SETTLE_MS after typing stops once a build was slow.
 
-	const analysis = $derived(
-		analyzeExpression({
-			re: model.re,
-			defs: model.defs,
-			dialect: model.dialect,
-			alphabet: model.alphabet
-		})
+	interface Inputs {
+		re: string;
+		defs: string;
+		dialect: Dialect;
+		alphabet: string;
+		compare: string;
+	}
+	const inputsOf = (m: Inputs): Inputs => ({
+		re: m.re,
+		defs: m.defs,
+		dialect: m.dialect,
+		alphabet: m.alphabet,
+		compare: m.compare
+	});
+	const sameInputs = (a: Inputs, b: Inputs) =>
+		a.re === b.re &&
+		a.defs === b.defs &&
+		a.dialect === b.dialect &&
+		a.alphabet === b.alphabet &&
+		a.compare === b.compare;
+
+	/** A build that took longer than this (ms) makes the views wait for a pause in typing. */
+	const SLOW_MS = 25;
+	const SETTLE_MS = 150;
+	/** Time the views' last builds took (ms): L(R) and the comparison. */
+	const cost = { expression: 0, compare: 0 };
+	const now = () => (typeof performance === 'undefined' ? 0 : performance.now());
+
+	let settled = $state.raw<Inputs>(inputsOf(initial));
+
+	function settleNow() {
+		settled = inputsOf(model);
+	}
+
+	$effect(() => {
+		const next = inputsOf(model);
+		const last = untrack(() => settled);
+		if (sameInputs(next, last)) return;
+		if (cost.expression + cost.compare < SLOW_MS) {
+			settled = next;
+			return;
+		}
+		const timer = setTimeout(() => (settled = next), SETTLE_MS);
+		return () => clearTimeout(timer);
+	});
+	const pending = $derived(!sameInputs(inputsOf(model), settled));
+
+	/** The inputs as typed, parsed only (diagnostics). */
+	const typed = $derived(
+		analyzeExpression(
+			{ re: model.re, defs: model.defs, dialect: model.dialect, alphabet: model.alphabet },
+			{ build: false }
+		)
 	);
+	const typedCompare = $derived(parseCompare(typed, model.compare));
+
+	/** The settled inputs with L(R) built: everything the views show. */
+	const analysis = $derived.by(() => {
+		const start = now();
+		const a = analyzeExpression(settled);
+		cost.expression = now() - start;
+		return a;
+	});
+	const compareResult = $derived.by(() => {
+		const start = now();
+		const c = analyzeCompare(analysis, settled.compare);
+		cost.compare = now() - start;
+		return c;
+	});
+
 	const root = $derived(analysis.re.regex);
-	const usesAny = $derived(root ? containsAny(root) : false);
-	const defNames = $derived(new Set(analysis.defs.defs.keys()));
+	const typedUsesAny = $derived(typed.re.regex ? containsAny(typed.re.regex) : false);
+	const defNames = $derived(new Set(typed.defs.defs.keys()));
 	const sigmaPlaceholder = $derived(
-		analysis.inferred && !usesAny
-			? `inferred: ${formatAlphabet(analysis.inferred, { names: defNames })}`
+		typed.inferred && !typedUsesAny
+			? `inferred: ${formatAlphabet(typed.inferred, { names: defNames })}`
 			: 'e.g. { 0, 1 }'
 	);
 
@@ -138,10 +220,11 @@
 	const definitionText = (name: string) => analysis.defs.entries.find((e) => e.name === name)?.text;
 
 	// The selected tree node, marked where it was written (R or a definition). A
-	// definition use also marks the definition's line. The root (all of R) is not marked.
+	// definition use also marks the definition's line. The root (all of R) is not
+	// marked, and nothing is marked while the tree is behind the text being typed.
 	const selectedPath = $derived(root && nodeAtPath(root, model.node) ? model.node : []);
 	const selectedNode = $derived(root ? (nodeAtPath(root, selectedPath) ?? null) : null);
-	const span = $derived(selectedPath.length > 0 ? (selectedNode?.span ?? null) : null);
+	const span = $derived(selectedPath.length > 0 && !pending ? (selectedNode?.span ?? null) : null);
 	const reHighlight = $derived(
 		span && span.source === null ? { start: span.start, end: span.end } : null
 	);
@@ -149,7 +232,7 @@
 		const marks: HighlightToken[] = [];
 		if (span && span.source !== null)
 			marks.push({ from: span.start, to: span.end, className: 'rx-node' });
-		const node = selectedNode;
+		const node = pending ? null : selectedNode;
 		if (node?.kind === 'ref') {
 			const entry = analysis.defs.entries.find(
 				(e) => e.name === node.name && e.regex === node.body
@@ -160,14 +243,13 @@
 		return marks.sort((a, b) => a.from - b.from);
 	});
 
-	const structureNote = $derived(structureBlocked(model.re, analysis));
-	const languageNote = $derived(languageBlocked(model.re, analysis));
+	const structureNote = $derived(structureBlocked(settled.re, analysis));
+	const languageNote = $derived(languageBlocked(settled.re, analysis));
 	const min = $derived(analysis.language?.ok ? analysis.language.min : null);
 	const listing = $derived(min ? listLanguage(min, model.maxLength) : null);
 	const minStates = $derived(min ? withoutTrap(min).states.length : 0);
 	const results = $derived(model.tests.map((t) => evaluateTest(analysis, t)));
 	const namedSets = $derived(namedSymbolSets(analysis.defs));
-	const compareResult = $derived(analyzeCompare(analysis, model.compare));
 	const bracketLabel = (b: Bracket) => nodeText(b.derivation.node, printOpts);
 
 	const current = $derived(matchPreset(model));
@@ -177,7 +259,7 @@
 	const hasThompson = toolBySlug('thompson') !== undefined;
 	const hasAutomata = toolBySlug('automata') !== undefined;
 	const thompsonHref = $derived.by(() => {
-		const s = hasThompson ? thompsonState(model, analysis) : null;
+		const s = hasThompson ? thompsonState(settled, analysis) : null;
 		return s ? toolLink('thompson', s) : null;
 	});
 	const automataHref = $derived.by(() => {
@@ -273,7 +355,7 @@
 						label="Regular definitions"
 						bind:value={model.defs}
 						language={flex ? 'flex-definitions' : 'lecture-definitions'}
-						diagnostics={analysis.defs.diagnostics}
+						diagnostics={typed.defs.diagnostics}
 						highlight={defsMarks.length ? () => defsMarks : undefined}
 						placeholder={flex ? 'DIGIT     [0-9]' : "digit = '0' | '1' | … | '9'"}
 						minRows={3}
@@ -293,7 +375,7 @@
 					bind:value={model.re}
 					symbols={palette}
 					{aliases}
-					diagnostics={analysis.re.diagnostics}
+					diagnostics={typed.re.diagnostics}
 					highlight={reHighlight}
 					placeholder={flex ? 'e.g. {LETTER}({LETTER}|{DIGIT})*' : 'e.g. letter (letter | digit)*'}
 				/>
@@ -304,7 +386,7 @@
 					symbols={[]}
 					aliases={false}
 					source={ALPHABET_SOURCE}
-					diagnostics={analysis.alphabetDiagnostics}
+					diagnostics={typed.alphabetDiagnostics}
 					placeholder={sigmaPlaceholder}
 				/>
 				{#if !showDefs}
@@ -369,15 +451,17 @@
 					{#if structureNote || !root}
 						<p class="view-note">{structureNote}</p>
 					{:else}
-						<SyntaxTree
-							{root}
-							selected={selectedPath}
-							onselect={(p) => (model.node = p)}
-							print={printOpts}
-							dialect={model.dialect}
-							definition={definitionText}
-							sigma={analysis.sigma}
-						/>
+						{#key loads}
+							<SyntaxTree
+								{root}
+								selected={selectedPath}
+								onselect={(p) => (model.node = p)}
+								print={printOpts}
+								dialect={analysis.dialect}
+								definition={definitionText}
+								sigma={analysis.sigma}
+							/>
+						{/key}
 					{/if}
 				</Panel>
 			</div>
@@ -427,6 +511,7 @@
 					<CompareView
 						bind:value={model.compare}
 						result={compareResult}
+						diagnostics={typedCompare?.diagnostics ?? []}
 						blocked={languageNote}
 						symbols={palette}
 						{aliases}

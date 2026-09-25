@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseAutomatonText, runDfa } from '$lib/theory/automata';
+import { compareLanguages, parseAutomatonText, runDfa } from '$lib/theory/automata';
 import { CharSet } from '$lib/theory/charset';
 import { printRegex } from '$lib/theory/regex';
 import {
@@ -9,15 +9,19 @@ import {
 	convertDialect,
 	evaluateTest,
 	groupDigits,
+	languageFor,
 	listLanguage,
 	listSymbols,
 	namedSymbolSets,
+	parseCompare,
 	parseDefs,
 	sampleOf,
 	splitFlexDefinitions,
 	thompsonState,
+	type ExpressionAnalysis,
 	type ExpressionInput
 } from './analysis';
+import { MAX_PRODUCT } from './machines';
 import { languageBlocked, sizeMessage, structureBlocked } from './messages';
 
 const input = (over: Partial<ExpressionInput>): ExpressionInput => ({
@@ -29,6 +33,11 @@ const input = (over: Partial<ExpressionInput>): ExpressionInput => ({
 });
 
 const messages = (ds: { message: string }[]) => ds.map((d) => d.message);
+
+function minOf(a: ExpressionAnalysis) {
+	if (!a.language?.ok) throw new Error('language not built');
+	return a.language.min;
+}
 
 describe('flex definitions', () => {
 	it('splits NAME pattern lines with absolute offsets', () => {
@@ -112,6 +121,46 @@ describe('analyzeExpression', () => {
 		expect(a.sigma).toBeNull();
 		expect(a.language).toBeNull();
 	});
+
+	it('only parses with build: false', () => {
+		const a = analyzeExpression(input({ re: '(0 | 1)*00' }), { build: false });
+		expect(a.re.regex?.kind).toBe('concat');
+		expect(a.sigma?.set.chars()).toEqual(['0', '1']);
+		expect(a.language).toBeNull();
+	});
+
+	it('notes that Σ is a plain character in flex', () => {
+		const a = analyzeExpression(input({ re: 'Σ*1', defs: 'X [Σ]\nY Σ', dialect: 'flex' }));
+		expect(a.re.diagnostics).toMatchObject([
+			{ severity: 'info', span: { start: 0, end: 1, source: null } }
+		]);
+		expect(messages(a.re.diagnostics)[0]).toMatch(/^in flex, Σ is the character Σ/);
+		// Only the bare Σ of Y, not the class [Σ] of X.
+		expect(a.defs.diagnostics).toMatchObject([{ severity: 'info', span: { source: 'Y' } }]);
+		expect(a.language?.ok && runDfa(a.language.min, 'ΣΣ1').accepted).toBe(true);
+	});
+});
+
+describe('languageFor', () => {
+	it('builds each node once, and a definition use shares its body', () => {
+		const a = analyzeExpression(
+			input({ re: 'digit digit', defs: "digit = '0' | '1'", alphabet: '{ 0, 1 }' })
+		);
+		const root = a.re.regex!;
+		expect(languageFor(root, a.sigma)).toBe(a.language);
+		if (root.kind !== 'concat') throw new Error('not a concatenation');
+		const [x, y] = root.parts;
+		expect(x).not.toBe(y);
+		expect(languageFor(x, a.sigma)).toBe(languageFor(y, a.sigma));
+	});
+
+	it('resolves Σ with the settled alphabet, and needs one', () => {
+		const a = analyzeExpression(input({ re: 'Σ* 1', alphabet: '{ 0, 1 }' }));
+		expect(languageFor(a.re.regex!, a.sigma)).toBe(a.language);
+		expect(languageFor(a.re.regex!, null)).toBeNull();
+		const other = languageFor(a.re.regex!, { set: CharSet.of('1'), declared: true });
+		expect(other?.ok && runDfa(other.min, '01').accepted).toBe(false);
+	});
 });
 
 describe('views', () => {
@@ -155,6 +204,29 @@ describe('views', () => {
 		expect(sampleOf(b.re.regex!, b.sigma)).toEqual({ ok: false, reason: 'sigma' });
 	});
 
+	it('samples a language whose strings are all long from its shortest length', () => {
+		// Lexical Analysis, slide 31: every phone number has 13 symbols.
+		const a = analyzeExpression(
+			input({
+				re: "'(' area ')' exchange '-' phone",
+				defs: "digit = '0' | '1' | '2' | … | '9'\narea = digit^3\nexchange = digit^3\nphone = digit^4"
+			})
+		);
+		const s = sampleOf(a.re.regex!, a.sigma);
+		if (!s.ok) throw new Error('no sample');
+		expect(s.strings).toHaveLength(12);
+		expect(s.strings.slice(0, 2)).toEqual(['(000)000-0000', '(000)000-0001']);
+		expect(s.truncated).toBe(true);
+		const l = listLanguage(minOf(a), 12);
+		expect(l).toMatchObject({ strings: [], truncated: true, shortest: '(000)000-0000' });
+		expect(l.total).toBe(10_000_000_000n);
+	});
+
+	it('lists the shortest string with every listing', () => {
+		expect(listLanguage(minOf(analyzeExpression(input({ re: "'1' '0'*" }))), 6).shortest).toBe('1');
+		expect(listLanguage(minOf(analyzeExpression(input({ re: 'ɸ' }))), 6).shortest).toBeNull();
+	});
+
 	it('explains test strings', () => {
 		const a = analyzeExpression(input({ re: '1*0', alphabet: '{ 0, 1 }' }));
 		expect(evaluateTest(a, '110')).toMatchObject({ member: true, rejection: null });
@@ -174,6 +246,28 @@ describe('views', () => {
 		expect(messages(analyzeCompare(a, 'Σ')!.r2.diagnostics)).toEqual([
 			'R₂ uses Σ, so Σ must be given above'
 		]);
+	});
+
+	it('parses R₂ without building it', () => {
+		const a = analyzeExpression(input({ re: 'a*' }), { build: false });
+		expect(parseCompare(a, ' ')).toBeNull();
+		expect(parseCompare(a, 'a a*')?.regex?.kind).toBe('concat');
+		expect(messages(parseCompare(a, 'Σ')!.diagnostics)).toEqual([
+			'R₂ uses Σ, so Σ must be given above'
+		]);
+	});
+
+	it('does not compare minimal DFAs with too many pairs of states', () => {
+		// Strings of a's whose length is a multiple of 50, or of 41: 2050 pairs.
+		const a = analyzeExpression(input({ re: "('a'^50)*" }));
+		expect(50 * 41).toBeGreaterThan(MAX_PRODUCT);
+		expect(analyzeCompare(a, "('a'^41)*")).toMatchObject({ comparison: null, tooLarge: true });
+		// 50 × 39 = 1950 pairs are compared.
+		expect(analyzeCompare(a, "('a'^39)*")).toMatchObject({
+			tooLarge: false,
+			comparison: { equivalent: false, onlyA: 'a'.repeat(50), onlyB: 'a'.repeat(39) }
+		});
+		expect(analyzeCompare(a, "('a'^50)* | ɸ")?.comparison?.equivalent).toBe(true);
 	});
 });
 
@@ -211,6 +305,36 @@ describe('convertDialect', () => {
 		expect(convertDialect(dashed, 'flex', 'lecture')).toEqual(dashed);
 		expect(convertDialect(text, 'flex', 'flex')).toBe(text);
 	});
+
+	it('writes Σ as the typed alphabet in flex, keeping the language', () => {
+		const lecture = { re: 'Σ* 1', defs: 'x = Σ', compare: 'x x' };
+		const alphabet = '{ 0, 1 }';
+		const flex = convertDialect(lecture, 'lecture', 'flex', alphabet);
+		expect(flex).toEqual({ re: '[01]*1', defs: 'x  [01]', compare: '{x}{x}' });
+		const before = analyzeExpression(input({ ...lecture, alphabet }));
+		const after = analyzeExpression(input({ ...flex, alphabet, dialect: 'flex' }));
+		expect(after.alphabetDiagnostics).toEqual([]);
+		expect(compareLanguages(minOf(before), minOf(after)).equivalent).toBe(true);
+		const [c1, c2] = [analyzeCompare(before, lecture.compare), analyzeCompare(after, flex.compare)];
+		const [m1, m2] = [c1?.language, c2?.language];
+		if (!m1?.ok || !m2?.ok) throw new Error('R₂ not built');
+		expect(compareLanguages(m1.min, m2.min).equivalent).toBe(true);
+		// And back: flex has no Σ, so the class stays a class.
+		expect(convertDialect(flex, 'flex', 'lecture').re).toBe("[01]* '1'");
+	});
+
+	it('keeps parts that use Σ as typed when no valid Σ is typed', () => {
+		const text = { re: 'Σ* 1', defs: '', compare: "'01'" };
+		expect(convertDialect(text, 'lecture', 'flex')).toEqual({
+			re: 'Σ* 1',
+			defs: '',
+			compare: '"01"'
+		});
+		expect(convertDialect(text, 'lecture', 'flex', '{ …')).toMatchObject({ re: 'Σ* 1' });
+		// A definition that uses Σ keeps every part as typed.
+		const withDef = { re: 'x 1', defs: 'x = Σ', compare: '' };
+		expect(convertDialect(withDef, 'lecture', 'flex')).toEqual(withDef);
+	});
 });
 
 describe('helpers', () => {
@@ -241,7 +365,7 @@ describe('helpers', () => {
 		expect(languageBlocked('Σ', analyzeExpression(input({ re: 'Σ' })))).toBe('Fix Σ first.');
 		const big = analyzeExpression(input({ re: '(0 | 1)* 1 (0|1)^10' }));
 		expect(languageBlocked(big.re.regex ? 'x' : '', big)).toBe(
-			'The DFA for R has more than 400 states, so its language is not computed.'
+			'The DFA for R has more than 300 states, so its language is not computed.'
 		);
 		expect(sizeMessage({ stage: 'nfa', limit: 10 }, 'R₂')).toMatch(
 			/^Thompson's construction for R₂/

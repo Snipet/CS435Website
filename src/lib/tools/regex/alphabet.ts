@@ -113,6 +113,17 @@ export function parseAlphabet(text: string, defs?: ReadonlyMap<string, Regex>): 
 			i = j;
 			continue;
 		}
+		if (text.startsWith('..', i)) {
+			// Two dots (three are an ellipsis): one '.' symbol, which is rarely what was meant.
+			diagnostics.push({
+				severity: 'warning',
+				message: ".. is read as the symbol '.'; a range is written with … or ..., e.g. 0, …, 9",
+				span: span(i, i + 2)
+			});
+			items.push({ kind: 'char', cp, start, end: i + 2 });
+			i += 2;
+			continue;
+		}
 		items.push({ kind: 'char', cp, start, end: i + ch.length });
 		i += ch.length;
 	}

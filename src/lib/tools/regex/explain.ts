@@ -3,6 +3,7 @@
  * a prefix of some string in L(R), then report where it goes wrong.
  */
 import { CharSet } from '$lib/theory/charset';
+import { formatLabel, showChar, type NamedSet } from '$lib/theory/chars';
 import { coReachableStates, outgoingIndex, type Automaton } from '$lib/theory/automata';
 
 export type Rejection =
@@ -88,4 +89,44 @@ export function shortestCompletion(dfa: Automaton, from: number): string {
 		}
 	}
 	return '';
+}
+
+/**
+ * A set of symbols as "Allowed next" lists it: the definitions it contains
+ * whole, by name (letter, digit), then the other symbols quoted ('@', 'a'–'f').
+ * Names keep the order given; a name is left out when the names already
+ * chosen (larger ones first) cover it.
+ */
+export function describeSymbols(set: CharSet, names: readonly NamedSet[] = []): string {
+	if (set.isEmpty) return '∅';
+	const chosen = new Set<NamedSet>();
+	let covered = CharSet.EMPTY;
+	const fits = names
+		.filter((n) => !n.set.isEmpty && n.set.isSubsetOf(set))
+		.sort((a, b) => b.set.size - a.set.size);
+	for (const n of fits) {
+		if (n.set.isSubsetOf(covered)) continue;
+		chosen.add(n);
+		covered = covered.union(n.set);
+	}
+	const parts = names.filter((n) => chosen.has(n)).map((n) => n.name);
+	const rest = set.subtract(covered);
+	if (!rest.isEmpty) parts.push(symbolsText(rest));
+	return parts.join(', ');
+}
+
+const quote = (cp: number) => `'${showChar(cp, 'quoted')}'`;
+
+/** 'a', 'b', 'x'–'z'; very large or scattered sets as a label such as [^\n]. */
+function symbolsText(set: CharSet): string {
+	if (set.size > 0x10000 || set.ranges.length > 12) return formatLabel(set, { separator: ', ' });
+	return set.ranges
+		.map(([lo, hi]) =>
+			lo === hi
+				? quote(lo)
+				: hi === lo + 1
+					? `${quote(lo)}, ${quote(hi)}`
+					: `${quote(lo)}–${quote(hi)}`
+		)
+		.join(', ');
 }

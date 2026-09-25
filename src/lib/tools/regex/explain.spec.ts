@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { regexToDfa } from '$lib/theory/automata';
+import { CharSet } from '$lib/theory/charset';
 import { parseDefinitions, parseRegex } from '$lib/theory/regex';
-import { explainRejection, shortestCompletion } from './explain';
+import { describeSymbols, explainRejection, shortestCompletion } from './explain';
 
 function dfa(text: string, defs = '') {
 	const r = parseRegex(text, { defs: parseDefinitions(defs).defs });
@@ -50,6 +51,44 @@ describe('explainRejection', () => {
 			prefixEnd: 2,
 			at: { start: 2, end: 3 }
 		});
+	});
+});
+
+describe('describeSymbols', () => {
+	const letter = {
+		name: 'letter',
+		set: CharSet.fromRanges([
+			[65, 90],
+			[97, 122]
+		])
+	};
+	const digit = { name: 'digit', set: CharSet.range('0', '9') };
+	const names = [letter, digit];
+
+	it('names the definitions a set contains and quotes the rest', () => {
+		// Email, after "a" (Lexical Analysis, slide 32): a letter or '@', not "@–Z, a–z".
+		expect(describeSymbols(letter.set.union(CharSet.of('@')), names)).toBe("letter, '@'");
+		// Identifier, after "x" (slide 29).
+		expect(describeSymbols(letter.set.union(digit.set), names)).toBe('letter, digit');
+		expect(describeSymbols(digit.set, names)).toBe('digit');
+	});
+
+	it('quotes symbols and writes runs as ranges', () => {
+		expect(describeSymbols(CharSet.of('x'))).toBe("'x'");
+		expect(describeSymbols(CharSet.of('01'))).toBe("'0', '1'");
+		expect(describeSymbols(CharSet.of(" \t'"))).toBe("'\\t', ' ', '\\''");
+		expect(describeSymbols(CharSet.range('a', 'f').union(CharSet.of('@')), names)).toBe(
+			"'@', 'a'–'f'"
+		);
+	});
+
+	it('skips a name that the larger names already cover', () => {
+		const alnum = { name: 'alnum', set: letter.set.union(digit.set) };
+		expect(describeSymbols(alnum.set, [letter, digit, alnum])).toBe('alnum');
+	});
+
+	it('writes very large sets as a class', () => {
+		expect(describeSymbols(CharSet.of('\n').complement())).toBe('[^\\n]');
 	});
 });
 

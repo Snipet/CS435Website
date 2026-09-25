@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { formatStringSet } from '$lib/theory/chars';
-import { enumerate, runDfa } from '$lib/theory/automata';
+import { compareLanguages, enumerate, runDfa } from '$lib/theory/automata';
 import {
 	analyzeCompare,
 	analyzeExpression,
+	convertDialect,
 	evaluateTest,
+	listLanguage,
+	sampleOf,
 	type ExpressionAnalysis
 } from './analysis';
 import { applyPreset, DEFAULT_PRESET_ID, matchPreset, presetById, presets } from './presets';
@@ -57,6 +60,27 @@ describe('presets', () => {
 				else expect(r!.rejection).not.toBeNull();
 			}
 			expect(matchPreset(s)?.id).toBe(p.id);
+		}
+	);
+
+	it.each(presets.map((p) => [p.id, p] as const))(
+		'%s keeps its languages in the other notation, and lists strings of L(R)',
+		(_, p) => {
+			const s = applyPreset(p, blankState());
+			const a = analyzeExpression(s);
+			const other = s.dialect === 'lecture' ? 'flex' : 'lecture';
+			const text = convertDialect(s, s.dialect, other, s.alphabet);
+			const b = analyzeExpression({ ...text, dialect: other, alphabet: s.alphabet });
+			expect(compareLanguages(minOf(a), minOf(b)).equivalent).toBe(true);
+			if (s.compare) {
+				const [c1, c2] = [analyzeCompare(a, s.compare), analyzeCompare(b, text.compare)];
+				if (!c1?.language?.ok || !c2?.language?.ok) throw new Error('R₂ not built');
+				expect(compareLanguages(c1.language.min, c2.language.min).equivalent).toBe(true);
+			}
+			// The Structure view's sample for the root, and the shortest string.
+			const sample = sampleOf(a.re.regex!, a.sigma);
+			const empty = listLanguage(minOf(a), 12).shortest === null;
+			expect(sample.ok && sample.strings.length > 0).toBe(!empty);
 		}
 	);
 });

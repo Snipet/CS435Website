@@ -7,12 +7,17 @@
 	import StringSetView from '$lib/components/ui/StringSetView.svelte';
 	import RegexField, { type PaletteSymbol } from '$lib/components/ui/RegexField.svelte';
 	import { formatString } from '$lib/theory/chars';
-	import { COUNT_LENGTH, EXAMPLE_LIMIT, type CompareAnalysis } from './analysis';
+	import type { Diagnostic } from '$lib/theory/diagnostics';
+	import { COUNT_LENGTH, EXAMPLE_LIMIT, groupDigits, type CompareAnalysis } from './analysis';
+	import { MAX_PRODUCT } from './machines';
 	import { sizeMessage } from './messages';
 
 	interface Props {
 		value: string;
+		/** The comparison for the settled R₂ (it may lag behind typing). */
 		result: CompareAnalysis | null;
+		/** Problems in R₂ as typed. */
+		diagnostics: readonly Diagnostic[];
 		/** Why R itself cannot be compared, if so. */
 		blocked: string | null;
 		symbols: readonly PaletteSymbol[];
@@ -20,7 +25,15 @@
 		placeholder: string;
 	}
 
-	let { value = $bindable(), result, blocked, symbols, aliases, placeholder }: Props = $props();
+	let {
+		value = $bindable(),
+		result,
+		diagnostics,
+		blocked,
+		symbols,
+		aliases,
+		placeholder
+	}: Props = $props();
 
 	const cmp = $derived(result?.comparison ?? null);
 	const columns = $derived(
@@ -35,15 +48,7 @@
 </script>
 
 <div class="compare">
-	<RegexField
-		label="R₂ ="
-		size="md"
-		bind:value
-		{symbols}
-		{aliases}
-		{placeholder}
-		diagnostics={result?.r2.diagnostics ?? []}
-	/>
+	<RegexField label="R₂ =" size="md" bind:value {symbols} {aliases} {placeholder} {diagnostics} />
 
 	{#if blocked}
 		<p class="note">{blocked}</p>
@@ -51,6 +56,11 @@
 		<p class="note">Enter R₂ to compare L(R) with L(R₂).</p>
 	{:else if result.language && !result.language.ok}
 		<Callout tone="warn">{sizeMessage(result.language, 'R₂')}</Callout>
+	{:else if result.tooLarge}
+		<Callout tone="warn">
+			Comparing L(R) with L(R₂) needs more than {groupDigits(MAX_PRODUCT)} pairs of states of their minimal
+			DFAs, so they are not compared.
+		</Callout>
 	{:else if cmp}
 		<div class={['verdict', cmp.equivalent ? 'same' : 'differ']} aria-live="polite">
 			<span class="formal">{cmp.equivalent ? 'L(R) = L(R₂)' : 'L(R) ≠ L(R₂)'}</span>

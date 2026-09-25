@@ -3,12 +3,17 @@ import type { ExpressionAnalysis } from './analysis';
 
 /** Why an expression's language was not built. */
 export function sizeMessage(
-	b: { stage: 'nfa' | 'dfa'; limit: number },
+	b: { stage: 'nfa' | 'dfa' | 'work'; limit: number },
 	what: 'R' | 'R₂' = 'R'
 ): string {
-	return b.stage === 'nfa'
-		? `Thompson's construction for ${what} needs more than ${b.limit} states, so its language is not computed.`
-		: `The DFA for ${what} has more than ${b.limit} states, so its language is not computed.`;
+	switch (b.stage) {
+		case 'nfa':
+			return `Thompson's construction for ${what} needs more than ${b.limit} states, so its language is not computed.`;
+		case 'dfa':
+			return `The DFA for ${what} has more than ${b.limit} states, so its language is not computed.`;
+		case 'work':
+			return `The subset construction for ${what} works through too many large sets of NFA states, so its language is not computed.`;
+	}
 }
 
 /** Why the syntax tree is not shown, or null. */

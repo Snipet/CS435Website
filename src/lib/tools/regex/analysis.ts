@@ -14,10 +14,12 @@ import {
 	formatAutomatonText,
 	isEmptyLanguage,
 	isFiniteLanguage,
+	shortestAccepted,
 	type Automaton,
 	type Comparison
 } from '$lib/theory/automata';
 import {
+	children,
 	containsAny,
 	parseDefinitions,
 	parseFlexDefinitions,
@@ -35,7 +37,13 @@ import type { LinkStates } from '$lib/tools/links';
 import { parseAlphabet } from './alphabet';
 import { derive, type DeriveResult } from './derive';
 import { explainRejection, type Rejection } from './explain';
-import { buildLanguage, withoutTrap, type LanguageBuild } from './machines';
+import {
+	buildLanguage,
+	MAX_PRODUCT,
+	productSize,
+	withoutTrap,
+	type LanguageBuild
+} from './machines';
 import type { Dialect } from './state';
 
 /** Span source of line-level problems in the definitions editor. */
@@ -110,7 +118,27 @@ export function parseDefs(text: string, dialect: Dialect): DefinitionsResult {
 	if (dialect === 'lecture') return parseDefinitions(text);
 	const split = splitFlexDefinitions(text);
 	const result = parseFlexDefinitions(split.lines);
-	return { ...result, diagnostics: [...split.diagnostics, ...result.diagnostics] };
+	const notes = result.entries.flatMap((e) => (e.regex ? flexSigmaNotes(e.regex) : []));
+	return { ...result, diagnostics: [...split.diagnostics, ...result.diagnostics, ...notes] };
+}
+
+/**
+ * flex has no Σ: a bare Σ in a flex pattern is the character Σ. One note per
+ * such symbol written in `r` itself (not in the definitions it uses).
+ */
+export function flexSigmaNotes(r: Regex): Diagnostic[] {
+	const notes: Diagnostic[] = [];
+	const go = (node: Regex) => {
+		if (node.kind === 'chars' && node.text === 'Σ')
+			notes.push({
+				severity: 'info',
+				message: 'in flex, Σ is the character Σ; write the alphabet as a class such as [01]',
+				span: node.span
+			});
+		if (node.kind !== 'ref') children(node).forEach(go);
+	};
+	go(r);
+	return notes;
 }
 
 // ---------------------------------------------------------------------------
@@ -161,6 +189,7 @@ export function parseExpression(
 			span: at(Math.max(0, slash), p.trailing.span?.end ?? text.length)
 		});
 	}
+	diagnostics.push(...flexSigmaNotes(p.regex));
 	return { regex: hasErrors(diagnostics) ? null : p.regex, diagnostics };
 }
 
@@ -193,7 +222,7 @@ export interface ExpressionAnalysis {
 	inferred: CharSet | null;
 	/** R with Σ replaced by the alphabet; null when R or Σ has errors. */
 	resolved: Regex | null;
-	/** Automata for `resolved`, or a size report. */
+	/** Automata for `resolved`, or a size report; null when R or Σ has errors (or with `build: false`). */
 	language: LanguageBuild | null;
 	/** How sub-expressions are printed: dialect, bare symbols when R is written that way. */
 	print: PrintOptions;
@@ -201,7 +230,15 @@ export interface ExpressionAnalysis {
 
 const QUOTE = /['‘’"“”]/;
 
-export function analyzeExpression(input: ExpressionInput): ExpressionAnalysis {
+/**
+ * Parses the inputs and settles Σ; with `build` (the default) also builds the
+ * automata for L(R). Without it the result only carries the parse and its
+ * diagnostics, which is cheap enough for every keystroke.
+ */
+export function analyzeExpression(
+	input: ExpressionInput,
+	{ build = true }: { build?: boolean } = {}
+): ExpressionAnalysis {
 	const { dialect } = input;
 	const defs = parseDefs(input.defs, dialect);
 	const re = parseExpression(input.re, dialect, defs);
@@ -234,10 +271,31 @@ export function analyzeExpression(input: ExpressionInput): ExpressionAnalysis {
 			});
 	}
 	const resolved = regex && sigma ? (usesAny ? resolveAny(regex, sigma.set) : regex) : null;
-	const language = resolved
-		? buildLanguage(resolved, { alphabet: sigma?.declared ? sigma.set : undefined })
-		: null;
+	const language = build && regex && sigma ? languageFor(regex, sigma) : null;
 	return { dialect, defs, re, alphabetDiagnostics, sigma, inferred, resolved, language, print };
+}
+
+/** Builds per node and Σ, so R and the tree node at its root share one. */
+const builds = new WeakMap<Regex, Map<string, LanguageBuild>>();
+
+/**
+ * The automata for L(node) with Σ resolved, or null when the node uses Σ and
+ * Σ is not settled. Results are cached per node object (a definition use
+ * shares its body's), so asking again for R or a node of its tree is free.
+ */
+export function languageFor(node: Regex, sigma: Sigma | null): LanguageBuild | null {
+	const target = node.kind === 'ref' ? node.body : node;
+	const usesAny = containsAny(target);
+	if (usesAny && !sigma) return null;
+	const alphabet = sigma?.declared ? sigma.set : undefined;
+	const key = `${usesAny ? sigma!.set.key() : ''}|${alphabet?.key() ?? '-'}`;
+	let byKey = builds.get(target);
+	if (!byKey) builds.set(target, (byKey = new Map()));
+	const known = byKey.get(key);
+	if (known) return known;
+	const built = buildLanguage(usesAny ? resolveAny(target, sigma!.set) : target, { alphabet });
+	byKey.set(key, built);
+	return built;
 }
 
 /** 3224 → "3,224" (the same on the server and in every browser locale). */
@@ -265,6 +323,8 @@ export interface LanguageListing {
 	total: bigint | null;
 	/** counts[k] = number of strings of length k, k = 0 … COUNT_LENGTH. */
 	counts: bigint[];
+	/** The shortest string (shortlex-first), or null when L = { }. */
+	shortest: string | null;
 }
 
 export const LIST_LIMIT = 200;
@@ -283,20 +343,33 @@ export function listLanguage(
 	const total = finite
 		? countByLength(min, min.states.length).reduce((sum, x) => sum + x, 0n)
 		: null;
-	return { strings, truncated, empty, finite, total, counts: countByLength(min, COUNT_LENGTH) };
+	return {
+		strings,
+		truncated,
+		empty,
+		finite,
+		total,
+		counts: countByLength(min, COUNT_LENGTH),
+		shortest: shortestAccepted(min)
+	};
 }
 
 export type Sample =
 	{ ok: true; strings: string[]; truncated: boolean } | { ok: false; reason: 'sigma' | 'size' };
 
-/** Up to `limit` strings of L(node) in shortlex order, for the selected tree node. */
-export function sampleOf(node: Regex, sigma: Sigma | null, limit = 12, maxLength = 8): Sample {
-	const usesAny = containsAny(node);
-	if (usesAny && !sigma) return { ok: false, reason: 'sigma' };
-	const r = usesAny && sigma ? resolveAny(node, sigma.set) : node;
-	const built = buildLanguage(r);
+/**
+ * Up to `limit` strings of L(node) in shortlex order, for the selected tree
+ * node: strings of up to `window` symbols or, when every string is longer,
+ * strings of up to `window` symbols more than the shortest one.
+ */
+export function sampleOf(node: Regex, sigma: Sigma | null, limit = 12, window = 8): Sample {
+	const built = languageFor(node, sigma);
+	if (!built) return { ok: false, reason: 'sigma' };
 	if (!built.ok) return { ok: false, reason: 'size' };
-	return { ok: true, ...enumerate(built.min, { maxLength, limit }) };
+	const first = enumerate(built.min, { maxLength: window, limit });
+	if (first.strings.length > 0 || !first.truncated) return { ok: true, ...first };
+	const shortest = [...(shortestAccepted(built.min) ?? '')].length;
+	return { ok: true, ...enumerate(built.min, { maxLength: shortest + window, limit }) };
 }
 
 export interface TestResult {
@@ -325,39 +398,46 @@ export function evaluateTest(a: ExpressionAnalysis, s: string): TestResult | nul
 
 export interface CompareAnalysis {
 	r2: ParsedExpression;
-	/** Automata for R₂ (or a size report); null when R₂ has errors. */
+	/** Automata for R₂ (or a size report); null when R₂ has errors or L(R) was not built. */
 	language: LanguageBuild | null;
-	/** Null unless both R and R₂ were built. */
+	/** Null unless both R and R₂ were built (and are small enough to compare). */
 	comparison: Comparison | null;
+	/** The comparison would need more than MAX_PRODUCT pairs of states, so it is not made. */
+	tooLarge: boolean;
 }
 
 export const EXAMPLE_LIMIT = 8;
 
-/** R₂ parsed with R's definitions and compared with R; null when R₂ is blank. */
-export function analyzeCompare(a: ExpressionAnalysis, text: string): CompareAnalysis | null {
+/** R₂ parsed with R's definitions (Σ must be typed when R₂ uses it); null when R₂ is blank. */
+export function parseCompare(a: ExpressionAnalysis, text: string): ParsedExpression | null {
 	if (text.trim() === '') return null;
 	const r2 = parseExpression(text, a.dialect, a.defs);
-	if (!r2.regex) return { r2, language: null, comparison: null };
-	const usesAny = containsAny(r2.regex);
-	if (usesAny && !a.sigma?.declared) {
+	if (r2.regex && containsAny(r2.regex) && !a.sigma?.declared) {
 		const diagnostics: Diagnostic[] = [
 			...r2.diagnostics,
 			{ severity: 'error', message: 'R₂ uses Σ, so Σ must be given above' }
 		];
-		return { r2: { regex: null, diagnostics }, language: null, comparison: null };
+		return { regex: null, diagnostics };
 	}
-	const resolved = usesAny && a.sigma ? resolveAny(r2.regex, a.sigma.set) : r2.regex;
-	const language = buildLanguage(resolved, {
-		alphabet: a.sigma?.declared ? a.sigma.set : undefined
+	return r2;
+}
+
+/** R₂ parsed with R's definitions and compared with R; null when R₂ is blank. */
+export function analyzeCompare(a: ExpressionAnalysis, text: string): CompareAnalysis | null {
+	const r2 = parseCompare(a, text);
+	if (!r2) return null;
+	// Without L(R) there is nothing to compare with, so R₂ is not built either.
+	if (!r2.regex || !a.language?.ok)
+		return { r2, language: null, comparison: null, tooLarge: false };
+	const language = languageFor(r2.regex, a.sigma);
+	if (!language?.ok) return { r2, language, comparison: null, tooLarge: false };
+	const [ma, mb] = [a.language.min, language.min];
+	if (productSize(ma, mb) > MAX_PRODUCT) return { r2, language, comparison: null, tooLarge: true };
+	const comparison = compareLanguages(ma, mb, {
+		exampleLimit: EXAMPLE_LIMIT,
+		maxLength: COUNT_LENGTH
 	});
-	const comparison =
-		language.ok && a.language?.ok
-			? compareLanguages(a.language.min, language.min, {
-					exampleLimit: EXAMPLE_LIMIT,
-					maxLength: COUNT_LENGTH
-				})
-			: null;
-	return { r2, language, comparison };
+	return { r2, language, comparison, tooLarge: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -371,31 +451,45 @@ export interface DialectText {
 }
 
 /**
- * R, the definitions and R₂ rewritten in the other notation. Each part that
- * has errors (or cannot be written in the target notation) is kept as typed;
- * definitions are rewritten only when all of them are fine.
+ * R, the definitions and R₂ rewritten in the other notation, with the same
+ * languages. A part that has errors (or cannot be written in the target
+ * notation) is kept as typed; definitions are rewritten only when all of them
+ * can be, and R and R₂ only when the definitions are. flex has no Σ: a part
+ * that uses Σ is written with the typed alphabet as a class (`Σ* 1` with
+ * Σ = { 0, 1 } becomes `[01]*1`), or kept as typed when no valid Σ is typed.
  */
-export function convertDialect(text: DialectText, from: Dialect, to: Dialect): DialectText {
+export function convertDialect(
+	text: DialectText,
+	from: Dialect,
+	to: Dialect,
+	alphabet = ''
+): DialectText {
 	if (from === to) return text;
 	const defs = parseDefs(text.defs, from);
-	const defsOk = !hasErrors(defs.diagnostics);
 	const names = [...defs.defs.keys()];
 	const canName = to === 'flex' || names.every((n) => LECTURE_NAME.test(n));
+	const sigma = to === 'flex' ? parseAlphabet(alphabet, defs.defs).set : null;
+	/** The tree to print in `to`; null when it uses Σ and there is no Σ to write it with. */
+	const writable = (r: Regex): Regex | null =>
+		to !== 'flex' || !containsAny(r) ? r : sigma ? resolveAny(r, sigma) : null;
+	const bodies = defs.entries.flatMap((e) =>
+		e.regex ? [[e.name, writable(e.regex)] as const] : []
+	);
+	const defsOk =
+		!hasErrors(defs.diagnostics) && canName && bodies.every(([, body]) => body !== null);
 	const print = (r: Regex) => printRegex(r, { dialect: to });
 	const convert = (s: string) => {
-		if (s.trim() === '' || !defsOk || !canName) return s;
+		if (s.trim() === '' || !defsOk) return s;
 		const parsed = parseExpression(s, from, defs);
-		return parsed.regex ? print(parsed.regex) : s;
+		const tree = parsed.regex ? writable(parsed.regex) : null;
+		return tree ? print(tree) : s;
 	};
 	const width = Math.max(0, ...names.map((n) => n.length)) + 2;
 	const newDefs =
-		defsOk && canName && text.defs.trim() !== ''
-			? defs.entries
-					.filter((e) => e.regex)
-					.map((e) =>
-						to === 'flex'
-							? `${e.name.padEnd(width)}${print(e.regex!)}`
-							: `${e.name} = ${print(e.regex!)}`
+		defsOk && text.defs.trim() !== ''
+			? bodies
+					.map(([name, body]) =>
+						to === 'flex' ? `${name.padEnd(width)}${print(body!)}` : `${name} = ${print(body!)}`
 					)
 					.join('\n')
 			: text.defs;

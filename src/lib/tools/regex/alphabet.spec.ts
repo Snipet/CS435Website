@@ -43,6 +43,16 @@ describe('parseAlphabet', () => {
 		const any = parseAlphabet('d', parseDefinitions('d = Σ').defs);
 		expect(any.set).toBeNull();
 	});
+
+	it('warns that two dots are a symbol, not a range', () => {
+		const r = parseAlphabet('0..9');
+		expect(r.set?.chars().join('')).toBe('.09');
+		expect(r.diagnostics).toMatchObject([
+			{ severity: 'warning', span: { start: 1, end: 3, source: '<alphabet>' } }
+		]);
+		expect(parseAlphabet('0...9').set?.size).toBe(10);
+		expect(parseAlphabet('{ ., @ }').diagnostics).toEqual([]);
+	});
 });
 
 describe('formatAlphabet', () => {
