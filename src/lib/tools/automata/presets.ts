@@ -7,7 +7,7 @@ import type { Preset } from '$lib/components/ui/types';
 import { decks } from '$lib/lectures';
 import { automatonFromText } from '$lib/theory/automata/core';
 import type { Automaton } from '$lib/theory/automata/types';
-import type { PositionsJson } from './codec';
+import { machineKey, type PositionsJson } from './codec';
 
 /** Part of an answer: running text, a formal line, or a small table. */
 export type AnswerBlock =
@@ -334,4 +334,13 @@ export const DEFAULT_PRESET_ID = '06-8';
 
 export function presetById(id: string | null | undefined): Preset<AutomataPreset> | undefined {
 	return id ? presets.find((p) => p.id === id) : undefined;
+}
+
+/**
+ * Whether `machine` is no longer the preset's machine: a state, a transition,
+ * a name or the start changed. Positions and view options do not count, and a
+ * machine that was edited back to the original is not edited.
+ */
+export function presetEdited(p: AutomataPreset, machine: Automaton): boolean {
+	return machine !== p.machine && machineKey(machine) !== machineKey(p.machine);
 }

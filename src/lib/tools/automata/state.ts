@@ -2,11 +2,12 @@
  * The tool's state in the URL hash. The page saves the machine in the JSON
  * form of `codec.ts`; links from other tools send `LinkStates['automata']`
  * (`{ text, input? }`, the plain-text automaton format), which is accepted too.
+ * A Text-tab draft that does not parse is saved next to the machine (`draft`),
+ * so a reload or a copied link still shows it.
  */
 import type { LinkStates } from '$lib/tools/links';
-import { parseAutomatonText } from '$lib/theory/automata/core';
 import type { Automaton, Positions } from '$lib/theory/automata/types';
-import type { Diagnostic } from '$lib/theory/diagnostics';
+import { hasErrors, type Diagnostic } from '$lib/theory/diagnostics';
 import {
 	decodeMachine,
 	decodePositions,
@@ -16,9 +17,12 @@ import {
 	type PositionsJson
 } from './codec';
 import { batchText } from './batch';
-import { MAX_STATES, MAX_TRANSITIONS } from './model';
 import type { AutomataPreset } from './presets';
 import type { MissingMode } from './run';
+import { checkAutomatonText } from './text-sync';
+
+/** Longest machine text read from a link or a saved draft. */
+export const MAX_TEXT_LENGTH = 100_000;
 
 export const TABS = ['definition', 'table', 'text', 'challenges'] as const;
 export type TabId = (typeof TABS)[number];
@@ -58,6 +62,8 @@ export const DEFAULT_VIEW: ViewState = {
 export type SavedState = Partial<ViewState> & {
 	machine?: MachineJson;
 	pos?: PositionsJson;
+	/** Text-tab draft with errors (not applied to the machine). */
+	draft?: string;
 } & Partial<LinkStates['automata']>;
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
@@ -67,14 +73,14 @@ const isObject = (v: unknown): v is Record<string, unknown> =>
 export function isSavedState(v: unknown): v is SavedState {
 	if (!isObject(v)) return false;
 	if (v.machine !== undefined) return decodeMachine(v.machine) !== null;
-	return typeof v.text === 'string' && v.text.length <= 100_000;
+	return typeof v.text === 'string' && v.text.length <= MAX_TEXT_LENGTH;
 }
 
 export interface LoadedState {
 	machine: Automaton | null;
 	positions: Positions | null;
 	view: ViewState;
-	/** Link text that did not parse (shown in the Text tab with its diagnostics). */
+	/** Link text or a saved draft that did not parse (shown in the Text tab with its diagnostics). */
 	badText: { text: string; diagnostics: Diagnostic[] } | null;
 }
 
@@ -108,40 +114,41 @@ export function loadSaved(value: SavedState): LoadedState {
 	if (value.machine !== undefined) {
 		const machine = decodeMachine(value.machine);
 		const positions = machine ? decodePositions(value.pos, machine.states.length) : null;
-		return { machine, positions, view, badText: null };
+		return { machine, positions, view, badText: machine ? savedDraft(value.draft) : null };
 	}
 	const text = value.text ?? '';
-	const parsed = parseAutomatonText(text);
-	const tooBig =
-		parsed.automaton !== null &&
-		(parsed.automaton.states.length > MAX_STATES ||
-			parsed.automaton.transitions.length > MAX_TRANSITIONS);
-	if (!parsed.automaton || tooBig) {
-		const diagnostics = tooBig
-			? [
-					{
-						severity: 'error' as const,
-						message: `The editor draws at most ${MAX_STATES} states and ${MAX_TRANSITIONS} transitions.`
-					}
-				]
-			: parsed.diagnostics;
+	const checked = checkAutomatonText(text);
+	if (!checked.automaton)
 		return {
 			machine: null,
 			positions: null,
 			view: { ...view, tab: 'text' },
-			badText: { text, diagnostics }
+			badText: { text, diagnostics: checked.diagnostics }
 		};
-	}
-	return { machine: parsed.automaton, positions: null, view, badText: null };
+	return { machine: checked.automaton, positions: null, view, badText: null };
 }
 
-/** The value written to the hash. */
+/** A saved draft, when it is text that still has errors. */
+function savedDraft(draft: unknown): LoadedState['badText'] {
+	if (typeof draft !== 'string' || draft.length > MAX_TEXT_LENGTH) return null;
+	const { diagnostics } = checkAutomatonText(draft);
+	return hasErrors(diagnostics) ? { text: draft, diagnostics } : null;
+}
+
+/** The value written to the hash; `draft` is a Text-tab draft that has errors. */
 export function saveState(
 	machine: Automaton,
 	positions: Positions | null,
-	view: ViewState
+	view: ViewState,
+	draft: string | null = null
 ): SavedState {
-	return { ...view, machine: encodeMachine(machine), pos: encodePositions(machine, positions) };
+	const out: SavedState = {
+		...view,
+		machine: encodeMachine(machine),
+		pos: encodePositions(machine, positions)
+	};
+	if (draft !== null && draft.length <= MAX_TEXT_LENGTH) out.draft = draft;
+	return out;
 }
 
 /** The view a preset loads with (inputs from the slide, everything else reset). */

@@ -18,7 +18,8 @@ import { parseRegex } from '$lib/theory/regex/lecture';
 import type { Automaton } from '$lib/theory/automata/types';
 import { decodeMachine, decodePositions, encodeMachine } from './codec';
 import { buildRun } from './run';
-import { DEFAULT_PRESET_ID, presetById, presets } from './presets';
+import { DEFAULT_PRESET_ID, presetById, presetEdited, presets } from './presets';
+import { mergeTextEdit } from './text-sync';
 import { isSavedState, loadSaved, presetView, saveState, DEFAULT_VIEW } from './state';
 import { parseBatch } from './batch';
 
@@ -62,6 +63,8 @@ describe('presets', () => {
 				const loaded = loadSaved(saved);
 				expect(loaded.machine).toEqual(v.machine);
 				expect(loaded.view).toEqual(view);
+				// A reloaded link still shows the example's card and question.
+				expect(presetEdited(v, loaded.machine!)).toBe(false);
 			});
 
 			it('runs its input and batch strings', () => {
@@ -72,6 +75,35 @@ describe('presets', () => {
 			});
 		});
 	}
+});
+
+describe('edited presets', () => {
+	const v = presetById('06-8')!.value;
+
+	it('count an edit to the machine, not to its positions or view', () => {
+		expect(presetEdited(v, v.machine)).toBe(false);
+		const text = formatAutomatonText(v.machine);
+		const same = mergeTextEdit(v.machine, null, parseAutomatonText(text).automaton!).machine;
+		expect(presetEdited(v, same)).toBe(false);
+		const more = parseAutomatonText(`${text}\nC 2 D`).automaton!;
+		expect(presetEdited(v, mergeTextEdit(v.machine, null, more).machine)).toBe(true);
+		const renamed = {
+			...v.machine,
+			states: v.machine.states.map((s) => ({ ...s, name: s.name + "'" }))
+		};
+		expect(presetEdited(v, renamed)).toBe(true);
+		const start = { ...v.machine, start: 1 };
+		expect(presetEdited(v, start)).toBe(true);
+	});
+
+	it('keep the notes and other labels of relop in the comparison', () => {
+		const relop = presetById('08-16')!.value;
+		const plain = {
+			...relop.machine,
+			transitions: relop.machine.transitions.map((t) => ({ ...t, display: undefined }))
+		};
+		expect(presetEdited(relop, plain)).toBe(true);
+	});
 });
 
 describe('Lexical Analysis III', () => {

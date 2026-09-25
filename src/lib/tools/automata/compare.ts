@@ -1,8 +1,9 @@
 /**
  * Language comparison with a size cap, for checks that run while the user
  * types. Both machines are determinized on the fly (sets of states after
- * ε-closure) and explored together breadth first, symbol classes in
- * ascending order, so the first difference found is the shortest one (and
+ * ε-closure) and explored together breadth first, one symbol per class of
+ * symbols (a printable one where the class has any, see `representative`)
+ * in ascending order, so the first difference found is the shortest one (and
  * the first in shortlex order). A DFA for a small NFA can be exponentially
  * larger (Lexical Analysis III, slide 16), so the search gives up after
  * `maxStates` pairs instead of freezing the page.
@@ -13,6 +14,27 @@ import type { Automaton, StateId } from '$lib/theory/automata/types';
 import type { Regex } from '$lib/theory/regex/ast';
 
 export const MAX_PAIRS = 6000;
+
+const ALNUM = CharSet.range('0', '9').union(CharSet.range('A', 'Z')).union(CharSet.range('a', 'z'));
+/** Visible ASCII, then everything above Latin-1 controls except line and paragraph separators. */
+const VISIBLE = CharSet.range('!', '~')
+	.union(CharSet.range(0xa1, 0x2027))
+	.union(CharSet.range(0x202a, 0xd7ff))
+	.union(CharSet.range(0xe000, 0x10ffff));
+
+/**
+ * The symbol that stands for a class in a counterexample: a digit or letter
+ * if the class has one, else another visible character, else a space, else its
+ * first code point. A class such as "anything but <, =, >" starts at U+0000,
+ * which would make an invisible counterexample.
+ */
+export function representative(c: CharSet): number | undefined {
+	for (const pool of [ALNUM, VISIBLE, CharSet.single(' ')]) {
+		const cp = c.intersect(pool).first();
+		if (cp !== undefined) return cp;
+	}
+	return c.first();
+}
 
 export type BoundedComparison =
 	| { kind: 'same' }
@@ -55,7 +77,9 @@ export function compareBounded(
 	const labels: CharSet[] = [];
 	for (const t of [...a.transitions, ...b.transitions])
 		if (t.label && !t.label.isEmpty) labels.push(t.label);
-	const reps = partitionCharSets(labels).map((c) => c.first()!);
+	const reps = partitionCharSets(labels)
+		.map((c) => representative(c)!)
+		.sort((x, y) => x - y);
 
 	interface Node {
 		sa: StateId[];

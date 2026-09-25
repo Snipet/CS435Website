@@ -7,6 +7,7 @@
  * NFA keeps a set of active states: move on the symbol, then ε-closure,
  * optionally shown as two separate steps.
  */
+import { showChar } from '$lib/theory/chars';
 import { alphabetOf, analyzeDeterminism, complete, sortByName } from '$lib/theory/automata/core';
 import { runDfa, runNfa } from '$lib/theory/automata/simulate';
 import type { Automaton, StateId } from '$lib/theory/automata/types';
@@ -21,7 +22,7 @@ export type Seg =
 	| { kind: 'set'; text: string }
 	/** A quoted symbol in running text: '1'. */
 	| { kind: 'symbol'; text: string }
-	/** An arrow with the symbol as a superscript: →¹. */
+	/** An arrow with the symbol as a superscript: →¹ (a space shows as ␣). */
 	| { kind: 'arrow'; text: string };
 
 export interface RunStep {
@@ -42,7 +43,7 @@ export interface RunStep {
 export interface TraceItem {
 	/** The last step this item stands for; the item covers the steps after the previous item's. */
 	step: number;
-	/** Symbol on the arrow into this item (absent for the first item). */
+	/** Symbol on the arrow into this item, as shown (␣ for a space; absent for the first item). */
 	symbol?: string;
 	/** A state name, or a set such as `{ A, B }`. */
 	text: string;
@@ -83,7 +84,9 @@ const set = (a: Automaton, ids: readonly StateId[]): Seg => ({
 	text: stateSetText(a, ids)
 });
 const symbol = (ch: string): Seg => ({ kind: 'symbol', text: quoteSymbol(ch) });
-const arrow = (ch: string): Seg => ({ kind: 'arrow', text: ch });
+/** A symbol on an arrow: visible even when it is a space, a tab or a newline. */
+const onArrow = (ch: string): string => showChar(ch, 'label');
+const arrow = (ch: string): Seg => ({ kind: 'arrow', text: onArrow(ch) });
 
 /** Plain text of a caption: "Read '1': A →1 B." */
 export function segText(segs: readonly Seg[]): string {
@@ -158,7 +161,13 @@ function dfaRun(a: Automaton, input: string, trap: StateId | null): RunModel {
 							text(' is not a symbol of Σ, so the machine crashes.')
 						]
 			});
-			trace.push({ step: i, symbol: char, text: 'no transition', isSet: false, stuck: true });
+			trace.push({
+				step: i,
+				symbol: onArrow(char),
+				text: 'no transition',
+				isSet: false,
+				stuck: true
+			});
 			return;
 		}
 		const to = s.state;
@@ -191,7 +200,7 @@ function dfaRun(a: Automaton, input: string, trap: StateId | null): RunModel {
 						text('.')
 					]
 		});
-		trace.push({ step: i, symbol: char, text: stateName(a, to), isSet: false });
+		trace.push({ step: i, symbol: onArrow(char), text: stateName(a, to), isSet: false });
 	});
 
 	const tones = new Map<StateId, 'accept' | 'reject'>();
@@ -340,7 +349,7 @@ function nfaRun(a: Automaton, input: string, separate: boolean): RunModel {
 		}
 		trace.push({
 			step: steps.length - 1,
-			symbol: char,
+			symbol: onArrow(char),
 			text: stateSetText(a, s.active),
 			isSet: true
 		});

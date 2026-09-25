@@ -1,15 +1,53 @@
 /**
  * Drawing a partial DFA with its trap state (Lexical Analysis III, slide 6).
  *
- * The trap is drawn by passing `complete(machine)` to the editor. Edits made
- * on that drawing come back with the trap in them; `stripTrap` removes it again
- * (an edge into the trap is the same as a missing transition) and carries the
- * positions and the selection over to the machine without the trap.
+ * The trap is drawn by passing `completeForDrawing(machine)` to the editor.
+ * Edits made on that drawing come back with the trap in them; `stripTrap`
+ * removes it again (an edge into the trap is the same as a missing transition)
+ * and carries the positions and the selection over to the machine without the
+ * trap. `resolveDrawingEdit` puts the two together for the page.
  */
-import { edgeKey } from '$lib/components/graph/layout';
+import { edgeKey, layoutKey } from '$lib/components/graph/layout';
 import { remapPositions, removeStates } from '$lib/components/graph/edit';
 import type { GraphSelection } from '$lib/components/graph/types';
+import { complete } from '$lib/theory/automata/core';
 import type { Automaton, Point, Positions, StateId } from '$lib/theory/automata/types';
+import { machineKey } from './codec';
+
+/** The label for "any symbol not on another edge" (Lexical Analysis IV, slide 16). */
+export const OTHER = 'other';
+
+/**
+ * `complete(a)`, for drawing and tables. In a machine that labels edges
+ * `other`, the edges into the trap are labeled `other` too: each carries
+ * exactly the symbols on no other edge of its state, and the table keeps its
+ * `other` column.
+ */
+export function completeForDrawing(a: Automaton): { automaton: Automaton; trap: StateId | null } {
+	const c = complete(a);
+	const trap = c.trap;
+	if (trap === null || !a.transitions.some((t) => t.display === OTHER)) return c;
+	return {
+		trap,
+		automaton: {
+			...c.automaton,
+			transitions: c.automaton.transitions.map((t) =>
+				t.to === trap && t.label && !t.display ? { ...t, display: OTHER } : t
+			)
+		}
+	};
+}
+
+/** Whether two sets of pinned positions put every state in the same place. */
+export function samePositions(p: Positions | null, q: Positions | null): boolean {
+	if (p === q) return true;
+	if (!p || !q || p.size !== q.size) return false;
+	for (const [id, a] of p) {
+		const b = q.get(id);
+		if (!b || b.x !== a.x || b.y !== a.y) return false;
+	}
+	return true;
+}
 
 const TRAP_OFFSET = 110;
 
@@ -84,4 +122,55 @@ export function stripTrap(a: Automaton, p: Positions): Stripped {
 	const positions = remapPositions(p, map);
 	for (const t of traps) map.set(t, automaton.states.length);
 	return { machine: automaton, positions, trapAt: p.get(traps[0]) ?? null, map };
+}
+
+export interface DrawingEdit {
+	/** The machine after the edit: the previous machine itself when the edit left it as it was. */
+	machine: Automaton;
+	positions: Positions;
+	/** Where the trap was drawn, if the edit kept it. */
+	trapAt: Point | null;
+	/** Ids in the edited drawing → ids in `machine`, when the trap was drawn. */
+	map: Map<StateId, StateId> | null;
+	/** The machine or its positions changed. */
+	changed: boolean;
+	/**
+	 * The edit changed only the trap (deleted it, added an edge out of it, …),
+	 * which is not part of the machine: the drawing has to be put back.
+	 */
+	redraw: boolean;
+	/** The edit deleted the trap state. */
+	trapRemoved: boolean;
+}
+
+/**
+ * Reads an edit the editor reports. `drawn` is what it was showing: the
+ * machine, or the machine with its trap. When the machine is unchanged (a
+ * state was dragged) the result keeps the same object, so nothing computed
+ * from it (a run and its current step) starts over.
+ */
+export function resolveDrawingEdit(
+	machine: Automaton,
+	positions: Positions | null,
+	drawn: Automaton,
+	next: Automaton,
+	pos: Positions
+): DrawingEdit {
+	const hadTrap = drawn.states.some((s) => s.trap);
+	const stripped = hadTrap ? stripTrap(next, pos) : null;
+	const edited = stripped ? stripped.machine : next;
+	const m = edited === machine || machineKey(edited) === machineKey(machine) ? machine : edited;
+	const p = stripped ? stripped.positions : pos;
+	const redraw = hadTrap && m === machine && layoutKey(next) !== layoutKey(drawn);
+	return {
+		machine: m,
+		positions: p,
+		trapAt: stripped?.trapAt ?? null,
+		map: stripped?.map ?? null,
+		// An edit on the trap alone moves nothing; the positions it reports are
+		// only where the drawing had the states (auto layout included).
+		changed: !redraw && (m !== machine || !samePositions(p, positions)),
+		redraw,
+		trapRemoved: hadTrap && !next.states.some((s) => s.trap)
+	};
 }

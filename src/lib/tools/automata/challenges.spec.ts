@@ -10,7 +10,8 @@ import {
 	checkGuess,
 	guessMessage
 } from './challenges';
-import { compareBounded, estimateNfaSize } from './compare';
+import { CharSet } from '$lib/theory/charset';
+import { compareBounded, estimateNfaSize, representative } from './compare';
 import { presetById } from './presets';
 
 const machine = (id: string) => presetById(id)!.value.machine;
@@ -139,6 +140,38 @@ describe('Build a DFA', () => {
 	it('needs a machine', () => {
 		expect(checkBuild({ states: [], transitions: [], start: 0 }, BUILD_CHALLENGES[0])).toEqual({
 			kind: 'no-machine'
+		});
+	});
+});
+
+describe('counterexample symbols', () => {
+	const visible = (s: string) => [...s].every((ch) => /[\p{L}\p{N}\p{P}\p{S}]/u.test(ch));
+
+	it('picks a digit or letter for a class that has one', () => {
+		const other = CharSet.of('<', '=', '>').complement();
+		expect(String.fromCodePoint(representative(other)!)).toBe('0');
+		expect(String.fromCodePoint(representative(CharSet.range(0, 0x2f))!)).toBe('!');
+		expect(representative(CharSet.of(' ', '\n'))).toBe(0x20);
+		expect(representative(CharSet.single('\t'))).toBe(0x09);
+		expect(representative(CharSet.of('b', 'a'))).toBe(0x61);
+	});
+
+	it('never shows an invisible character for the relop machine', () => {
+		const relop = machine('08-16');
+		const r = checkGuess(relop, "'<=' | '<>' | '<' | '=' | '>=' | '>'");
+		expect(r).toMatchObject({ kind: 'differ', onlyMachine: '<0', onlyRegex: '<' });
+		if (r.kind !== 'differ') return;
+		expect(visible(r.onlyMachine!)).toBe(true);
+		expect(guessMessage(r.onlyMachine!, true)).toBe(
+			'"<0" is accepted by the machine but is not in L(R).'
+		);
+	});
+
+	it('still finds the shortest difference first', () => {
+		expect(compareBounded(nfa('[^a]'), nfa('b'))).toEqual({
+			kind: 'differ',
+			onlyA: '0',
+			onlyB: null
 		});
 	});
 });

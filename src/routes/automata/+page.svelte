@@ -11,7 +11,7 @@
 		setStart,
 		updateState
 	} from '$lib/components/graph/edit';
-	import { edgeKey, layoutKey } from '$lib/components/graph/layout';
+	import { edgeKey } from '$lib/components/graph/layout';
 	import { parseLabelText } from '$lib/components/graph/label-text';
 	import { tableColumns } from '$lib/components/graph/table';
 	import type { AutomatonHighlight, GraphSelection } from '$lib/components/graph/types';
@@ -27,7 +27,7 @@
 	import { Stepper } from '$lib/components/ui/stepper.svelte';
 	import type { Preset } from '$lib/components/ui/types';
 	import type { CharSet } from '$lib/theory/charset';
-	import { complete, formatAutomatonText, parseAutomatonText } from '$lib/theory/automata/core';
+	import { formatAutomatonText } from '$lib/theory/automata/core';
 	import { pathTree } from '$lib/theory/automata/simulate';
 	import type { Automaton, Point, Positions, StateId } from '$lib/theory/automata/types';
 	import { hasErrors, type Diagnostic } from '$lib/theory/diagnostics';
@@ -47,16 +47,11 @@
 	import { formalDefinition } from '$lib/tools/automata/definition';
 	import { summarizeDeterminism, type StripItem } from '$lib/tools/automata/determinism';
 	import { History } from '$lib/tools/automata/history';
-	import {
-		MAX_RUN_LENGTH,
-		MAX_STATES,
-		MAX_TRANSITIONS,
-		hasStates,
-		newMachine
-	} from '$lib/tools/automata/model';
+	import { MAX_RUN_LENGTH, hasStates, newMachine } from '$lib/tools/automata/model';
 	import {
 		DEFAULT_PRESET_ID,
 		presetById,
+		presetEdited as isPresetEdited,
 		presets,
 		type AutomataPreset
 	} from '$lib/tools/automata/presets';
@@ -71,8 +66,17 @@
 		type TabId,
 		type ViewState
 	} from '$lib/tools/automata/state';
-	import { mergeTextEdit } from '$lib/tools/automata/text-sync';
-	import { positionsWithTrap, remapSelection, stripTrap } from '$lib/tools/automata/trap';
+	import {
+		checkAutomatonText,
+		createTextApplier,
+		mergeTextEdit
+	} from '$lib/tools/automata/text-sync';
+	import {
+		completeForDrawing,
+		positionsWithTrap,
+		remapSelection,
+		resolveDrawingEdit
+	} from '$lib/tools/automata/trap';
 
 	interface Snapshot {
 		machine: Automaton;
@@ -117,6 +121,8 @@
 
 	/** Every change to the machine goes through here, so it can be undone. */
 	function commit(next: Automaton, nextPositions: Positions | null) {
+		// A Text-tab edit still waiting to apply was typed against the old machine.
+		if (next !== machine) textApplier.cancel();
 		machine = next;
 		positions = nextPositions;
 		history.push({ machine: next, positions: nextPositions });
@@ -126,6 +132,7 @@
 
 	function restore(s: Snapshot | null) {
 		if (!s) return;
+		textApplier.cancel();
 		machine = s.machine;
 		positions = s.positions;
 		selected = null;
@@ -137,6 +144,7 @@
 	const redo = () => restore(history.redo());
 
 	function onLoad(value: SavedState) {
+		textApplier.cancel();
 		const loaded = loadSaved(value);
 		const fallback = newMachine();
 		const m = loaded.machine ?? fallback.machine;
@@ -158,7 +166,10 @@
 		}
 	}
 
-	syncToHash(() => saveState(machine, positions, view), { onLoad, validate: isSavedState });
+	syncToHash(() => saveState(machine, positions, view, pendingDraft), {
+		onLoad,
+		validate: isSavedState
+	});
 
 	// ------------------------------------------------------------------
 	// Derived: determinism, trap state, the run and its highlight.
@@ -166,7 +177,7 @@
 
 	const summary = $derived(summarizeDeterminism(machine));
 	const kind = $derived(summary.kind);
-	const completed = $derived(kind === 'partial-dfa' ? complete(machine) : null);
+	const completed = $derived(kind === 'partial-dfa' ? completeForDrawing(machine) : null);
 	const hasEpsilon = $derived(machine.transitions.some((t) => t.label === null));
 	const empty = $derived(!hasStates(machine));
 	const tooLong = $derived(view.input.length > MAX_RUN_LENGTH);
@@ -187,7 +198,13 @@
 			completed.trap !== null &&
 			(view.showTrap || (view.missing === 'trap' && !!run?.usesTrap))
 	);
-	const display = $derived(trapShown && completed ? completed.automaton : machine);
+	/** Bumped when an edit touched only the drawn trap, so the drawing is put back. */
+	let redraws = $state(0);
+	const display = $derived.by(() => {
+		void redraws;
+		// A fresh object each time: the editor redraws from a machine it did not report.
+		return trapShown && completed ? { ...completed.automaton } : machine;
+	});
 	const displayPositions = $derived(
 		trapShown && completed && completed.trap !== null
 			? positionsWithTrap(positions, completed.trap, trapAt)
@@ -204,6 +221,12 @@
 	});
 	const step = $derived(run ? (run.steps[stepper.index] ?? null) : null);
 	const atEnd = $derived(!!run && stepper.index === run.steps.length - 1);
+	// Stepping, or a new run, hands the diagram back to the run from a highlighted strip item.
+	$effect(() => {
+		void stepper.index;
+		void run;
+		untrack(() => (focus = null));
+	});
 
 	function focusHighlight(item: StripItem): AutomatonHighlight {
 		if (item.kind === 'missing') {
@@ -255,6 +278,8 @@
 
 	const definition = $derived(formalDefinition(display));
 	const currentPreset = $derived(presetById(view.preset));
+	/** The machine no longer matches the loaded example (positions aside). */
+	const presetEdited = $derived(!!currentPreset && isPresetEdited(currentPreset.value, machine));
 
 	const machineText = $derived(hasStates(machine) ? formatAutomatonText(machine) : '');
 	const subsetLink = $derived(
@@ -272,30 +297,17 @@
 	// Editing
 	// ------------------------------------------------------------------
 
-	function samePositions(p: Positions | null, q: Positions | null): boolean {
-		if (p === q) return true;
-		if (!p || !q || p.size !== q.size) return false;
-		for (const [id, a] of p) {
-			const b = q.get(id);
-			if (!b || b.x !== a.x || b.y !== a.y) return false;
-		}
-		return true;
-	}
-
 	function onGraphChange(next: Automaton, pos: Positions) {
-		let m = next;
-		let p: Positions | null = pos;
-		if (trapShown) {
-			const stripped = stripTrap(next, pos);
-			m = stripped.machine;
-			p = stripped.positions;
-			if (stripped.trapAt) trapAt = stripped.trapAt;
-			// The drawing sets its selection right after reporting an edit, in its own
-			// numbering (with the trap in it); carry it over once it has done so.
-			queueMicrotask(() => (selected = remapSelection(selected, stripped.map)));
-		}
-		if (layoutKey(m) === layoutKey(machine) && samePositions(p, positions)) return;
-		commit(m, p);
+		const edit = resolveDrawingEdit(machine, positions, display, next, pos);
+		if (edit.trapAt) trapAt = edit.trapAt;
+		const map = edit.map;
+		// The drawing sets its selection right after reporting an edit, in its own
+		// numbering (with the trap in it); carry it over once it has done so.
+		if (map) queueMicrotask(() => (selected = remapSelection(selected, map)));
+		// Deleting the drawn trap turns it off (it stays while the run is in it).
+		if (edit.trapRemoved) view.showTrap = false;
+		if (edit.changed) commit(edit.machine, edit.positions);
+		if (edit.redraw) redraws++;
 	}
 
 	function renameState(id: StateId, name: string): string | null {
@@ -411,7 +423,8 @@
 	/** The machine the draft was written from (or applied to). */
 	let textSource: Automaton | null = initial.value.machine;
 	let textCheck = $state.raw<{ text: string; diagnostics: Diagnostic[] } | null>(null);
-	let textTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Applies typed text after a pause, unless the machine is replaced first. */
+	const textApplier = createTextApplier({ current: () => machine, apply: applyText });
 
 	$effect.pre(() => {
 		const m = machine;
@@ -423,28 +436,16 @@
 		});
 	});
 
-	$effect(() => () => clearTimeout(textTimer));
+	$effect(() => () => textApplier.cancel());
 
 	function onTextInput(value: string) {
-		clearTimeout(textTimer);
-		textTimer = setTimeout(() => applyText(value), 450);
+		textApplier.input(value);
 	}
 
 	function applyText(value: string) {
-		const parsed = parseAutomatonText(value);
-		const a = parsed.automaton;
-		const tooBig = !!a && (a.states.length > MAX_STATES || a.transitions.length > MAX_TRANSITIONS);
-		const diagnostics: Diagnostic[] = tooBig
-			? [
-					...parsed.diagnostics,
-					{
-						severity: 'error',
-						message: `The editor draws at most ${MAX_STATES} states and ${MAX_TRANSITIONS} transitions.`
-					}
-				]
-			: parsed.diagnostics;
+		const { automaton: a, diagnostics } = checkAutomatonText(value);
 		textCheck = { text: value, diagnostics };
-		if (!a || tooBig || hasErrors(diagnostics)) return;
+		if (!a) return;
 		if (formatAutomatonText(a) === machineText) return;
 		const merged = mergeTextEdit(machine, positions, a);
 		textSource = merged.machine;
@@ -455,6 +456,8 @@
 	const textDiagnostics = $derived(
 		textCheck && textCheck.text === textDraft ? textCheck.diagnostics : []
 	);
+	/** A draft that does not apply is kept in the link, so a reload still shows it. */
+	const pendingDraft = $derived(hasErrors(textDiagnostics) ? textDraft : null);
 
 	const tabs = [
 		{ id: 'definition', label: 'Definition' },
@@ -476,11 +479,21 @@
 
 <ToolPage {tool}>
 	{#snippet actions()}
-		<PresetMenu {presets} selected={view.preset} onselect={loadPreset} align="end" />
+		<PresetMenu
+			{presets}
+			selected={presetEdited ? null : view.preset}
+			onselect={loadPreset}
+			align="end"
+		/>
 	{/snippet}
 
 	{#if currentPreset}
-		<PresetCard preset={currentPreset} ontry={openChallenges} />
+		<PresetCard
+			preset={currentPreset}
+			edited={presetEdited}
+			ontry={openChallenges}
+			onreload={() => loadPreset(currentPreset)}
+		/>
 	{/if}
 
 	<div class="workbench">
@@ -689,9 +702,19 @@
 		}
 	}
 	@media (min-width: 1100px) and (min-height: 820px) {
+		/* Stays in view beside the run. When the inspector or the strip makes it
+		   taller than the window, it scrolls on its own, so its lower controls
+		   stay reachable. */
 		.main-col {
 			position: sticky;
 			top: calc(56px + var(--space-4));
+			max-height: calc(100vh - 56px - 2 * var(--space-4));
+			max-height: calc(100dvh - 56px - 2 * var(--space-4));
+			overflow-y: auto;
+			/* Room for the panel's shadow, which the scroll box would clip. */
+			padding-bottom: 3px;
+			scrollbar-gutter: stable;
+			scrollbar-width: thin;
 		}
 	}
 	.toolbar {

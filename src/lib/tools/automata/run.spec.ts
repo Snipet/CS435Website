@@ -161,3 +161,19 @@ describe('NFA runs', () => {
 		expect(segText(p.steps[3].caption)).toBe('ε-closure({ A, B }) adds no states.');
 	});
 });
+
+describe('symbols on arrows', () => {
+	it('shows a space on the path and in the caption', () => {
+		const m = buildRun(machine('08-16'), '< ')!;
+		expect(trace(m)).toBe('0 →< 1 →␣ 4');
+		expect(segText(m.steps[2].caption)).toBe("Read ' ': 1 →␣ 4.");
+		expect(m.steps[2].read?.char).toBe(' ');
+	});
+
+	it('shows a newline and a tab in an NFA trace', () => {
+		const a = automatonFromText("start: A\naccept: B\nA '\\n' A\nA '\\n' B\nB '\\t' B");
+		const m = buildRun(a, '\n\t')!;
+		expect(m.kind).toBe('nfa');
+		expect(m.trace.map((t) => t.symbol)).toEqual([undefined, '\\n', '\\t']);
+	});
+});

@@ -5,9 +5,78 @@
  * that survive unchanged keep a display text such as `other`. New states are
  * placed in a row under the drawing.
  */
+import { parseAutomatonText } from '$lib/theory/automata/core';
 import type { Automaton, Positions, StateId } from '$lib/theory/automata/types';
+import { hasErrors, type Diagnostic } from '$lib/theory/diagnostics';
+import { MAX_STATES, MAX_TRANSITIONS } from './model';
 
 export const NEW_STATE_GAP = 110;
+
+/** Pause in typing after which a Text-tab edit is applied. */
+export const TEXT_APPLY_DELAY = 450;
+
+export interface TextCheck {
+	/** The parsed machine, or null when the text has errors or is too large to draw. */
+	automaton: Automaton | null;
+	diagnostics: Diagnostic[];
+}
+
+/** Parses machine text and enforces the editor's size limits. */
+export function checkAutomatonText(text: string): TextCheck {
+	const parsed = parseAutomatonText(text);
+	const a = parsed.automaton;
+	const tooBig = !!a && (a.states.length > MAX_STATES || a.transitions.length > MAX_TRANSITIONS);
+	const diagnostics: Diagnostic[] = tooBig
+		? [
+				...parsed.diagnostics,
+				{
+					severity: 'error',
+					message: `The editor draws at most ${MAX_STATES} states and ${MAX_TRANSITIONS} transitions.`
+				}
+			]
+		: parsed.diagnostics;
+	return { automaton: a && !hasErrors(diagnostics) ? a : null, diagnostics };
+}
+
+export interface TextApplier {
+	/** The text changed: apply it after a pause, unless the machine changes first. */
+	input(text: string): void;
+	/** Drops an edit that is still waiting. */
+	cancel(): void;
+	readonly pending: boolean;
+}
+
+/**
+ * Debounces Text-tab edits. An edit is written against the machine current
+ * when it was typed; if something else replaces that machine before the pause
+ * ends (a preset, New, Undo, a pasted link), the edit is dropped rather than
+ * merged into the new machine.
+ */
+export function createTextApplier<T>(opts: {
+	current: () => T;
+	apply: (text: string) => void;
+	delay?: number;
+}): TextApplier {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const cancel = () => {
+		clearTimeout(timer);
+		timer = undefined;
+	};
+	return {
+		input(text) {
+			cancel();
+			const base = opts.current();
+			timer = setTimeout(() => {
+				timer = undefined;
+				if (opts.current() === base) opts.apply(text);
+			}, opts.delay ?? TEXT_APPLY_DELAY);
+		},
+		cancel,
+		get pending() {
+			return timer !== undefined;
+		}
+	};
+}
 
 export function mergeTextEdit(
 	prev: Automaton,

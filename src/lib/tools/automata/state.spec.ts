@@ -43,6 +43,33 @@ describe('saved state', () => {
 		});
 	});
 
+	it('keeps a draft that does not parse, so a reload still shows it', () => {
+		// A link with bad text loads the fallback machine and the text as a draft…
+		const link = loadSaved({ text: 'start: A\nA ??? ', input: 'ab' });
+		expect(link.machine).toBeNull();
+		const { machine, positions } = newMachine();
+		// …which the page saves next to the machine it shows.
+		const saved = JSON.parse(
+			JSON.stringify(saveState(machine, positions, link.view, link.badText!.text))
+		);
+		expect(saved.draft).toBe('start: A\nA ??? ');
+		expect(isSavedState(saved)).toBe(true);
+		const reloaded = loadSaved(saved);
+		expect(reloaded.machine).toEqual(machine);
+		expect(reloaded.view).toMatchObject({ tab: 'text', input: 'ab' });
+		expect(reloaded.badText?.text).toBe('start: A\nA ??? ');
+		expect(reloaded.badText?.diagnostics.length).toBeGreaterThan(0);
+	});
+
+	it('ignores a saved draft that parses or is malformed', () => {
+		const { machine, positions } = newMachine();
+		const base = saveState(machine, positions, DEFAULT_VIEW);
+		expect(base.draft).toBeUndefined();
+		expect(loadSaved({ ...base, draft: 'start: A\nA 0 B' }).badText).toBeNull();
+		expect(loadSaved({ ...base, draft: 7 } as never).badText).toBeNull();
+		expect(loadSaved({ ...base, draft: 'x'.repeat(100_001) }).badText).toBeNull();
+	});
+
 	it('rejects values without a machine', () => {
 		for (const v of [null, 'x', [], {}, { input: '1' }, { machine: { s: 1 } }, { text: 3 }])
 			expect(isSavedState(v)).toBe(false);

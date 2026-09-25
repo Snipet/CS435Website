@@ -66,6 +66,14 @@ export function encodeMachine(a: Automaton): MachineJson {
 	return out;
 }
 
+/**
+ * The saved form as a string: equal for two machines exactly when they save
+ * the same way (transition ids and trap marks, which are not saved, aside).
+ */
+export function machineKey(a: Automaton): string {
+	return JSON.stringify(encodeMachine(a));
+}
+
 const isObject = (v: unknown): v is Record<string, unknown> =>
 	typeof v === 'object' && v !== null && !Array.isArray(v);
 

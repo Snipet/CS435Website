@@ -1,7 +1,9 @@
 <!--
 @component
 The loaded slide example: its title, citation and description, plus the
-question the slide asks (answer on request) or the task it sets.
+question the slide asks (answer on request) or the task it sets. Once the
+machine has been edited, the card says so and offers to load the slide's
+machine again instead.
 -->
 <script lang="ts">
 	import CitationTag from '$lib/components/ui/CitationTag.svelte';
@@ -11,11 +13,15 @@ question the slide asks (answer on request) or the task it sets.
 
 	interface Props {
 		preset: Preset<AutomataPreset>;
+		/** The machine no longer matches the slide's. */
+		edited?: boolean;
 		/** Offered next to a question about the machine's language. */
 		ontry?: () => void;
+		/** Loads the slide's machine again (shown when `edited`). */
+		onreload?: () => void;
 	}
 
-	let { preset, ontry }: Props = $props();
+	let { preset, edited = false, ontry, onreload }: Props = $props();
 
 	const q = $derived(preset.value.question);
 	/** Questions about the machine's language can be tried under "What language?". */
@@ -54,25 +60,37 @@ question the slide asks (answer on request) or the task it sets.
 		<h2>{preset.label}</h2>
 		{#if preset.cite}<CitationTag cite={preset.cite} size="md" />{/if}
 	</div>
-	{#if preset.description}<p class="desc">{preset.description}</p>{/if}
-	{#if q}
-		<div class="question">
-			<div class="ask">
-				<p class="prompt">{q.prompt}</p>
-				{#if asksForRe && ontry}
-					<button type="button" class="try" onclick={ontry}>Check an RE under Challenges</button>
-				{/if}
-			</div>
-			<Disclosure summary="Show answer" openSummary="Hide answer">
-				<div class="answer">
-					{#each q.answer as b, i (i)}{@render block(b)}{/each}
+	{#if edited}
+		<div class="edited">
+			<p class="desc">
+				The machine has been edited since this example was loaded; the description and the slide's
+				question are about the original.
+			</p>
+			{#if onreload}
+				<button type="button" class="try" onclick={onreload}>Reload the example</button>
+			{/if}
+		</div>
+	{:else}
+		{#if preset.description}<p class="desc">{preset.description}</p>{/if}
+		{#if q}
+			<div class="question">
+				<div class="ask">
+					<p class="prompt">{q.prompt}</p>
+					{#if asksForRe && ontry}
+						<button type="button" class="try" onclick={ontry}>Check an RE under Challenges</button>
+					{/if}
 				</div>
-			</Disclosure>
-		</div>
-	{:else if preset.value.prompt}
-		<div class="question">
-			<p class="prompt">{preset.value.prompt}</p>
-		</div>
+				<Disclosure summary="Show answer" openSummary="Hide answer">
+					<div class="answer">
+						{#each q.answer as b, i (i)}{@render block(b)}{/each}
+					</div>
+				</Disclosure>
+			</div>
+		{:else if preset.value.prompt}
+			<div class="question">
+				<p class="prompt">{preset.value.prompt}</p>
+			</div>
+		{/if}
 	{/if}
 </section>
 
@@ -103,6 +121,12 @@ question the slide asks (answer on request) or the task it sets.
 		color: var(--text-2);
 		font-size: var(--text-sm);
 		line-height: 1.55;
+	}
+	.edited {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: var(--space-1) var(--space-4);
 	}
 	.question {
 		display: flex;
