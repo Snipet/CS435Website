@@ -15,6 +15,11 @@
 		ariaLabel?: string;
 		/** Word used in the counter, e.g. "Step 3 of 12". */
 		noun?: string;
+		/**
+		 * Counter text for a step (index from 0, total ≥ 1), in place of
+		 * "`noun` index+1 of total", e.g. for steps numbered from 0.
+		 */
+		counter?: (index: number, total: number) => string;
 	}
 
 	let {
@@ -23,7 +28,8 @@
 		speeds = [0.5, 1, 2, 4],
 		showSpeed = true,
 		ariaLabel = 'Step controls',
-		noun = 'Step'
+		noun = 'Step',
+		counter: counterText
 	}: Props = $props();
 
 	const uid = $props.id();
@@ -35,7 +41,11 @@
 	});
 	const speedOptions = $derived(speeds.map((s) => ({ value: s, label: `${s}×` })));
 	const counter = $derived(
-		total === 0 ? `No ${noun.toLowerCase()}s` : `${noun} ${index + 1} of ${total}`
+		total === 0
+			? `No ${noun.toLowerCase()}s`
+			: counterText
+				? counterText(index, total)
+				: `${noun} ${index + 1} of ${total}`
 	);
 
 	/** Nothing to play: one step, or a stepper held on its first step (e.g. a subclass with a limit). */
