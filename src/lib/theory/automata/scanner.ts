@@ -61,6 +61,11 @@ export interface ScanResult {
 	steps: MatchMatrix[];
 	/** Offset where scanning stopped with no match, or null. */
 	stuck: number | null;
+	/**
+	 * Set only when `maxReads` stopped the scan: the offset of the next token,
+	 * which was not scanned.
+	 */
+	cutoff?: number;
 }
 
 /** Token name of the Error rule. */
@@ -93,12 +98,16 @@ function ruleNfa(rule: TokenRule, alphabet: CharSet) {
  * count symbols (code points). With `errorRule`, an unmatched symbol becomes
  * an (Error, one symbol) token and scanning continues; otherwise scanning
  * stops and `stuck` is its offset. Σ in a rule means any symbol of `alphabet`
- * (default: `scannerAlphabet(rules)`, as for `scannerDfa`).
+ * (default: `scannerAlphabet(rules)`, as for `scannerDfa`). With `maxReads`,
+ * no new step starts once the steps so far have read that many symbols in
+ * total (the sum of their `maxLen`); `cutoff` is then the offset where it
+ * stopped. It bounds the work, which is quadratic in the worst case (e.g.
+ * 'a'* 'b' on "aaa…").
  */
 export function scan(
 	rules: TokenRule[],
 	input: string,
-	opts: { errorRule?: boolean; alphabet?: CharSet } = {}
+	opts: { errorRule?: boolean; alphabet?: CharSet; maxReads?: number } = {}
 ): ScanResult {
 	const alphabet = opts.alphabet ?? scannerAlphabet(rules);
 	const machines = rules.map((r) => compile(subsetConstruction(ruleNfa(r, alphabet).nfa).dfa));
@@ -106,9 +115,16 @@ export function scan(
 	const tokens: ScanToken[] = [];
 	const steps: MatchMatrix[] = [];
 	let stuck: number | null = null;
+	let cutoff: number | null = null;
+	const maxReads = opts.maxReads ?? Infinity;
+	let reads = 0;
 	let i = 0;
 	let pos = 0;
 	while (i < cps.length) {
+		if (reads >= maxReads) {
+			cutoff = pos;
+			break;
+		}
 		const current = machines.map((m) => m.start);
 		const matches = rules.map((): boolean[] => []);
 		let len = 0;
@@ -134,6 +150,7 @@ export function scan(
 			}
 		}
 		steps.push({ pos, maxLen: len, matches, length, rule });
+		reads += len;
 		if (length !== null && rule !== null) {
 			const end = cps[i + length - 1].end;
 			tokens.push({
@@ -165,7 +182,7 @@ export function scan(
 			break;
 		}
 	}
-	return { tokens, steps, stuck };
+	return cutoff === null ? { tokens, steps, stuck } : { tokens, steps, stuck, cutoff };
 }
 
 /**
