@@ -5,7 +5,7 @@
  */
 import type { Diagnostic } from '$lib/theory/diagnostics';
 import type { FnDef, Stmt, TopItem } from './c-ast';
-import { checkFunction, checkScanner } from './c-check';
+import { checkFunction, checkGlobals, checkScanner } from './c-check';
 import { lexC, type Macros } from './c-lexer';
 import { parseBody, parseTop, type Typedefs } from './c-parser';
 import { BUILTIN_FUNCTIONS } from './c';
@@ -118,6 +118,8 @@ function compile(spec: FlexSpec): CompiledSpec {
 	}
 	const declared = new Set<string>();
 	const numeric = new Set<string>();
+	/** Names that exist before any global is initialized. */
+	const initial = new Set(names);
 	for (const item of top) {
 		if (item.k === 'fn') {
 			const fn = item.fn;
@@ -134,6 +136,7 @@ function compile(spec: FlexSpec): CompiledSpec {
 			for (const d of s.decls) {
 				if (s.extern) {
 					names.add(d.name);
+					initial.add(d.name);
 					continue;
 				}
 				if (FLEX_GLOBALS.includes(d.name) || PROVIDED.includes(d.name))
@@ -171,6 +174,13 @@ function compile(spec: FlexSpec): CompiledSpec {
 			[...functions].map(([n, f]) => [n, { params: f.params.length, variadic: f.variadic }])
 		)
 	};
+	diagnostics.push(
+		...checkGlobals(globals, {
+			globals: initial,
+			functions: scope.functions,
+			startConditions: spec.startConditions.map((sc) => sc.name)
+		})
+	);
 	for (const fn of functions.values()) diagnostics.push(...checkFunction(fn, scope));
 	const checked = checkScanner(prologue, actions, scope);
 	diagnostics.push(...checked.prologue, ...checked.actions.flat());

@@ -1,11 +1,18 @@
 /**
  * Compile-time checks a C compiler would make before the program runs:
- * undeclared names, unknown functions, argument counts, and misplaced
- * break / continue / case labels.
+ * undeclared names, unknown functions, argument counts, misplaced
+ * break / continue / case labels, and the initializers of global variables.
  */
 import type { Diagnostic } from '$lib/theory/diagnostics';
 import type { Expr, FnDef, Loc, Stmt } from './c-ast';
-import { BUILTIN_FUNCTIONS, BUILTIN_VALUES } from './c';
+import {
+	BUILTIN_FUNCTIONS,
+	BUILTIN_VALUES,
+	CLimitError,
+	CMachine,
+	CRuntimeError,
+	type FlexHooks
+} from './c';
 
 export interface CheckScope {
 	/** Global variables, enum constants, start conditions, and flex's own names. */
@@ -32,7 +39,9 @@ class Checker {
 		private readonly scope: CheckScope,
 		/** Action code: break and continue at the top end the action, as in flex. */
 		private readonly inAction: boolean,
-		private readonly voidFn: boolean
+		private readonly voidFn: boolean,
+		/** Initializers of global declarations (outside every function). */
+		private readonly fileScope = false
 	) {}
 
 	private error(message: string, loc: Loc): void {
@@ -110,6 +119,28 @@ class Checker {
 		for (const s of body) this.stmt(s);
 	}
 
+	/**
+	 * A global declaration or enum: its expressions see only the names declared
+	 * before them (the globals are initialized in text order). Repeated names
+	 * are reported by the compiler, not here.
+	 */
+	global(s: Stmt): void {
+		const top = this.frames[this.frames.length - 1];
+		if (s.k === 'decl') {
+			for (const d of s.decls) {
+				if (d.array) this.expr(d.array);
+				if (d.init) (d.init.k === 'list' ? d.init.items : [d.init]).forEach((e) => this.expr(e));
+				top.names.add(d.name);
+			}
+		} else if (s.k === 'enum') {
+			for (const item of s.items) {
+				if (item.value) this.expr(item.value);
+				top.names.add(item.name);
+				top.constants.add(item.name);
+			}
+		}
+	}
+
 	stmt(s: Stmt, inSwitchBody = false): void {
 		switch (s.k) {
 			case 'expr':
@@ -172,6 +203,10 @@ class Checker {
 				if (s.e) {
 					this.expr(s.e);
 					if (this.voidFn) this.warn('a void function returns a value', s.loc);
+				} else if (this.inAction) {
+					// Actions are the body of yylex, which returns int; gcc compiles a bare
+					// `return;` there with this warning (yylex then returns 0 here, see CMachine).
+					this.warn("'return' with no value, in function returning non-void", s.loc);
 				}
 				break;
 			case 'break':
@@ -249,6 +284,30 @@ class Checker {
 			case 'call': {
 				e.args.forEach((x) => this.expr(x));
 				const fn = this.scope.functions.get(e.name);
+				if (this.fileScope) {
+					// The runtime initializes the globals before any user function exists.
+					if (fn) {
+						this.error(
+							`a global's initializer cannot call ${e.name}(): globals are set before main runs`,
+							e.loc
+						);
+						return;
+					}
+					if (e.name === 'yyterminate') {
+						this.error(
+							"yyterminate() is flex's return 0, so it can only be used inside a function",
+							e.loc
+						);
+						return;
+					}
+					if (e.name === 'yyless') {
+						this.error('yyless() can only be used in a rule’s action', e.loc);
+						return;
+					}
+				}
+				// yyterminate() is flex's macro for `return 0`.
+				if (e.name === 'yyterminate' && this.voidFn && !fn)
+					this.warn('yyterminate() returns 0, but this function returns void', e.loc);
 				if (fn) {
 					const n = e.args.length;
 					if (n < fn.params || (!fn.variadic && n > fn.params)) {
@@ -307,4 +366,173 @@ export function checkScanner(
 		return c.diagnostics;
 	});
 	return { prologue: pc.diagnostics, actions: out, locals };
+}
+
+/** Library functions without side effects: evaluating a global's initializer may call them. */
+const PURE_BUILTINS = new Set([
+	'strlen',
+	'strcmp',
+	'strncmp',
+	'strchr',
+	'strrchr',
+	'strstr',
+	'atoi',
+	'atol',
+	'atof',
+	'strtol',
+	'strtod',
+	'abs',
+	'labs',
+	'isalpha',
+	'isdigit',
+	'isalnum',
+	'isspace',
+	'isupper',
+	'islower',
+	'ispunct',
+	'isxdigit',
+	'isprint',
+	'toupper',
+	'tolower',
+	'strdup',
+	'malloc',
+	'calloc'
+]);
+
+/** Names whose value comes from the running scanner (ECHO also writes output). */
+const SCANNER_VALUES = new Set(['ECHO', 'YY_START', 'YYSTATE']);
+
+function subexpressions(e: Expr): Expr[] {
+	switch (e.k) {
+		case 'unary':
+		case 'incdec':
+		case 'cast':
+		case 'begin':
+			return [e.arg];
+		case 'sizeof':
+			return e.arg ? [e.arg] : [];
+		case 'binary':
+		case 'logical':
+			return [e.left, e.right];
+		case 'assign':
+			return [e.target, e.value];
+		case 'cond':
+			return [e.test, e.then, e.else];
+		case 'index':
+			return [e.arr, e.index];
+		case 'comma':
+			return e.items;
+		case 'call':
+			return e.args;
+		default:
+			return [];
+	}
+}
+
+type Functions = CheckScope['functions'];
+
+/** Whether the node itself (not counting its operands) can change a variable, write output, or switch the start condition. */
+function effectAt(e: Expr, functions: Functions): boolean {
+	if (e.k === 'assign' || e.k === 'incdec' || e.k === 'begin') return true;
+	if (e.k === 'id') return e.name === 'ECHO';
+	return e.k === 'call' && (functions.has(e.name) || !PURE_BUILTINS.has(e.name));
+}
+
+function hasEffects(e: Expr, functions: Functions): boolean {
+	return effectAt(e, functions) || subexpressions(e).some((x) => hasEffects(x, functions));
+}
+
+/** Whether `e` can be evaluated before the program runs: no effects, no scanner state, no unknown values. */
+function evaluable(e: Expr, unknown: ReadonlySet<string>, functions: Functions): boolean {
+	if (effectAt(e, functions)) return false;
+	if (e.k === 'id' && (unknown.has(e.name) || SCANNER_VALUES.has(e.name))) return false;
+	return subexpressions(e).every((x) => evaluable(x, unknown, functions));
+}
+
+/** Hooks for the scratch machine; initializers that reach the scanner are never evaluated. */
+const unavailable = (what: string) => (loc?: Loc) => {
+	throw new CRuntimeError(`${what} is not available here`, loc);
+};
+const NO_SCANNER: FlexHooks = {
+	yylex: unavailable('yylex()'),
+	input: unavailable('input()'),
+	yyless: (_n, loc) => unavailable('yyless()')(loc),
+	begin: (_sc, loc) => unavailable('BEGIN')(loc),
+	echo: unavailable('ECHO'),
+	terminate: unavailable('yyterminate()'),
+	yyStart: () => 0
+};
+
+export interface GlobalScope extends CheckScope {
+	/** Start condition names in declaration order (their values are 1, 2, …). */
+	startConditions: readonly string[];
+}
+
+/**
+ * Checks the global declarations and enums (`globals`, in text order) the way
+ * the runtime initializes them before main runs, so their problems are
+ * reported when the spec is compiled:
+ *
+ * - an initializer, array size, or enum value may use only names declared
+ *   before it (`scope.globals` holds the names that exist from the start:
+ *   flex's names, the start conditions, and extern declarations);
+ * - it cannot call user functions, yyterminate(), or yyless();
+ * - initializers without side effects are evaluated in a scratch interpreter,
+ *   which reports what the runtime would (a pointer used as a number, a string
+ *   too long for its array, too many initializers, division by zero, …). An
+ *   initializer that reads a value not evaluated here, or a variable an earlier
+ *   initializer with side effects may have changed, is left to the runtime.
+ */
+export function checkGlobals(globals: readonly Stmt[], scope: GlobalScope): Diagnostic[] {
+	const c = new Checker(scope, false, false, true);
+	c.push();
+	const machine = new CMachine({ budget: 100_000, outputLimit: 10_000, hooks: NO_SCANNER });
+	machine.defineConstant('INITIAL', 0);
+	scope.startConditions.forEach((name, k) => machine.defineConstant(name, k + 1));
+	/** Names whose value at run time is not known here. */
+	const unknown = new Set<string>();
+	/** Variables declared so far (not enum constants). */
+	const variables: string[] = [];
+	const out: Diagnostic[] = [];
+	for (const s of globals) {
+		if (s.k !== 'decl' && s.k !== 'enum') continue;
+		const before = c.diagnostics.length;
+		c.global(s);
+		const exprs: Expr[] = [];
+		const names: string[] = [];
+		if (s.k === 'decl') {
+			for (const d of s.decls) {
+				if (d.array) exprs.push(d.array);
+				if (d.init) exprs.push(...(d.init.k === 'list' ? d.init.items : [d.init]));
+				names.push(d.name);
+			}
+		} else {
+			for (const item of s.items) {
+				if (item.value) exprs.push(item.value);
+				names.push(item.name);
+			}
+		}
+		let known =
+			c.diagnostics.length === before && exprs.every((e) => evaluable(e, unknown, scope.functions));
+		if (known) {
+			try {
+				machine.exec(s, machine.globals);
+			} catch (e) {
+				known = false;
+				if (e instanceof CRuntimeError && !(e instanceof CLimitError)) {
+					const loc = e.loc ?? s.loc;
+					out.push({
+						severity: 'error',
+						message: e.message,
+						span: { start: loc.start, end: loc.end, source: null }
+					});
+				}
+			}
+		}
+		if (!known) names.forEach((n) => unknown.add(n));
+		if (s.k === 'decl') variables.push(...names);
+		// A call or an assignment may have changed any variable declared so far.
+		if (exprs.some((e) => hasEffects(e, scope.functions))) variables.forEach((n) => unknown.add(n));
+	}
+	return [...c.diagnostics, ...out];
 }

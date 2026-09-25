@@ -84,6 +84,16 @@ export class ExitSignal {
 	constructor(readonly status: number) {}
 }
 
+/**
+ * yyterminate(). flex defines it as the macro `return YY_NULL` (YY_NULL is 0),
+ * so it returns 0 from the function it is written in: yylex for an action or
+ * the code before the first rule, otherwise the enclosing user function (main
+ * included). The innermost function call or yylex action catches it.
+ */
+export class TerminateSignal {
+	constructor(readonly value: number) {}
+}
+
 export interface OutputChunk {
 	stream: 'stdout' | 'stderr';
 	text: string;
@@ -102,7 +112,7 @@ export interface FlexHooks {
 	yyless(n: number, loc: Loc): void;
 	begin(sc: number, loc: Loc): void;
 	echo(loc: Loc): void;
-	/** yyterminate(): return 0 from yylex. */
+	/** yyterminate(): throws a TerminateSignal (`return 0` from the enclosing function or yylex). */
 	terminate(loc: Loc): never;
 	yyStart(): number;
 }
@@ -113,6 +123,12 @@ const CONTINUE = 2;
 const RETURN = 3;
 
 const VOID: Val = { t: 'v' };
+/**
+ * The value of a `return;` without an expression (a void value like VOID, but
+ * a distinct object), so the runtime can tell it from `return f();` where f
+ * returns void.
+ */
+export const BARE_RETURN: Val = { t: 'v' };
 const i = (v: number): Val => ({ t: 'i', v });
 const d = (v: number): Val => ({ t: 'd', v });
 const NULLP: Val = { t: 'p', m: null, o: 0 };
@@ -374,7 +390,8 @@ export class CMachine {
 
 	/**
 	 * Runs statements in `env` (an action or the code before the first rule).
-	 * Returns the value of a `return`, or null when the code finishes.
+	 * Returns the value of a `return` (BARE_RETURN for `return;`), or null
+	 * when the code finishes.
 	 */
 	runBody(body: Stmt[], env: Env): Val | null {
 		for (const s of body) {
@@ -465,7 +482,7 @@ export class CMachine {
 				return NORMAL;
 			}
 			case 'return':
-				this.retVal = s.e ? this.eval(s.e, env) : VOID;
+				this.retVal = s.e ? this.eval(s.e, env) : BARE_RETURN;
 				return RETURN;
 			case 'break':
 				return BREAK;
@@ -908,12 +925,18 @@ export class CMachine {
 				if (p.name) env.vars.set(p.name, { type: p.type, val: this.convert(args[k], p.type, loc) });
 			});
 			let ret: Val | null = null;
-			for (const s of fn.body) {
-				const c = this.exec(s, env);
-				if (c === RETURN) {
-					ret = this.retVal;
-					break;
+			try {
+				for (const s of fn.body) {
+					const c = this.exec(s, env);
+					if (c === RETURN) {
+						ret = this.retVal;
+						break;
+					}
 				}
+			} catch (e) {
+				// yyterminate() in this function's own code: `return 0` from it.
+				if (!(e instanceof TerminateSignal)) throw e;
+				ret = i(e.value);
 			}
 			if (fn.ret.base === 'void' && fn.ret.ptr === 0) return VOID;
 			return ret && ret.t !== 'v' ? this.convert(ret, fn.ret, loc) : this.zero(fn.ret);

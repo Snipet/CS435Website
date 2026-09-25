@@ -158,6 +158,36 @@ describe('yylex: start conditions and end of input', () => {
 		expect(outputText(run(spec, 'a b'))).toBe('<enter>[a]<enter>[b]<enter>');
 	});
 
+	it('compiles return; in an action with gcc’s warning, and yylex returns 0', () => {
+		const spec = '%%\n[a-z]+  { printf("%s", yytext); return; }\n[ ]  { }\n%%\n';
+		const c = compileSpec(spec);
+		expect(c.ok).toBe(true);
+		const w = c.diagnostics.find((d) => d.severity === 'warning')!;
+		expect(w.message).toBe("'return' with no value, in function returning non-void");
+		expect(spec.slice(w.span!.start, w.span!.end)).toBe('return;');
+		// The default main stops at the first 0.
+		const r = runScanner(c, 'ab cd');
+		expect(outputText(r)).toBe('ab');
+		expect(r.calls.map((x) => x.returned)).toEqual([0]);
+		expect(r.steps[0].returned).toBe(0);
+		expect(r.diagnostics).toEqual([]);
+		expect(r.exitStatus).toBe(0);
+	});
+
+	it('accepts return; before the first rule and in <<EOF>> actions', () => {
+		const pre = compileSpec('%%\n  if (yyleng) return;\n[a-z]  { return 1; }\n%%\n');
+		expect(pre.diagnostics.map((d) => d.message)).toEqual([
+			"'return' with no value, in function returning non-void"
+		]);
+		expect(runScanner(pre, 'ab').calls.map((x) => x.returned)).toEqual([1, 0]);
+		const eof = run('%%\n<<EOF>>  { printf("end"); return; }\n%%\n', 'x');
+		expect(outputText(eof)).toBe('xend');
+		expect(eof.diagnostics).toEqual([]);
+		// return; in a user function is checked as before (no warning).
+		const fn = compileSpec('%%\n%%\nvoid f() { return; }\nint g() { return; }\n');
+		expect(fn.diagnostics.filter((d) => d.severity !== 'info')).toEqual([]);
+	});
+
 	it('uses | to share the next rule’s action', () => {
 		const spec = `%%\n"+"  |\n"-"  { printf("op(%s) ", yytext); }\n.|\\n { }\n%%\n`;
 		const r = run(spec, '+-');
@@ -200,6 +230,38 @@ describe('yylex: flex library functions', () => {
 		expect(outputText(r, 'stdout')).toBe('a');
 		expect(outputText(r, 'stderr')).toBe('flex scanner jammed\n');
 		expect(r.exitStatus).toBe(2);
+	});
+
+	it('yyterminate() in main returns 0 from main (it is flex’s return YY_NULL)', () => {
+		const r = run(
+			'%%\n[a-z]  { return 1; }\n%%\nint main() {\n  while (yylex()) {\n    printf("%s", yytext);\n    if (yytext[0] == \'b\') yyterminate();\n  }\n  printf("never");\n  return 3;\n}\n',
+			'abc'
+		);
+		expect(outputText(r)).toBe('ab');
+		expect(r.exitStatus).toBe(0);
+		expect(r.stopped).toBeNull();
+		expect(r.diagnostics).toEqual([]);
+	});
+
+	it('yyterminate() returns 0 from the function it is written in', () => {
+		const spec =
+			'%%\n[a-z]  { printf("<%d>", check()); }\n%%\nint check(void) { if (yytext[0] == \'b\') yyterminate(); return 7; }\n';
+		const r = run(spec, 'ab');
+		expect(outputText(r)).toBe('<7><0>');
+		expect(r.calls.map((c) => c.returned)).toEqual([0]);
+		const pointer = run(
+			'%%\n%%\nchar *name(void) { yyterminate(); }\nint main() { printf("%d", name() == NULL); return 0; }\n',
+			''
+		);
+		expect(outputText(pointer)).toBe('1');
+		const v = compileSpec(
+			'%%\n%%\nvoid stop(void) { yyterminate(); }\nint main() { stop(); return 0; }\n'
+		);
+		expect(v.ok).toBe(true);
+		expect(v.diagnostics.filter((d) => d.severity === 'warning').map((d) => d.message)).toEqual([
+			'yyterminate() returns 0, but this function returns void'
+		]);
+		expect(runScanner(v, '').exitStatus).toBe(0);
 	});
 
 	it('ECHO writes to yyout and is marked as echo', () => {

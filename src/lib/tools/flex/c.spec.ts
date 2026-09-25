@@ -357,6 +357,78 @@ describe('C errors', () => {
 		]);
 	});
 
+	it('checks global initializers when the spec is compiled', () => {
+		const c = compileSpec('%{\nint a = UNDEFINED;\n%}\n%%\n%%\n');
+		expect(c.ok).toBe(false);
+		const d = c.diagnostics.find((x) => x.severity === 'error')!;
+		expect(d.message).toBe('UNDEFINED is undeclared');
+		expect(c.spec.text.slice(d.span!.start, d.span!.end)).toBe('UNDEFINED');
+		// Globals are initialized in text order, so a later one is not visible yet.
+		expect(compileErrors('int a = b;\nint b = 1;\n')).toEqual(['b is undeclared']);
+		expect(compileErrors('int n = 3, a[n];\nenum { X, Y = X + 2 };\nint c[Y];\n')).toEqual([]);
+		expect(compileErrors('int f(void) { return 1; }\nint x = f();\n')).toEqual([
+			"a global's initializer cannot call f(): globals are set before main runs"
+		]);
+		expect(compileErrors('int t = yyterminate();\nint u = yyless(1);\n')).toEqual([
+			"yyterminate() is flex's return 0, so it can only be used inside a function",
+			'yyless() can only be used in a rule’s action'
+		]);
+		expect(
+			compileErrors('int g = frobnicate(2);\nint h = main;\nint main() { return 0; }\n')
+		).toEqual(['frobnicate() is not defined', 'main is a function; call it as main(…)']);
+	});
+
+	it('reports the type problems of global initializers with their spans', () => {
+		const code = [
+			'int a = "x";',
+			'char *p = 5;',
+			'char s[2] = "abc";',
+			'int b[2] = { 1, 2, 3 };',
+			'int n = { 1, 2 };',
+			'int d[0];',
+			'int z = 1 / 0;',
+			'double m = 2.5 % 2;',
+			'int len = strlen("ab") + "x";',
+			'enum { E = "e" };',
+			'extern int later;',
+			'int early = later;',
+			'int later = 1;'
+		].join('\n');
+		const text = `%%\n%%\n${code}\n`;
+		const c = compileSpec(text);
+		expect(c.ok).toBe(false);
+		expect(
+			c.diagnostics
+				.filter((d) => d.severity === 'error')
+				.map((d) => [d.message, text.slice(d.span!.start, d.span!.end)])
+		).toEqual([
+			['cannot use a pointer as int', '"x"'],
+			['cannot use the number 5 as char *', '5'],
+			['the string is too long for s[2]', 's[2] = "abc"'],
+			['too many initializers for b[2]', '{ 1, 2, 3 }'],
+			['n is not an array', '{ 1, 2 }'],
+			['array d has a bad size (0)', 'd[0]'],
+			['division by zero', '1 / 0'],
+			['% needs integer operands', '2.5 % 2'],
+			['cannot use a pointer as int', 'strlen("ab") + "x"'],
+			['expected a number here', 'E'],
+			['later is undeclared', 'later']
+		]);
+	});
+
+	it('leaves global initializers it cannot evaluate to the run', () => {
+		// k++ changes k, so arr's size is not evaluated here (it is 1 at run time).
+		const code =
+			'%x COMMENT\n%{\nint k = 0;\nint j = k++;\nint arr[k];\nint sc = COMMENT;\nchar buf[8];\nchar *end = buf + 7;\n%}\n%%\n%%\n' +
+			'int main() { arr[0] = 5; printf("%d %d %d %d", k, j, arr[0], sc); return 0; }\n';
+		const c = compileSpec(code);
+		expect(c.diagnostics.filter((d) => d.severity !== 'info')).toEqual([]);
+		expect(outputText(runScanner(c, ''))).toBe('1 0 5 1');
+		expect(
+			compileErrors('int start = yylineno;\nFILE *out = stdout;\nchar *none = NULL;\n')
+		).toEqual([]);
+	});
+
 	it('reports unsupported features clearly', () => {
 		expect(compileErrors('struct point { int x; };')).toEqual([
 			'struct is not supported in this playground'
