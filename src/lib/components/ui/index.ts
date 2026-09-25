@@ -23,6 +23,7 @@ export { default as TextField } from './TextField.svelte';
 export { default as Toggle } from './Toggle.svelte';
 export { default as TokenPairs } from './TokenPairs.svelte';
 export { default as ToolPage } from './ToolPage.svelte';
+export { default as Updating } from './Updating.svelte';
 
 export {
 	Stepper,
@@ -32,6 +33,14 @@ export {
 	DEFAULT_SPEED,
 	type StepCommand
 } from './stepper.svelte';
+export {
+	WorkerTask,
+	DEFAULT_RESTART_AFTER,
+	DEFAULT_TIME_LIMIT,
+	type TaskStatus,
+	type WorkerTaskOptions
+} from './worker-task.svelte';
+export type { TaskWorker } from './worker-protocol';
 export { applyAliases, DEFAULT_ALIASES } from './regex-aliases';
 export { formatLexeme, formatTokenPair, type TokenFormat } from './token-format';
 export { toneColors, toneStyle, paletteIndex } from './tones';
