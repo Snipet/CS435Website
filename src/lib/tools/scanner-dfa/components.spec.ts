@@ -8,15 +8,37 @@ import TableDrivenTab from './TableDrivenTab.svelte';
 import SwitchTab from './SwitchTab.svelte';
 import SizesTab from './SizesTab.svelte';
 import CodeListing from './CodeListing.svelte';
+import RulesEditor from './RulesEditor.svelte';
 import { PRESETS } from './presets';
-import { buildRuleDfa, compileRules } from './rules';
+import {
+	buildRuleDfa,
+	compileRules,
+	minimalRuleDfa,
+	nameGroups,
+	withTokenNames,
+	type RuleDfas
+} from './rules';
 import { DEFAULT_STATE, loadState, type ScannerDfaState } from './state';
 import { highlightC } from './code-highlight';
+import { lineNumbers } from './listing';
+import { programLines } from './switch';
 
+/** The props the page passes: the compiled rules, both DFAs and the named sets. */
 function setup(model: ScannerDfaState) {
 	const compiled = compileRules(model.defs, model.rules);
-	const built = compiled.rules ? buildRuleDfa(compiled.rules, { minimal: false }) : null;
-	return { compiled, built };
+	let built: RuleDfas | null = null;
+	if (compiled.rules) {
+		const b = buildRuleDfa(compiled.rules);
+		const names = compiled.rules.map((r) => r.name);
+		built = b.ok
+			? {
+					ok: true,
+					full: b.full,
+					minimal: withTokenNames(minimalRuleDfa(b.full, nameGroups(names)), names)
+				}
+			: b;
+	}
+	return { compiled, built, names: compiled.names };
 }
 
 const text = (html: string) =>
@@ -78,6 +100,23 @@ describe('Table-driven tab', () => {
 	});
 });
 
+describe('Rules editor', () => {
+	it('names each drop checkbox and control by its rule', () => {
+		const model = loadState(DEFAULT_STATE, PRESETS.find((p) => p.id === 'new-foo')!.value);
+		const { compiled } = setup(model);
+		const { body } = render(RulesEditor, {
+			props: { defs: model.defs, rules: model.rules, compiled }
+		});
+		const t = text(body);
+		for (let n = 1; n <= model.rules.length; n++) {
+			expect(t).toContain(`drop rule ${n}`);
+			for (const action of ['up', 'down', 'remove'])
+				expect(body).toMatch(new RegExp(`id="[^"]*-${action}-${n - 1}"`));
+		}
+		expect(body.match(/type="checkbox"/g)).toHaveLength(model.rules.length);
+	});
+});
+
 describe('Hand-coded switch tab', () => {
 	it('renders the slide code with and without breaks', () => {
 		for (const breaks of [false, true]) {
@@ -95,11 +134,14 @@ describe('Hand-coded switch tab', () => {
 
 describe('Sizes tab', () => {
 	it('lists the rules, relop and S, T, U', () => {
-		const t = text(
-			render(SizesTab, { props: { model: DEFAULT_STATE, ...setup(DEFAULT_STATE) } }).body
-		);
+		const { built, names } = setup(DEFAULT_STATE);
+		const t = text(render(SizesTab, { props: { model: DEFAULT_STATE, built, names } }).body);
 		expect(t).toContain('R = Whitespace | Integer | Identifier | Plus');
+		expect(t).toContain('11 × 5 = 55');
+		expect(t).toContain('5 × 4 = 20');
 		expect(t).toContain('9 × 4 = 36');
+		expect(t).toContain('3 × 2 = 6');
+		expect(t).toContain('2 × 2 = 4');
 		expect(t).toContain('relop (slide 16)');
 		expect(t).toContain('Hand code [dis]advantages?');
 	});
@@ -112,6 +154,20 @@ describe('CodeListing', () => {
 		});
 		expect(body).toContain('aria-current="step"');
 		expect(text(body)).toContain('(inserted)');
+	});
+
+	it('numbers the printed lines only, so inserted lines do not shift them', () => {
+		const lines = [{ text: 'a' }, { text: 'b', inserted: true }, { text: 'c' }];
+		expect(lineNumbers(lines)).toEqual([1, null, 2]);
+		const t = text(render(CodeListing, { props: { lines, label: 'x' } }).body);
+		expect(t).toContain('1 a + b (inserted) 2 c');
+		const numbered = (breaks: boolean) => {
+			const ls = programLines(breaks);
+			const ns = lineNumbers(ls);
+			return ls.flatMap((l, i) => (l.inserted ? [] : [`${ns[i]} ${l.text}`]));
+		};
+		expect(numbered(true)).toEqual(numbered(false));
+		expect(numbered(false).find((l) => l.endsWith('case 1:'))).toMatch(/^16 /);
 	});
 
 	it('colors keywords, comments, characters and numbers', () => {

@@ -112,7 +112,8 @@ export const PRESETS: readonly ScannerPreset[] = [
 	},
 	{
 		id: 'f3g',
-		label: 'Scan "f+3  +g"',
+		// The menu collapses runs of spaces; ␣ shows each of the two.
+		label: 'Scan "f+3␣␣+g"',
 		group: L2,
 		description: "R = Whitespace | Integer | Identifier | '+', longest match, minimal DFA.",
 		cite: { deck: '05', slide: 7 },

@@ -1,7 +1,8 @@
 /**
  * Token rules → scanner DFA: parse the helper definitions and the ordered
- * rules (lecture notation), then build `scannerDfa(rules, { minimal })` with
- * the states numbered 0, 1, 2, … (the int states of the table-driven code).
+ * rules (lecture notation), then build `scannerDfa(rules)` and its minimal
+ * DFA with the states numbered 0, 1, 2, … (the int states of the table-driven
+ * code).
  */
 import { CharSet } from '$lib/theory/charset';
 import type { NamedSet } from '$lib/theory/chars';
@@ -16,11 +17,14 @@ import {
 import {
 	ClosureIndex,
 	minimize,
-	scannerDfa,
 	scannerNfa,
+	subsetAccept,
 	symbolClasses,
 	type Automaton,
-	type TokenRule
+	type State,
+	type StateId,
+	type TokenRule,
+	type Transition
 } from '$lib/theory/automata';
 import type { RuleState } from '$lib/tools/links';
 
@@ -106,29 +110,79 @@ export function compileRules(defsText: string, rows: readonly RuleState[]): Comp
 }
 
 /**
- * Number of states the subset construction of `nfa` makes (without the empty
- * set), counting no further than `limit + 1`.
+ * The subset construction of `nfa`, as `subsetConstruction` builds it (same
+ * states, ids, transitions and tokens) but without the step trace, or null as
+ * soon as it makes more than `limit` states. `count` is the number of states
+ * made (at most `limit + 1`).
  */
-export function subsetStateCount(nfa: Automaton, limit: number): number {
+export function boundedSubsetDfa(
+	nfa: Automaton,
+	limit: number
+): { dfa: Automaton | null; count: number } {
 	const index = new ClosureIndex(nfa);
 	const classes = symbolClasses(nfa);
-	const keyOf = (ids: readonly number[]) => [...ids].sort((a, b) => a - b).join(',');
+	// Classes refine every label, so a label covers a class or misses it.
+	const covered = new Map<CharSet, number[]>();
+	const classesOf = (label: CharSet) => {
+		let ks = covered.get(label);
+		if (!ks) {
+			ks = classes.flatMap((c, k) => (label.overlaps(c) ? [k] : []));
+			covered.set(label, ks);
+		}
+		return ks;
+	};
+	const keyOf = (ids: Iterable<number>) => [...ids].sort((a, b) => a - b).join(',');
+	/** ε-closure of move targets, with the key of the closed set; many moves share targets. */
+	const closures = new Map<string, { subset: StateId[]; key: string }>();
+	const closureOf = (targets: number[]) => {
+		const moved = keyOf(new Set(targets));
+		let closed = closures.get(moved);
+		if (!closed) {
+			const subset = index.closure(targets);
+			closed = { subset, key: keyOf(subset) };
+			closures.set(moved, closed);
+		}
+		return closed;
+	};
+
+	const states: State[] = [];
+	const transitions: Transition[] = [];
+	const byKey = new Map<string, StateId>();
+	const create = (subset: StateId[], key: string): StateId => {
+		const id = states.length;
+		const state: State = {
+			id,
+			name: String(id),
+			accepting: subset.some((s) => nfa.states[s].accepting),
+			subset
+		};
+		const accept = subsetAccept(nfa, subset);
+		if (accept) state.accept = accept;
+		states.push(state);
+		byKey.set(key, id);
+		return id;
+	};
+
 	const first = index.closure([nfa.start]);
-	const seen = new Set<string>([keyOf(first)]);
-	const queue: number[][] = [first];
-	for (let q = 0; q < queue.length; q++) {
-		for (const c of classes) {
-			const moved = index.move(queue[q], c).targets;
-			if (moved.length === 0) continue;
-			const closed = index.closure(moved);
-			const key = keyOf(closed);
-			if (seen.has(key)) continue;
-			seen.add(key);
-			if (seen.size > limit) return seen.size;
-			queue.push(closed);
+	create(first, keyOf(first));
+	for (let q = 0; q < states.length; q++) {
+		const moves: number[][] = classes.map(() => []);
+		for (const s of states[q].subset!)
+			for (const t of index.labeled[s]) for (const k of classesOf(t.label)) moves[k].push(t.to);
+		for (const [k, targets] of moves.entries()) {
+			if (targets.length === 0) continue;
+			const closed = closureOf(targets);
+			let to = byKey.get(closed.key);
+			if (to === undefined) {
+				if (states.length >= limit) return { dfa: null, count: states.length + 1 };
+				to = create(closed.subset, closed.key);
+			}
+			transitions.push({ id: transitions.length, from: q, to, label: classes[k] });
 		}
 	}
-	return seen.size;
+	const dfa: Automaton = { states, transitions, start: 0 };
+	if (nfa.alphabet) dfa.alphabet = nfa.alphabet;
+	return { dfa, count: states.length };
 }
 
 /**
@@ -146,25 +200,69 @@ export function numberStates(a: Automaton): Automaton {
 	};
 }
 
-export type RuleDfaResult =
-	| { ok: true; dfa: Automaton; full: Automaton; minimal: Automaton }
-	| { ok: false; reason: 'nfa' | 'dfa'; count: number };
+/**
+ * The same DFA with each accepting state reporting `names[rule]` (and noted
+ * with it), so renaming a rule does not rebuild the DFA.
+ */
+export function withTokenNames(a: Automaton, names: readonly string[]): Automaton {
+	return {
+		...a,
+		states: a.states.map((s) => {
+			const token = s.accept ? names[s.accept.rule] : undefined;
+			if (!s.accept || token === undefined || token === s.accept.token) return s;
+			const out: State = { ...s, accept: { ...s.accept, token } };
+			if (s.accepting) out.note = token;
+			return out;
+		})
+	};
+}
 
 /**
- * The scanner DFA for `rules` (states numbered), both as built and minimized
- * (tokens kept apart). Refuses machines above the size limits.
+ * For each rule, the first rule with the same name. Minimizing keeps apart
+ * accepting states whose tokens differ, so only this grouping of the names
+ * matters to the minimal DFA.
  */
-export function buildRuleDfa(
-	rules: TokenRule[],
-	opts: { minimal: boolean; limit?: number }
-): RuleDfaResult {
+export function nameGroups(names: readonly string[]): number[] {
+	return names.map((n) => names.indexOf(n));
+}
+
+/**
+ * The minimal DFA (accepting states with different tokens kept apart), with
+ * the states numbered. `groups` is `nameGroups` of the rule names: tokens
+ * come out as the group numbers; `withTokenNames` puts the names back.
+ */
+export function minimalRuleDfa(full: Automaton, groups: readonly number[]): Automaton {
+	const byGroup = withTokenNames(full, groups.map(String));
+	return numberStates(minimize(byGroup, { splitByToken: true }).dfa);
+}
+
+/**
+ * What the DFA of the rules depends on: the definitions and the REs in order
+ * (names and drop flags are applied to a built DFA without rebuilding it).
+ */
+export function structureKey(defs: string, rows: readonly RuleState[]): string {
+	return JSON.stringify([defs, ...rows.map((r) => r.re)]);
+}
+
+export type RuleDfaResult =
+	{ ok: true; full: Automaton } | { ok: false; reason: 'nfa' | 'dfa'; count: number };
+
+/**
+ * The scanner DFA for `rules` (`scannerDfa(rules)` with the states numbered).
+ * Refuses machines above the size limits, stopping the construction as soon
+ * as it passes `limit` states.
+ */
+export function buildRuleDfa(rules: TokenRule[], opts: { limit?: number } = {}): RuleDfaResult {
 	const limit = opts.limit ?? MAX_DFA_STATES;
 	const { nfa } = scannerNfa(rules);
 	if (nfa.states.length > MAX_NFA_STATES)
 		return { ok: false, reason: 'nfa', count: nfa.states.length };
-	const count = subsetStateCount(nfa, limit);
-	if (count > limit) return { ok: false, reason: 'dfa', count };
-	const full = numberStates(scannerDfa(rules));
-	const minimal = numberStates(minimize(full, { splitByToken: true }).dfa);
-	return { ok: true, dfa: opts.minimal ? minimal : full, full, minimal };
+	const { dfa, count } = boundedSubsetDfa(nfa, limit);
+	if (!dfa) return { ok: false, reason: 'dfa', count };
+	return { ok: true, full: numberStates(dfa) };
 }
+
+/** The DFAs the page shows: as built, and minimized once something needs it. */
+export type RuleDfas =
+	| { ok: true; full: Automaton; minimal: Automaton | null }
+	| { ok: false; reason: 'nfa' | 'dfa'; count: number };

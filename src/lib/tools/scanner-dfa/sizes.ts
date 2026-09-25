@@ -10,7 +10,7 @@ export const ASCII_COLUMNS = 128;
 
 export interface TableSize {
 	states: number;
-	/** Columns of T: the symbol classes (with `other`). */
+	/** Columns of T: the symbol classes (relop's `other` among them). */
 	classes: number;
 	cells: number;
 	/** Cells with one column per ASCII character. */

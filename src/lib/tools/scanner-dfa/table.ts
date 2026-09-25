@@ -3,7 +3,7 @@
  * T[state, char] over symbol classes, accept[state], retract[state],
  * tokenFor(state) and error(state).
  */
-import { CharSet, partitionCharSets } from '$lib/theory/charset';
+import { partitionCharSets, type CharSet } from '$lib/theory/charset';
 import { formatLabel, type NamedSet } from '$lib/theory/chars';
 import { coReachableStates, isLabeled } from '$lib/theory/automata';
 import type { Automaton, StateId } from '$lib/theory/automata/types';
@@ -19,7 +19,7 @@ export const EOF = null;
 export interface TableColumn {
 	set: CharSet;
 	header: string;
-	/** The column for every character not in an earlier column (and for EOF). */
+	/** The machine's `other` class: every character without an edge of its own (and EOF). */
 	other: boolean;
 }
 
@@ -40,7 +40,7 @@ export interface DriverTable {
 	rule: (number | null)[];
 	/** error (state): no accepting state can be reached from it. */
 	dead: boolean[];
-	/** The column EOF is looked up in (the `other` column), or null when there is none. */
+	/** The column EOF is looked up in (the `other` column), or null when there is none (EOF has no entry). */
 	eofColumn: number | null;
 }
 
@@ -48,15 +48,17 @@ export interface DriverTable {
  * Columns are the symbol classes of the transition labels, ascending (with
  * complements such as [^0-9] after the rest), headed like the transition
  * table (named sets such as `digit`, or `other` when the machine labels that
- * class `other`); an `other` column for the remaining characters comes last
- * when the labels do not cover every character.
+ * class `other`, as relop does). A character in no column, and EOF when there
+ * is no `other` column, has no entry in T: it leads to the error state.
  */
 export function driverTable(
 	dfa: Automaton,
 	opts: { names?: readonly NamedSet[] } = {}
 ): DriverTable {
-	const labels = dfa.transitions.filter(isLabeled).map((t) => t.label);
-	const parts = partitionCharSets(labels);
+	const labels = new Map<string, CharSet>();
+	for (const label of new Set(dfa.transitions.filter(isLabeled).map((t) => t.label)))
+		labels.set(label.key(), label);
+	const parts = partitionCharSets(labels.values());
 	const heads = tableColumns(dfa, { classes: parts, names: opts.names });
 	const cols = parts.map((set, i) => {
 		const plain = formatLabel(set, { names: opts.names });
@@ -69,23 +71,28 @@ export function driverTable(
 		...cols.filter((c) => !c.other && huge(c)),
 		...cols.filter((c) => c.other)
 	];
-	const covered = CharSet.fromRanges(parts.flatMap((p) => [...p.ranges]));
-	if (!columns.some((c) => c.other)) {
-		const rest = covered.complement();
-		if (!rest.isEmpty) columns.push({ set: rest, header: 'other', other: true });
-	}
 
 	const n = dfa.states.length;
 	const T = dfa.states.map(() => columns.map(() => ERROR_STATE));
 	const via = dfa.states.map(() => columns.map(() => -1));
+	// Many transitions share a label object (a subset DFA labels them with its symbol classes).
+	const covered = new Map<CharSet, number[]>();
+	const columnsOf = (label: CharSet) => {
+		let ks = covered.get(label);
+		if (!ks) {
+			ks = columns.flatMap((c, k) => (label.overlaps(c.set) ? [k] : []));
+			covered.set(label, ks);
+		}
+		return ks;
+	};
 	for (const t of dfa.transitions) {
 		if (!isLabeled(t) || t.from >= n) continue;
-		columns.forEach((c, k) => {
-			if (T[t.from][k] === ERROR_STATE && t.label.overlaps(c.set)) {
+		for (const k of columnsOf(t.label)) {
+			if (T[t.from][k] === ERROR_STATE) {
 				T[t.from][k] = t.to;
 				via[t.from][k] = t.id;
 			}
-		});
+		}
 	}
 	const live = coReachableStates(dfa);
 	const eof = columns.findIndex((c) => c.other);

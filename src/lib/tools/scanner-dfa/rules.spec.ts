@@ -3,15 +3,25 @@ import { CharSet } from '$lib/theory/charset';
 import { parseDefinitions, parseRegex } from '$lib/theory/regex';
 import {
 	MAX_DFA_STATES,
+	boundedSubsetDfa,
 	buildRuleDfa,
 	charSetOf,
 	compileRules,
+	minimalRuleDfa,
+	nameGroups,
 	namedSets,
 	numberStates,
-	subsetStateCount
+	structureKey,
+	withTokenNames
 } from './rules';
-import { scannerNfa, subsetConstruction } from '$lib/theory/automata';
-import { LEX2_DEFS, LEX2_RULES } from './presets';
+import {
+	minimize,
+	scannerDfa,
+	scannerNfa,
+	subsetConstruction,
+	type Automaton
+} from '$lib/theory/automata';
+import { ENDS_IN_1_RULES, LEX2_DEFS, LEX2_RULES, NEW_RULES } from './presets';
 
 describe('compileRules', () => {
 	it('builds the rules in order, with drop flags', () => {
@@ -68,41 +78,159 @@ describe('named sets', () => {
 	});
 });
 
+/** The DFA without names or trace-only fields, for comparing constructions. */
+function shape(a: Automaton) {
+	return {
+		start: a.start,
+		states: a.states.map((s) => ({
+			id: s.id,
+			accepting: s.accepting,
+			accept: s.accept,
+			subset: s.subset ? [...s.subset].sort((x, y) => x - y) : undefined
+		})),
+		transitions: a.transitions.map((t) => ({ id: t.id, from: t.from, to: t.to, label: t.label }))
+	};
+}
+
+const SETS: [string, string, { name: string; re: string }[]][] = [
+	['LEX2', LEX2_DEFS, LEX2_RULES],
+	['new', LEX2_DEFS, NEW_RULES],
+	['(1 | 0)*1', '', ENDS_IN_1_RULES],
+	[
+		'keywords',
+		LEX2_DEFS,
+		[
+			{ name: 'If', re: "'if'" },
+			{ name: 'Iffy', re: "'iffy'" },
+			{ name: 'Id', re: 'letter (letter | digit)*' },
+			{ name: 'Str', re: `'"' [^"]* '"'` },
+			{ name: 'Any', re: 'Σ' }
+		]
+	],
+	['relop', '', [{ name: 'Relop', re: "'<' | '<=' | '<>' | '>' | '>=' | '='" }]]
+];
+
 describe('buildRuleDfa', () => {
 	it('numbers the states from 0 (the start state)', () => {
 		const c = compileRules(LEX2_DEFS, LEX2_RULES);
-		const b = buildRuleDfa(c.rules!, { minimal: false });
+		const b = buildRuleDfa(c.rules!);
 		if (!b.ok) throw new Error('too large');
-		expect(b.dfa.start).toBe(0);
-		expect(b.dfa.states.map((s) => s.name)).toEqual(b.dfa.states.map((s) => String(s.id)));
+		expect(b.full.start).toBe(0);
+		expect(b.full.states.map((s) => s.name)).toEqual(b.full.states.map((s) => String(s.id)));
 		expect(b.full.states).toHaveLength(11);
-		expect(b.minimal.states).toHaveLength(5);
-		const m = buildRuleDfa(c.rules!, { minimal: true });
-		if (!m.ok) throw new Error('too large');
-		expect(m.dfa).toBe(m.minimal);
+		const m = minimalRuleDfa(b.full, nameGroups(c.rules!.map((r) => r.name)));
+		expect(m.states).toHaveLength(5);
+		expect(m.states.map((s) => s.name)).toEqual(m.states.map((s) => String(s.id)));
 		expect(
-			m.dfa.states
+			m.states
 				.filter((s) => s.accepting)
 				.map((s) => s.accept?.token)
 				.sort()
-		).toEqual(['Identifier', 'Integer', 'Plus', 'Whitespace']);
+		).toEqual(['0', '1', '2', '3']);
+	});
+
+	it('builds the same DFA as scannerDfa, and the same minimal DFA', () => {
+		for (const [name, defs, rows] of SETS) {
+			const c = compileRules(defs, rows);
+			expect(c.rules, name).not.toBeNull();
+			const b = buildRuleDfa(c.rules!);
+			if (!b.ok) throw new Error(`${name}: too large`);
+			const reference = scannerDfa(c.rules!);
+			expect(shape(b.full), name).toEqual(shape(reference));
+			const names = c.rules!.map((r) => r.name);
+			const min = withTokenNames(minimalRuleDfa(b.full, nameGroups(names)), names);
+			const refMin = minimize(reference, { splitByToken: true }).dfa;
+			expect(shape(min), name).toEqual(shape(refMin));
+		}
 	});
 
 	it('refuses DFAs above the limit', () => {
 		const c = compileRules('', [{ name: 'R', re: '(0 | 1)* 1 (0 | 1)^9' }]);
-		const b = buildRuleDfa(c.rules!, { minimal: false });
+		const b = buildRuleDfa(c.rules!);
 		expect(b.ok).toBe(false);
 		if (!b.ok) {
 			expect(b.reason).toBe('dfa');
-			expect(b.count).toBeGreaterThan(MAX_DFA_STATES);
+			expect(b.count).toBe(MAX_DFA_STATES + 1);
 		}
 	});
 
-	it('counts subset states like the subset construction', () => {
+	it('builds a large DFA quickly, and refuses a larger one without finishing it', () => {
+		const chars = [...'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'];
+		const alt = `(${chars.map((ch) => `'${ch}'`).join(' | ')})`;
+		const time = (re: string) => {
+			const c = compileRules('', [{ name: 'X', re }]);
+			const t = performance.now();
+			const b = buildRuleDfa(c.rules!);
+			return { b, ms: performance.now() - t };
+		};
+		const big = time(`${alt} ${alt}*`);
+		expect(big.b.ok).toBe(true);
+		if (big.b.ok) expect(big.b.full.states).toHaveLength(125);
+		const bigger = time(`${alt} ${alt} ${alt} ${alt} ${alt}`);
+		expect(bigger.b.ok).toBe(false);
+		// The traced construction took about a second for these; generous bounds for slow machines.
+		expect(big.ms).toBeLessThan(400);
+		expect(bigger.ms).toBeLessThan(400);
+	});
+});
+
+describe('boundedSubsetDfa', () => {
+	it('matches the subset construction up to the limit', () => {
 		const c = compileRules(LEX2_DEFS, LEX2_RULES);
 		const { nfa } = scannerNfa(c.rules!);
-		expect(subsetStateCount(nfa, 1000)).toBe(subsetConstruction(nfa).dfa.states.length);
-		expect(subsetStateCount(nfa, 3)).toBe(4);
+		const full = boundedSubsetDfa(nfa, 1000);
+		expect(full.count).toBe(11);
+		expect(shape(full.dfa!)).toEqual(shape(subsetConstruction(nfa).dfa));
+		expect(boundedSubsetDfa(nfa, 11).dfa).not.toBeNull();
+		expect(boundedSubsetDfa(nfa, 10)).toEqual({ dfa: null, count: 11 });
+		expect(boundedSubsetDfa(nfa, 3)).toEqual({ dfa: null, count: 4 });
+	});
+});
+
+describe('names applied after the build', () => {
+	it('the build depends on the definitions and REs only', () => {
+		const renamed = LEX2_RULES.map((r, i) => ({ ...r, name: `T${i}`, drop: i === 0 }));
+		expect(structureKey(LEX2_DEFS, renamed)).toBe(structureKey(LEX2_DEFS, LEX2_RULES));
+		const moved = [LEX2_RULES[1], LEX2_RULES[0], ...LEX2_RULES.slice(2)];
+		expect(structureKey(LEX2_DEFS, moved)).not.toBe(structureKey(LEX2_DEFS, LEX2_RULES));
+		expect(structureKey('', LEX2_RULES)).not.toBe(structureKey(LEX2_DEFS, LEX2_RULES));
+	});
+
+	it('withTokenNames renames the tokens and notes by rule', () => {
+		const c = compileRules(LEX2_DEFS, LEX2_RULES);
+		const b = buildRuleDfa(c.rules!);
+		if (!b.ok) throw new Error('too large');
+		const names = ['WS', 'Int', 'Id', 'Plus'];
+		const renamed = withTokenNames(b.full, names);
+		const tokens = (a: Automaton) =>
+			a.states.flatMap((s) => (s.accepting ? [[s.accept!.rule, s.accept!.token, s.note]] : []));
+		expect(new Set(tokens(b.full).map(([rule]) => rule))).toEqual(new Set([0, 1, 2, 3]));
+		expect(tokens(renamed)).toEqual(
+			tokens(b.full).map(([rule]) => [rule, names[rule as number], names[rule as number]])
+		);
+		expect(renamed.transitions).toBe(b.full.transitions);
+		expect(
+			withTokenNames(
+				b.full,
+				c.rules!.map((r) => r.name)
+			).states
+		).toEqual(b.full.states);
+	});
+
+	it('the minimal DFA merges rules that share a name', () => {
+		const rows = [
+			{ name: 'A', re: "'a'" },
+			{ name: 'A', re: "'b'" }
+		];
+		const c = compileRules('', rows);
+		const b = buildRuleDfa(c.rules!);
+		if (!b.ok) throw new Error('too large');
+		expect(nameGroups(['A', 'A'])).toEqual([0, 0]);
+		expect(nameGroups(['A', 'B', 'A'])).toEqual([0, 1, 0]);
+		expect(minimalRuleDfa(b.full, [0, 0]).states).toHaveLength(2);
+		expect(minimalRuleDfa(b.full, [0, 1]).states).toHaveLength(3);
+		const named = withTokenNames(minimalRuleDfa(b.full, [0, 0]), ['A', 'A']);
+		expect(named.states.filter((s) => s.accepting).map((s) => s.accept?.token)).toEqual(['A']);
 	});
 
 	it('numberStates renames the states and notes the tokens', () => {

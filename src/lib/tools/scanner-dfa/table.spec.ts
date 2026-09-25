@@ -52,18 +52,25 @@ describe('relop table', () => {
 describe('S, T, U table', () => {
 	const t = driverTable(stuDfa());
 
-	it('matches slide 14, plus an other column for every other character', () => {
-		expect(t.columns.map((c) => c.header)).toEqual(['0', '1', 'other']);
+	it('matches slide 14: 3 states × the input symbols 0 and 1', () => {
+		expect(t.columns.map((c) => c.header)).toEqual(['0', '1']);
 		const names = t.T.map((row) => row.map((s) => stateName(t, s)));
 		expect(names).toEqual([
-			['T', 'U', 'error'],
-			['T', 'U', 'error'],
-			['T', 'U', 'error']
+			['T', 'U'],
+			['T', 'U'],
+			['T', 'U']
 		]);
+		expect(t.names).toEqual(['S', 'T', 'U']);
 		expect(t.token).toEqual([null, null, null]);
 		expect(t.accept).toEqual([false, false, true]);
-		expect(columnOf(t, EOF)).toBe(2);
-		expect(lookup(t, 1, EOF).to).toBe(ERROR_STATE);
+	});
+
+	it('has no entry for other characters or EOF', () => {
+		expect(t.eofColumn).toBeNull();
+		expect(columnOf(t, EOF)).toBeNull();
+		expect(columnOf(t, 'x')).toBeNull();
+		expect(lookup(t, 1, EOF)).toMatchObject({ column: null, to: ERROR_STATE, transition: null });
+		expect(lookup(t, 0, '2')).toMatchObject({ column: null, to: ERROR_STATE });
 	});
 });
 

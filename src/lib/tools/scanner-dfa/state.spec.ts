@@ -89,9 +89,9 @@ describe('sizes', () => {
 		expect(sizesOf(relopDfa()).minimal.states).toBe(9);
 	});
 
-	it('S, T, U: 3 states, 2 when minimized', () => {
+	it('S, T, U: 3 × 2 = 6 cells (slide 14), 2 × 2 = 4 when minimized', () => {
 		const s = sizesOf(stuDfa());
-		expect(s.built).toMatchObject({ states: 3, classes: 3, cells: 9 });
-		expect(s.minimal.states).toBe(2);
+		expect(s.built).toMatchObject({ states: 3, classes: 2, cells: 6 });
+		expect(s.minimal).toMatchObject({ states: 2, classes: 2, cells: 4 });
 	});
 });

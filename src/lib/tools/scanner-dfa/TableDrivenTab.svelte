@@ -31,10 +31,10 @@ time.
 	import DriverTable, { type DriverTableHighlight } from './DriverTable.svelte';
 	import RulesEditor from './RulesEditor.svelte';
 	import SlideQuestions from './SlideQuestions.svelte';
-	import { DRIVER_CODE, chText, traceRun, type DriverToken, type Mode } from './driver';
+	import { DRIVER_CODE, chText, runCalls, traceCall, type DriverToken, type Mode } from './driver';
 	import { MACHINES, relopDfa, stuDfa, type MachineId } from './machines';
 	import type { ScannerPreset } from './presets';
-	import { MAX_DFA_STATES, type CompiledRules, type RuleDfaResult } from './rules';
+	import { MAX_DFA_STATES, type CompiledRules, type RuleDfas } from './rules';
 	import { SOURCE_INPUTS, type ScannerDfaState, type SourceId } from './state';
 	import { ERROR_STATE, driverTable, stateName } from './table';
 	import { SWITCH_INPUTS } from './switch';
@@ -42,11 +42,14 @@ time.
 	interface Props {
 		model: ScannerDfaState;
 		compiled: CompiledRules;
-		built: RuleDfaResult | null;
+		/** The DFA of the rules (null while the rules have errors). */
+		built: RuleDfas | null;
+		/** Definitions that name character sets, for labels and column headers. */
+		names: readonly NamedSet[];
 		preset: ScannerPreset | null;
 	}
 
-	let { model = $bindable(), compiled, built, preset }: Props = $props();
+	let { model = $bindable(), compiled, built, names, preset }: Props = $props();
 
 	/** Largest machine drawn as a diagram (the table shows any size). */
 	const DIAGRAM_LIMIT = 60;
@@ -70,22 +73,29 @@ time.
 			};
 		}
 		if (!built?.ok) return null;
-		return { dfa: model.minimal ? built.minimal : built.full, names: compiled.names };
+		const dfa = model.minimal ? built.minimal : built.full;
+		return dfa ? { dfa, names } : null;
 	});
 
 	const table = $derived(machine ? driverTable(machine.dfa, { names: machine.names }) : null);
-	const skip = $derived(
-		new Set(
+	// A string first, so editing a rule's RE does not make a new set (and restart the run).
+	const skipKey = $derived(
+		JSON.stringify(
 			model.source === 'rules' ? model.rules.filter((r) => r.drop).map((r) => r.name.trim()) : []
 		)
 	);
-	const run = $derived(table ? traceRun(table, model.input, model.mode, { skip }) : null);
+	const skip = $derived(new Set<string>(JSON.parse(skipKey)));
+	/** Every getToken () call over the input (ends and tokens only). */
+	const run = $derived(table ? runCalls(table, model.input, model.mode, { skip }) : null);
 
 	let callIndex = $state(0);
 	const stepper = new Stepper(() => call?.steps.length ?? 0, { speed: 2 });
-	const call = $derived(
-		run && run.calls.length ? run.calls[Math.min(callIndex, run.calls.length - 1)] : null
-	);
+	/** The call being stepped, traced line by line. */
+	const call = $derived.by(() => {
+		if (!table || !run || run.calls.length === 0) return null;
+		const c = run.calls[Math.min(callIndex, run.calls.length - 1)];
+		return traceCall(table, model.input, c.start, model.mode, skip);
+	});
 	const step = $derived(call ? call.steps[stepper.index] : null);
 	const code = $derived(DRIVER_CODE[model.mode]);
 
@@ -196,6 +206,12 @@ time.
 		model.source = next;
 	}
 
+	const dfaText = $derived(
+		machine && (toolBySlug('minimize') || toolBySlug('automata'))
+			? formatAutomatonText(machine.dfa)
+			: null
+	);
+
 	const links = $derived.by(() => {
 		const out: { label: string; href: string }[] = [];
 		const add = (label: string, href: string | null) => {
@@ -212,11 +228,12 @@ time.
 					toolLink('thompson', { re: model.rules[0].re, defs: model.defs })
 				);
 		}
-		const dfa = machine?.dfa;
-		if (dfa && (toolBySlug('minimize') || toolBySlug('automata'))) {
-			const text = formatAutomatonText(dfa);
-			add('Minimize this DFA', toolLink('minimize', { from: 'dfa', text }));
-			add('Run in the automaton simulator', toolLink('automata', { text, input: model.input }));
+		if (dfaText !== null) {
+			add('Minimize this DFA', toolLink('minimize', { from: 'dfa', text: dfaText }));
+			add(
+				'Run in the automaton simulator',
+				toolLink('automata', { text: dfaText, input: model.input })
+			);
 		}
 		return out;
 	});
@@ -453,6 +470,9 @@ time.
 							{#if table.eofColumn !== null}
 								<em>other</em>: every other character; getChar () at the end of the input returns
 								EOF, which is looked up there too.
+							{:else}
+								A character in no column, and the EOF getChar () returns at the end of the input,
+								also give the error state.
 							{/if}
 							→ start, ◎ accepting.
 						</p>

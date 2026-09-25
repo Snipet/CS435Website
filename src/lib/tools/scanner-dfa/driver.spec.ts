@@ -1,16 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { driveScanner, longestMatchRun, type TokenRule } from '$lib/theory/automata';
 import { parseDefinitions, parseRegex } from '$lib/theory/regex';
-import { buildRuleDfa } from './rules';
-import { EOF, ERROR_STATE, driverTable } from './table';
+import { buildRuleDfa, minimalRuleDfa, nameGroups, withTokenNames } from './rules';
+import { EOF, ERROR_STATE, driverTable, type DriverTable } from './table';
 import {
 	DRIVER_CODE,
 	LONGEST_DRIVER,
 	SLIDE_DRIVER,
 	chText,
+	lexemeText,
+	runCalls,
 	traceCall,
-	traceRun,
-	type DriverCall
+	type Mode
 } from './driver';
 import { relopDfa, stuDfa } from './machines';
 
@@ -24,9 +25,10 @@ function rules(spec: [string, string][], defsText = ''): TokenRule[] {
 }
 
 function dfaOf(rs: TokenRule[], minimal = false) {
-	const b = buildRuleDfa(rs, { minimal });
+	const b = buildRuleDfa(rs);
 	if (!b.ok) throw new Error('too large');
-	return b.dfa;
+	const names = rs.map((r) => r.name);
+	return minimal ? withTokenNames(minimalRuleDfa(b.full, nameGroups(names)), names) : b.full;
 }
 
 const DEFS = "digit = '0' | … | '9'\nletter = 'A' | … | 'Z' | 'a' | … | 'z'";
@@ -72,7 +74,9 @@ describe('driver code', () => {
 			for (const input of inputs)
 				for (const mode of ['first', 'longest'] as const) {
 					const code = DRIVER_CODE[mode];
-					for (const call of traceRun(table, input, mode).calls) {
+					for (const call of runCalls(table, input, mode).calls.map((c) =>
+						traceCall(table, input, c.start, mode)
+					)) {
 						for (const s of call.steps) {
 							const text = code[s.line - 1];
 							expect(text, `${mode} line ${s.line}`).toBeDefined();
@@ -131,7 +135,7 @@ describe('as on the slide (first accepting state)', () => {
 
 	it('reports a stall when the start state accepts', () => {
 		const table = driverTable(dfaOf(rules([['A', "'a'*"]])));
-		const run = traceRun(table, 'aa', 'first');
+		const run = runCalls(table, 'aa', 'first');
 		expect(run.stalled).toBe(true);
 		expect(run.calls).toHaveLength(1);
 		expect(run.calls[0].token.lexeme).toBe('');
@@ -168,7 +172,7 @@ describe('longest match', () => {
 				const dfa = dfaOf(rs, minimal);
 				const table = driverTable(dfa);
 				for (const input of inputs) {
-					const mine = traceRun(table, input, 'longest').calls.map((c: DriverCall) => ({
+					const mine = runCalls(table, input, 'longest').calls.map((c) => ({
 						name: c.token.name,
 						lexeme: c.token.lexeme,
 						start: c.token.start,
@@ -214,6 +218,82 @@ describe('longest match', () => {
 	});
 });
 
+describe('runCalls', () => {
+	const tables: [string, DriverTable][] = [
+		['relop', driverTable(relopDfa())],
+		['S, T, U', driverTable(stuDfa())],
+		['LEX2', driverTable(dfaOf(LEX2))],
+		['LEX2 minimal', driverTable(dfaOf(LEX2, true))],
+		['(1 | 0)*1', driverTable(dfaOf(rules([['R', '(1 | 0)*1']])))],
+		['a*b', driverTable(dfaOf(rules([['AB', "'a'* 'b'"]])))],
+		['a*', driverTable(dfaOf(rules([['A', "'a'*"]])))]
+	];
+	const alphabet = ['<', '=', '>', 'x', '0', '1', 'a', 'b', 'f', '3', '+', ' ', '😀'];
+	let seed = 7;
+	const random = () => {
+		seed = (seed * 1103515245 + 12345) % 2 ** 31;
+		return seed / 2 ** 31;
+	};
+	const inputs = [
+		'',
+		'<=',
+		'<x',
+		'>',
+		'0110',
+		'f+3  +g',
+		'aab',
+		...Array.from({ length: 60 }, () =>
+			Array.from(
+				{ length: 1 + Math.floor(random() * 9) },
+				() => alphabet[Math.floor(random() * alphabet.length)]
+			).join('')
+		)
+	];
+
+	it('ends every call where traceCall does, with the same token', () => {
+		for (const [name, table] of tables)
+			for (const mode of ['first', 'longest'] as Mode[])
+				for (const input of inputs) {
+					const run = runCalls(table, input, mode, { skip: new Set(['Whitespace']) });
+					let pos = 0;
+					for (const c of run.calls) {
+						expect(c.start).toBe(pos);
+						const traced = traceCall(table, input, c.start, mode, new Set(['Whitespace']));
+						expect(c, `${name} ${mode} ${JSON.stringify(input)} at ${c.start}`).toEqual({
+							start: traced.start,
+							end: traced.end,
+							token: traced.token
+						});
+						pos = c.end;
+					}
+					if (!run.stalled) expect(pos).toBe(input.length);
+					expect(run.truncated).toBe(false);
+				}
+	});
+
+	it('tokenizes long inputs in full with the longest match', () => {
+		// Every call reads the rest of the input looking for a 'b', then reports one 'a' as an error.
+		const table = driverTable(dfaOf(rules([['AB', "'a'* 'b'"]])));
+		for (const n of [150, 400, 2000]) {
+			const run = runCalls(table, 'a'.repeat(n), 'longest');
+			expect(run.truncated).toBe(false);
+			expect(run.stalled).toBe(false);
+			expect(run.calls).toHaveLength(n);
+			expect(run.calls.every((c) => c.token.error && c.token.lexeme === 'a')).toBe(true);
+		}
+		const call = traceCall(table, 'a'.repeat(2000), 1999, 'longest');
+		expect(call.token).toMatchObject({ error: true, lexeme: 'a', start: 1999, end: 2000 });
+	});
+
+	it('stops when the read budget runs out', () => {
+		const table = driverTable(dfaOf(rules([['AB', "'a'* 'b'"]])));
+		const run = runCalls(table, 'a'.repeat(100), 'longest', { maxReads: 1000 });
+		expect(run.truncated).toBe(true);
+		expect(run.calls.length).toBeGreaterThan(0);
+		expect(run.calls.length).toBeLessThan(100);
+	});
+});
+
 describe('chText', () => {
 	it('quotes characters and names EOF', () => {
 		expect(chText('a')).toBe("'a'");
@@ -221,5 +301,19 @@ describe('chText', () => {
 		expect(chText("'")).toBe("'\\''");
 		expect(chText(EOF)).toBe('EOF');
 		expect(chText(undefined)).toBe('—');
+	});
+
+	it('cuts long lexemes short in step descriptions', () => {
+		expect(lexemeText('ab c')).toBe('"ab c"');
+		expect(lexemeText('a'.repeat(24))).toBe(`"${'a'.repeat(24)}"`);
+		expect(lexemeText('a'.repeat(2000))).toBe(`"${'a'.repeat(24)}…" (2000 characters)`);
+		expect(lexemeText('😀'.repeat(30))).toBe(`"${'😀'.repeat(24)}…" (30 characters)`);
+	});
+
+	it('traces a long call without spelling out the lexeme at every step', () => {
+		const table = driverTable(dfaOf(rules([['A', "'a'+"]])));
+		const call = traceCall(table, 'a'.repeat(2000), 0, 'longest');
+		expect(call.token.lexeme).toHaveLength(2000);
+		expect(Math.max(...call.steps.map((s) => s.text.length))).toBeLessThan(200);
 	});
 });

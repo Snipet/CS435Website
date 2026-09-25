@@ -122,19 +122,26 @@ export interface DriverCall {
 	reach: number;
 }
 
-export interface DriverRun {
-	calls: DriverCall[];
-	/** A call returned without consuming input, so calling again would repeat it. */
-	stalled: boolean;
-	/** The step budget ran out before the end of the input. */
-	truncated: boolean;
-}
-
 /** `'c'` for a character, EOF for the end of input. */
 export function chText(ch: Ch | undefined): string {
 	if (ch === undefined) return '—';
 	if (ch === EOF) return 'EOF';
 	return `'${showChar(ch, 'quoted')}'`;
+}
+
+/** Longest lexeme a step description spells out in full (code points). */
+export const LEXEME_TEXT_MAX = 24;
+
+/** `"abc"`; a long lexeme is cut short: `"abcd…" (2000 characters)`. */
+export function lexemeText(lexeme: string): string {
+	let n = 0;
+	let cut = -1;
+	for (let i = 0; i < lexeme.length; i += lexeme.codePointAt(i)! > 0xffff ? 2 : 1) {
+		if (n === LEXEME_TEXT_MAX) cut = i;
+		n++;
+	}
+	if (cut < 0) return formatString(lexeme);
+	return `${formatString(lexeme.slice(0, cut)).slice(0, -1)}…" (${n} characters)`;
 }
 
 function getChar(input: string, pos: number): { ch: Ch; pos: number } {
@@ -297,7 +304,7 @@ function traceFirst(
 				(tok
 					? `tokenFor (${name(s)}) is ${tok}`
 					: `${name(s)} names no token, so tokenFor (${name(s)}) is ${name(s)}`) +
-				`: getToken () returns (${token.name}, ${formatString(token.lexeme)}).`,
+				`: getToken () returns (${token.name}, ${lexemeText(token.lexeme)}).`,
 			result: token
 		});
 		return { start, end: t.pos, steps: t.steps, token, reach: t.reach };
@@ -313,7 +320,7 @@ function traceFirst(
 		text:
 			token.lexeme === ''
 				? 'handleError (): no token, and no input was read.'
-				: `handleError (): no token. The characters read, ${formatString(token.lexeme)}, are an error; the next call starts at ${t.pos}.`,
+				: `handleError (): no token. The characters read, ${lexemeText(token.lexeme)}, are an error; the next call starts at ${t.pos}.`,
 		result: token
 	});
 	return { start, end: t.pos, steps: t.steps, token, reach: t.reach };
@@ -392,7 +399,7 @@ function traceLongest(
 		t.lastAccept = { state: n, pos: t.pos };
 		push({
 			line: 10,
-			text: `lastAccept = (${name(n)}, ${t.pos}): ${name(n)} accepts ${formatString(input.slice(start, t.pos))}.`
+			text: `lastAccept = (${name(n)}, ${t.pos}): ${name(n)} accepts ${lexemeText(input.slice(start, t.pos))}.`
 		});
 	}
 
@@ -417,7 +424,7 @@ function traceLongest(
 				(tok
 					? `tokenFor (${name(last.state)}) is ${tok}`
 					: `${name(last.state)} names no token, so tokenFor (${name(last.state)}) is ${name(last.state)}`) +
-				`: getToken () returns (${token.name}, ${formatString(token.lexeme)}).`,
+				`: getToken () returns (${token.name}, ${lexemeText(token.lexeme)}).`,
 			result: token
 		});
 		return { start, end: last.pos, steps: t.steps, token, reach: t.reach };
@@ -435,7 +442,7 @@ function traceLongest(
 	const token = errorToken(input, start, t.pos);
 	push({
 		line: 18,
-		text: `handleError (): no token. ${formatString(token.lexeme)} is reported as an error; the next call starts at ${t.pos}.`,
+		text: `handleError (): no token. ${lexemeText(token.lexeme)} is reported as an error; the next call starts at ${t.pos}.`,
 		result: token
 	});
 	return { start, end: t.pos, steps: t.steps, token, reach: t.reach };
@@ -454,38 +461,104 @@ export function traceCall(
 		: traceLongest(table, input, start, skip);
 }
 
-/** Default step budget for a whole run. */
-export const MAX_TRACE_STEPS = 40_000;
+export type CallSummary = Pick<DriverCall, 'start' | 'end' | 'token'>;
+
+/** The getToken () calls over the whole input, without their steps. */
+export interface DriverRun {
+	/** Each call's start, end and token, in order. */
+	calls: CallSummary[];
+	/** A call returned without consuming input, so calling again would repeat it. */
+	stalled: boolean;
+	/** The read budget ran out before the end of the input. */
+	truncated: boolean;
+}
 
 /**
- * Calls getToken () from position 0 until the input is used up, a call makes
- * no progress, or `maxSteps` steps have been traced.
+ * Most characters `runCalls` reads in total. The longest match can reread the
+ * rest of the input on every call, so this is well above the square of the
+ * longest input the page keeps (2000 characters).
  */
-export function traceRun(
+export const MAX_RUN_READS = 5_000_000;
+
+/**
+ * Calls getToken () from position 0 until the input is used up or a call
+ * makes no progress. Each call runs the same loop as `traceCall` (same end
+ * and token) without recording steps; `traceCall` from a call's start gives
+ * its steps.
+ */
+export function runCalls(
 	table: DriverTable,
 	input: string,
 	mode: Mode,
-	opts: { skip?: ReadonlySet<string>; maxSteps?: number } = {}
+	opts: { skip?: ReadonlySet<string>; maxReads?: number } = {}
 ): DriverRun {
-	const maxSteps = opts.maxSteps ?? MAX_TRACE_STEPS;
-	const calls: DriverCall[] = [];
+	const skip = opts.skip ?? new Set<string>();
+	let budget = opts.maxReads ?? MAX_RUN_READS;
+	const columns = new Map<number, number | null>();
+	/** T[from, cp]; cp = -1 is EOF. */
+	const next = (from: StateId, cp: number): StateId => {
+		let col = cp < 0 ? table.eofColumn : columns.get(cp);
+		if (col === undefined) {
+			const i = table.columns.findIndex((c) => c.set.has(cp));
+			col = i < 0 ? null : i;
+			columns.set(cp, col);
+		}
+		return col === null ? ERROR_STATE : table.T[from][col];
+	};
+	const accepts = (s: StateId) => s !== ERROR_STATE && table.accept[s];
+	const stops = (s: StateId) => s === ERROR_STATE || table.dead[s];
+
+	const call = (start: number): CallSummary | null => {
+		const limit = readLimit(input, start);
+		let state = table.dfa.start;
+		let pos = start;
+		/** Code units of the last character read; 0 for EOF (ungetChar (EOF) does nothing). */
+		let width = 0;
+		let reads = 0;
+		let last: { state: StateId; pos: number } | null = null;
+		for (;;) {
+			if (mode === 'first' && accepts(state)) break;
+			if (stops(state)) break;
+			if (reads >= limit) {
+				state = ERROR_STATE;
+				break;
+			}
+			if (--budget < 0) return null;
+			reads++;
+			let cp = -1;
+			width = 0;
+			if (pos < input.length) {
+				cp = input.codePointAt(pos)!;
+				width = cp > 0xffff ? 2 : 1;
+				pos += width;
+			}
+			state = next(state, cp);
+			if (mode === 'longest' && accepts(state)) {
+				if (table.retract[state]) pos -= width;
+				last = { state, pos };
+			}
+		}
+		if (mode === 'first') {
+			if (!accepts(state)) return { start, end: pos, token: errorToken(input, start, pos) };
+			if (table.retract[state]) pos -= width;
+			return { start, end: pos, token: tokenOf(table, state, input, start, pos, skip) };
+		}
+		if (last) {
+			const token = tokenOf(table, last.state, input, start, last.pos, skip);
+			return { start, end: last.pos, token };
+		}
+		const end = nextCharEnd(input, start);
+		return { start, end, token: errorToken(input, start, end) };
+	};
+
+	const calls: CallSummary[] = [];
 	let pos = 0;
-	let total = 0;
-	let stalled = false;
-	let truncated = false;
 	while (pos < input.length) {
-		if (total >= maxSteps) {
-			truncated = true;
-			break;
-		}
-		const call = traceCall(table, input, pos, mode, opts.skip);
-		calls.push(call);
-		total += call.steps.length;
-		if (call.end <= pos) {
-			stalled = true;
-			break;
-		}
-		pos = call.end;
+		const c = call(pos);
+		if (!c) return { calls, stalled: false, truncated: true };
+		calls.push(c);
+		if (c.end <= pos) return { calls, stalled: true, truncated: false };
+		pos = c.end;
 	}
-	return { calls, stalled, truncated };
+	return { calls, stalled: false, truncated: false };
 }

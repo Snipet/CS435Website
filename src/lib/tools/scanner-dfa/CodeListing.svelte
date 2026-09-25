@@ -5,6 +5,7 @@ Long listings scroll inside their own box and keep the current line in view.
 -->
 <script lang="ts">
 	import { highlightC } from './code-highlight';
+	import { lineNumbers } from './listing';
 
 	interface Line {
 		text: string;
@@ -25,7 +26,9 @@ Long listings scroll inside their own box and keep the current line in view.
 	let { lines, current = null, label, maxHeight }: Props = $props();
 
 	let box: HTMLDivElement | undefined = $state();
-	const width = $derived(String(lines.length).length);
+	/** Line numbers of the program as printed: inserted lines get none and do not shift the rest. */
+	const numbers = $derived(lineNumbers(lines));
+	const width = $derived(String(Math.max(1, ...numbers.filter((n) => n !== null))).length);
 	const tokens = $derived(lines.map((l) => highlightC(l.text)));
 
 	// Keep the current line visible inside the box without scrolling the page.
@@ -59,7 +62,7 @@ Long listings scroll inside their own box and keep the current line in view.
 				class={{ current: i === current, inserted: line.inserted }}
 				aria-current={i === current ? 'step' : undefined}
 			>
-				<span class="ln" aria-hidden="true">{line.inserted ? '+' : i + 1}</span>
+				<span class="ln" aria-hidden="true">{numbers[i] ?? '+'}</span>
 				<code
 					>{#each tokens[i] as t, k (k)}{#if t.className}<span class={t.className}>{t.text}</span
 							>{:else}{t.text}{/if}{/each}{#if line.inserted}<span class="visually-hidden">
@@ -107,9 +110,14 @@ Long listings scroll inside their own box and keep the current line in view.
 		text-align: right;
 		user-select: none;
 	}
+	/* Not the inline-code chip of app.css: the row's own background shows the current line. */
 	code {
-		font-size: inherit;
+		padding: 0;
+		border: 0;
+		border-radius: 0;
+		background: none;
 		color: var(--text);
+		font-size: inherit;
 	}
 	li.inserted {
 		background: color-mix(in srgb, var(--accept-soft) 80%, transparent);

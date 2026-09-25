@@ -8,18 +8,21 @@ rules and for the DFAs on the slides, as built and minimized.
 	import Panel from '$lib/components/ui/Panel.svelte';
 	import SlideQuestions from './SlideQuestions.svelte';
 	import { relopDfa, stuDfa } from './machines';
-	import type { CompiledRules, RuleDfaResult } from './rules';
+	import type { NamedSet } from '$lib/theory/chars';
+	import type { RuleDfas } from './rules';
 	import { ASCII_COLUMNS, sizesOf, tableSize, type TableSize } from './sizes';
 	import type { ScannerDfaState } from './state';
 	import type { SlideQuestion } from './presets';
 
 	interface Props {
 		model: ScannerDfaState;
-		compiled: CompiledRules;
-		built: RuleDfaResult | null;
+		/** The DFA of the rules (null while the rules have errors). */
+		built: RuleDfas | null;
+		/** Definitions that name character sets (column headers). */
+		names: readonly NamedSet[];
 	}
 
-	let { model, compiled, built }: Props = $props();
+	let { model, built, names }: Props = $props();
 
 	interface Row {
 		label: string;
@@ -45,13 +48,12 @@ rules and for the DFAs on the slides, as built and minimized.
 	const groups = $derived.by((): Group[] => {
 		const out: Group[] = [];
 		if (built?.ok) {
-			out.push({
-				title: `DFA from the rules: R = ${ruleNames}`,
-				rows: [
-					{ label: 'As built (subset construction)', size: tableSize(built.full, compiled.names) },
-					{ label: 'Minimized', size: tableSize(built.minimal, compiled.names), sub: true }
-				]
-			});
+			const rows: Row[] = [
+				{ label: 'As built (subset construction)', size: tableSize(built.full, names) }
+			];
+			if (built.minimal)
+				rows.push({ label: 'Minimized', size: tableSize(built.minimal, names), sub: true });
+			out.push({ title: `DFA from the rules: R = ${ruleNames}`, rows });
 		}
 		out.push(
 			{
@@ -136,9 +138,9 @@ rules and for the DFAs on the slides, as built and minimized.
 			</div>
 			<p class="legend">
 				Symbol classes are the columns of T on the Table-driven tab: sets of characters that every
-				state treats alike, plus <em>other</em> for the characters outside them. The last column
-				counts a table indexed by the character itself (T: 2D int array [state, char], slide 15)
-				over the {ASCII_COLUMNS}
+				state treats alike (relop's <em>other</em> is every character without an edge of its own).
+				The last column counts a table indexed by the character itself (T: 2D int array [state,
+				char], slide 15) over the {ASCII_COLUMNS}
 				ASCII characters. Minimizing keeps accepting states with different tokens apart.
 			</p>
 			<SlideQuestions questions={QUESTIONS} />

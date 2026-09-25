@@ -5,6 +5,7 @@ R1 | R2 | … (earlier rules win ties). Each rule has a token name, an RE in
 lecture notation, and a "drop" switch (matched, then left out of the tokens).
 -->
 <script lang="ts">
+	import { tick } from 'svelte';
 	import Button from '$lib/components/ui/Button.svelte';
 	import CodeEditor from '$lib/components/ui/CodeEditor.svelte';
 	import IconButton from '$lib/components/ui/IconButton.svelte';
@@ -25,21 +26,49 @@ lecture notation, and a "drop" switch (matched, then left out of the tokens).
 
 	const uid = $props.id();
 
+	/**
+	 * Row keys: a row follows its rule when the rule moves. Rules loaded from a
+	 * preset or a link are new objects and get new rows.
+	 */
+	const keys = new WeakMap<RuleState, number>();
+	let nextKey = 0;
+	function keyOf(rule: RuleState): number {
+		let key = keys.get(rule);
+		if (key === undefined) {
+			key = nextKey++;
+			keys.set(rule, key);
+		}
+		return key;
+	}
+
+	let addButton: HTMLButtonElement | undefined = $state();
+
+	/** Once the rows have updated, focuses the control with this id (null: the Add rule button). */
+	async function focusControl(id: string | null) {
+		await tick();
+		(id === null ? addButton : document.getElementById(id))?.focus();
+	}
+
 	function move(i: number, by: number) {
 		const j = i + by;
 		if (j < 0 || j >= rules.length) return;
 		const next = [...rules];
 		[next[i], next[j]] = [next[j], next[i]];
 		rules = next;
+		// The same button in the moved rule's row, so pressing it again moves the rule further.
+		void focusControl(`${uid}-${by < 0 ? 'up' : 'down'}-${j}`);
 	}
 
 	function remove(i: number) {
 		rules = rules.filter((_, k) => k !== i);
+		// The next rule's Remove button, which is now in this row.
+		void focusControl(i < rules.length ? `${uid}-remove-${i}` : null);
 	}
 
 	function add() {
 		if (rules.length >= MAX_RULES) return;
 		rules = [...rules, { name: `Token${rules.length + 1}`, re: '' }];
+		void focusControl(`${uid}-name-${rules.length - 1}`);
 	}
 </script>
 
@@ -63,7 +92,7 @@ lecture notation, and a "drop" switch (matched, then left out of the tokens).
 			<span class="hint">R = R1 | R2 | …; the earlier rule wins a tie.</span>
 		</div>
 		<ol class="list" aria-labelledby="{uid}-rules">
-			{#each rules as rule, i (i)}
+			{#each rules as rule, i (keyOf(rule))}
 				{@const check = compiled.rows[i]}
 				<li class="rule">
 					<span class="index" style={toneStyle(i)} aria-hidden="true">R{i + 1}</span>
@@ -96,10 +125,11 @@ lecture notation, and a "drop" switch (matched, then left out of the tokens).
 							type="checkbox"
 							bind:checked={() => rule.drop ?? false, (v) => (rule.drop = v)}
 						/>
-						<span>drop</span>
+						<span>drop<span class="visually-hidden"> rule {i + 1}</span></span>
 					</label>
 					<div class="actions">
 						<IconButton
+							id="{uid}-up-{i}"
 							icon="chevron-up"
 							size="sm"
 							label="Move rule {i + 1} up"
@@ -107,20 +137,27 @@ lecture notation, and a "drop" switch (matched, then left out of the tokens).
 							onclick={() => move(i, -1)}
 						/>
 						<IconButton
+							id="{uid}-down-{i}"
 							icon="chevron-down"
 							size="sm"
 							label="Move rule {i + 1} down"
 							aria-disabled={i === rules.length - 1}
 							onclick={() => move(i, 1)}
 						/>
-						<IconButton icon="x" size="sm" label="Remove rule {i + 1}" onclick={() => remove(i)} />
+						<IconButton
+							id="{uid}-remove-{i}"
+							icon="x"
+							size="sm"
+							label="Remove rule {i + 1}"
+							onclick={() => remove(i)}
+						/>
 					</div>
 				</li>
 			{/each}
 		</ol>
 		{#if rules.length === 0}<p class="hint">Add a rule to build a DFA.</p>{/if}
 		<div>
-			<Button size="sm" onclick={add} disabled={rules.length >= MAX_RULES}>
+			<Button size="sm" onclick={add} disabled={rules.length >= MAX_RULES} bind:element={addButton}>
 				{#snippet icon()}<Icon name="plus" size={16} />{/snippet}
 				Add rule
 			</Button>

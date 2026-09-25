@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { hasErrors } from '$lib/theory/diagnostics';
 import { formatCitation } from '$lib/lectures';
-import { buildRuleDfa, compileRules } from './rules';
+import { buildRuleDfa, compileRules, minimalRuleDfa, nameGroups, withTokenNames } from './rules';
 import { driverTable, type DriverTable } from './table';
-import { traceRun, type Mode } from './driver';
+import { runCalls, type Mode } from './driver';
 import { MACHINES } from './machines';
 import { DEFAULT_PRESET, PRESETS, matchPreset, type ScannerPreset } from './presets';
 import { isSavedState, loadState, type ScannerDfaState } from './state';
@@ -26,15 +26,19 @@ function tableFor(p: ScannerPreset): DriverTable {
 	if (v.source !== 'rules') return driverTable(MACHINES[v.source].build());
 	const compiled = compileRules(v.defs ?? '', v.rules ?? []);
 	if (!compiled.rules) throw new Error(`${p.id}: rules do not compile`);
-	const built = buildRuleDfa(compiled.rules, { minimal: v.minimal ?? false });
+	const built = buildRuleDfa(compiled.rules);
 	if (!built.ok) throw new Error(`${p.id}: DFA too large`);
-	return driverTable(built.dfa, { names: compiled.names });
+	const names = compiled.rules.map((r) => r.name);
+	const dfa = v.minimal
+		? withTokenNames(minimalRuleDfa(built.full, nameGroups(names)), names)
+		: built.full;
+	return driverTable(dfa, { names: compiled.names });
 }
 
 function pairs(p: ScannerPreset, mode: Mode = p.value.mode ?? 'first', input = p.value.input) {
 	const v = p.value;
 	const skip = new Set((v.rules ?? []).filter((r) => r.drop).map((r) => r.name));
-	return traceRun(tableFor(p), input, mode, { skip }).calls.map(
+	return runCalls(tableFor(p), input, mode, { skip }).calls.map(
 		(c) => `(${c.token.name}, "${c.token.lexeme}")`
 	);
 }
@@ -52,6 +56,12 @@ describe('presets', () => {
 		}
 	});
 
+	it('show every space of their labels (the menu collapses runs of spaces)', () => {
+		for (const p of PRESETS) expect(p.label, p.id).not.toMatch(/\s\s/);
+		expect(preset('f3g').label).toBe('Scan "f+3␣␣+g"');
+		expect(preset('f3g').value.input).toBe('f+3  +g');
+	});
+
 	it('parse without errors and build a DFA', () => {
 		for (const p of PRESETS) {
 			if (p.value.source !== 'rules') continue;
@@ -66,14 +76,14 @@ describe('presets', () => {
 				).toEqual([]);
 			}
 			expect(compiled.rules, p.id).not.toBeNull();
-			expect(buildRuleDfa(compiled.rules!, { minimal: false }).ok, p.id).toBe(true);
+			expect(buildRuleDfa(compiled.rules!).ok, p.id).toBe(true);
 		}
 	});
 
 	it('scan their whole input', () => {
 		for (const p of PRESETS) {
 			for (const mode of ['first', 'longest'] as const) {
-				const run = traceRun(tableFor(p), p.value.input, mode);
+				const run = runCalls(tableFor(p), p.value.input, mode);
 				expect(run.stalled, p.id).toBe(false);
 				expect(run.truncated, p.id).toBe(false);
 				expect(run.calls.at(-1)!.end, p.id).toBe(p.value.input.length);
@@ -120,11 +130,12 @@ describe('lecture results', () => {
 		expect(pairs(p, 'longest')[0]).toBe('(EndsIn1, "011")');
 		// "Is the previous DFA minimal?" (slide 11): 3 states, 2 when minimized.
 		const compiled = compileRules('', p.value.rules!);
-		const built = buildRuleDfa(compiled.rules!, { minimal: false });
+		const built = buildRuleDfa(compiled.rules!);
 		if (!built.ok) throw new Error('too large');
 		expect(built.full.states).toHaveLength(3);
-		expect(built.minimal.states).toHaveLength(2);
+		expect(minimalRuleDfa(built.full, [0]).states).toHaveLength(2);
 		const t = driverTable(built.full);
+		expect(t.columns.map((c) => c.header)).toEqual(['0', '1']);
 		expect(t.T[0]).toEqual(t.T[1]);
 		expect(t.accept.slice(0, 2)).toEqual([false, false]);
 	});
@@ -151,7 +162,7 @@ describe('lecture results', () => {
 		expect(pairs(p)).toEqual(['(New, "new")', '(Whitespace, " ")', '(Identifier, "foo")']);
 		expect(pairs(p, 'longest', 'newer')).toEqual(['(Identifier, "newer")']);
 		const skip = new Set(['Whitespace']);
-		const run = traceRun(tableFor(p), 'new foo', 'longest', { skip });
+		const run = runCalls(tableFor(p), 'new foo', 'longest', { skip });
 		expect(run.calls.map((c) => c.token.skipped)).toEqual([false, true, false]);
 	});
 
