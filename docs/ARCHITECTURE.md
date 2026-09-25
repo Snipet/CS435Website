@@ -748,8 +748,9 @@ $effect(() => task.run(request));
 'error'` (`task.error` holds the message).
 - The latest request wins: one request runs at a time and at most one waits
   (a newer one replaces it); answers to older requests are dropped by id. A
-  request that has run `restartAfter` ms (default 300) when a newer one arrives
-  is abandoned by restarting the worker.
+  running request that a newer one has replaced is abandoned once it has run
+  `restartAfter` ms (default 300): the worker restarts with the waiting
+  request, so the newest request never waits long behind older work.
 - A request still running after `timeLimit` ms is abandoned (the worker is
   terminated and a new one starts with the next request); the page shows a
   `Callout` saying the input takes too long. The clock starts once the worker
@@ -765,6 +766,10 @@ $effect(() => task.run(request));
   `stale-data` class (dimmed after a short pause), `aria-busy` and
   `<Updating />`, and show a result that belongs to something else (another
   test string, another tree node) only if it is drawn with what it is for.
+  A note shown instead of a result ("the DFA has more than 300 states") that
+  came from an earlier result is marked stale the same way. A placeholder that
+  is the only content while a result is computed ("Comparing…") is an
+  `<Updating standalone />`, which screen readers read as a status.
 
 ## 6. Quality bar
 

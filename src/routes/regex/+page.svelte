@@ -33,12 +33,7 @@
 		thompsonState
 	} from '$lib/tools/regex/analysis';
 	import type { Bracket } from '$lib/tools/regex/derive';
-	import {
-		analysisFailed,
-		languageBlocked,
-		sizeMessage,
-		structureBlocked
-	} from '$lib/tools/regex/messages';
+	import { analysisFailed, languageBlocked, structureBlocked } from '$lib/tools/regex/messages';
 	import {
 		applyPreset,
 		DEFAULT_PRESET_ID,
@@ -56,9 +51,11 @@
 		type RegexToolState,
 		type ViewId
 	} from '$lib/tools/regex/state';
-	import { nodeText, pathKey } from '$lib/tools/regex/tree';
+	import { nodeText } from '$lib/tools/regex/tree';
 	import {
+		languageNote,
 		sameExpression,
+		selectedSample,
 		testRows,
 		viewsComputer,
 		type CompareSummary,
@@ -229,9 +226,11 @@
 
 	const language = $derived(done?.data.language ?? null);
 	const languageStale = $derived(!current || done?.input.maxLength !== model.maxLength);
-	const sizeNote = $derived(language && !language.ok ? sizeMessage(language) : null);
-	/** Why the language views are empty: R or Σ as typed, or the size of L(R) (maybe for an earlier R). */
-	const languageNote = $derived(parseNote ?? sizeNote);
+	/**
+	 * Why the language views are empty (unless the computation failed): R or Σ as
+	 * typed, or the size of L(R), which is stale while a newer R is computed.
+	 */
+	const note = $derived(failure ? null : languageNote(parseNote, language, current));
 
 	const rows = $derived(
 		parseNote || failure
@@ -257,10 +256,23 @@
 	const compareStale = $derived(
 		!current || (done !== null && done.input.compare !== model.compare && !!typedCompare?.regex)
 	);
+	/** The Compare panel waits for a newer result: its comparison, or the note it shows instead. */
+	const compareUpdating = $derived(
+		!failure && (note ? note.stale : compareStale && model.compare.trim() !== '')
+	);
 
 	/** Strings of the selected node: only a result for that same node is shown. */
-	const sameNode = $derived(done !== null && pathKey(done.input.node) === pathKey(selectedPath));
-	const sample = $derived(!failure && sameNode ? (done?.data.sample ?? null) : null);
+	const sample = $derived(
+		failure
+			? null
+			: selectedSample(
+					done,
+					selectedPath,
+					current,
+					{ root, print: printOpts },
+					{ root: doneParse.re.regex, print: bracketPrint }
+				)
+	);
 
 	const presetMatch = $derived(matchPreset(model));
 
@@ -500,13 +512,11 @@
 					{#snippet actions()}
 						{#if !parseNote && !failure && languageStale}<Updating />{/if}
 					{/snippet}
-					{#if parseNote}
-						<p class="view-note">{parseNote}</p>
-					{:else if failure}
+					{#if failure}
 						<Callout tone="warn">{failure}</Callout>
-					{:else if sizeNote}
-						<p class={['view-note', { 'stale-data': !current }]} aria-busy={!current}>
-							{sizeNote}
+					{:else if note}
+						<p class={['view-note', { 'stale-data': note.stale }]} aria-busy={note.stale}>
+							{note.text}
 						</p>
 					{:else if language?.ok}
 						<LanguageView
@@ -516,7 +526,7 @@
 							stale={languageStale}
 						/>
 					{:else}
-						<p class="view-note"><Updating label="Listing L(R)…" /></p>
+						<p class="view-note"><Updating label="Listing L(R)…" standalone /></p>
 					{/if}
 				</Panel>
 			</div>
@@ -531,12 +541,12 @@
 					{#snippet actions()}
 						{#if testsStale}<Updating />{/if}
 					{/snippet}
-					{#if parseNote}
-						<p class="view-note spaced">{parseNote}</p>
-					{:else if failure}
+					{#if failure}
 						<div class="spaced"><Callout tone="warn">{failure}</Callout></div>
-					{:else if sizeNote}
-						<p class={['view-note spaced', { 'stale-data': !current }]}>{sizeNote}</p>
+					{:else if note}
+						<p class={['view-note spaced', { 'stale-data': note.stale }]} aria-busy={note.stale}>
+							{note.text}
+						</p>
 					{/if}
 					<TestStrings
 						bind:tests={model.tests}
@@ -556,9 +566,7 @@
 			>
 				<Panel title="Compare">
 					{#snippet actions()}
-						{#if !languageNote && !failure && compareStale && model.compare.trim() !== ''}
-							<Updating />
-						{/if}
+						{#if compareUpdating}<Updating />{/if}
 					{/snippet}
 					<CompareView
 						bind:value={model.compare}
@@ -566,7 +574,8 @@
 						stale={compareStale}
 						{failure}
 						diagnostics={typedCompare?.diagnostics ?? []}
-						blocked={languageNote}
+						blocked={note?.text ?? null}
+						blockedStale={note?.stale ?? false}
 						symbols={palette}
 						{aliases}
 						placeholder={flex ? 'e.g. [A-Za-z][A-Za-z0-9]*' : 'e.g. (letter* | digit*)'}

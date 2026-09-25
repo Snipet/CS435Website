@@ -24,6 +24,8 @@
 		diagnostics: readonly Diagnostic[];
 		/** Why R itself cannot be compared, if so. */
 		blocked: string | null;
+		/** `blocked` is for an earlier R (a newer one is being computed). */
+		blockedStale?: boolean;
 		/** Why the comparison did not finish (it ran out of time), if so. */
 		failure?: string | null;
 		symbols: readonly PaletteSymbol[];
@@ -37,6 +39,7 @@
 		stale = false,
 		diagnostics,
 		blocked,
+		blockedStale = false,
 		failure = null,
 		symbols,
 		aliases,
@@ -59,13 +62,13 @@
 	<RegexField label="R₂ =" size="md" bind:value {symbols} {aliases} {placeholder} {diagnostics} />
 
 	{#if blocked}
-		<p class="note">{blocked}</p>
+		<p class={['note', { 'stale-data': blockedStale }]} aria-busy={blockedStale}>{blocked}</p>
 	{:else if value.trim() === ''}
 		<p class="note">Enter R₂ to compare L(R) with L(R₂).</p>
 	{:else if failure}
 		<Callout tone="warn">{failure}</Callout>
 	{:else if !result}
-		<p class="note"><Updating label="Comparing…" /></p>
+		<p class="note"><Updating label="Comparing…" standalone /></p>
 	{:else}
 		<div class={['result', { 'stale-data': stale }]} aria-busy={stale}>
 			{@render comparison(result)}

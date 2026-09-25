@@ -15,7 +15,7 @@ import {
 	type Comparison,
 	type PlainCharSet
 } from '$lib/theory/automata';
-import { nodeAtPath, type Regex } from '$lib/theory/regex';
+import { nodeAtPath, type PrintOptions, type Regex } from '$lib/theory/regex';
 import {
 	analyzeCompare,
 	analyzeExpression,
@@ -31,6 +31,8 @@ import {
 import type { Derivation, DeriveResult } from './derive';
 import type { Rejection } from './explain';
 import { withoutTrap, type LanguageStatus } from './machines';
+import { sizeMessage } from './messages';
+import { nodeText, pathKey } from './tree';
 
 export interface ViewsRequest extends ExpressionInput {
 	/** R₂ as typed. */
@@ -257,6 +259,63 @@ export function computeViews(req: ViewsRequest): ViewsData {
 // On the page
 // ---------------------------------------------------------------------------
 
+/** The last views the worker computed, and the request they are for. */
+export interface DoneViews {
+	input: ViewsRequest;
+	data: ViewsData;
+}
+
+/** A note shown in place of a view; `stale` when it is for an earlier R (a newer one is computed). */
+export interface ViewNote {
+	text: string;
+	stale: boolean;
+}
+
+/**
+ * Why the language views (L(R), the tests, the comparison) are empty, if so:
+ * `parseNote` (R or Σ as typed has problems), or L(R) too large to build as
+ * `language` says. `language` may be for an earlier R (`current` false): its
+ * note is then stale, shown dimmed until the new result arrives.
+ */
+export function languageNote(
+	parseNote: string | null,
+	language: LanguageSummary | null,
+	current: boolean
+): ViewNote | null {
+	if (parseNote) return { text: parseNote, stale: false };
+	if (language && !language.ok) return { text: sizeMessage(language), stale: !current };
+	return null;
+}
+
+/** A tree to look nodes up in, and how its nodes are written. */
+export interface TreeParse {
+	root: Regex | null;
+	print: PrintOptions;
+}
+
+/**
+ * The strings to show for the node at `path` in the tree typed now (`now`):
+ * `done`'s sample when it was computed for that node. After an edit to R, the
+ * definitions or Σ (`current` false) the same path may lead to another node,
+ * so the node at `path` in the parse `done` is for (`then`) must also be
+ * written the same way; otherwise there is nothing to show until the new
+ * result arrives.
+ */
+export function selectedSample(
+	done: DoneViews | null,
+	path: readonly number[],
+	current: boolean,
+	now: TreeParse,
+	then: TreeParse
+): Sample | null {
+	if (!done || pathKey(done.input.node) !== pathKey(path)) return null;
+	if (current) return done.data.sample;
+	const was = then.root ? nodeAtPath(then.root, path) : undefined;
+	const is = now.root ? nodeAtPath(now.root, path) : undefined;
+	if (!was || !is || nodeText(was, then.print) !== nodeText(is, now.print)) return null;
+	return done.data.sample;
+}
+
 /** A test string's result as shown: `text` is the string it is for. */
 export interface TestRow {
 	text: string;
@@ -273,7 +332,7 @@ export interface TestRow {
  */
 export function testRows(
 	tests: readonly string[],
-	done: { input: ViewsRequest; data: ViewsData } | null,
+	done: DoneViews | null,
 	root: Regex | null,
 	current: boolean
 ): (TestRow | null)[] {

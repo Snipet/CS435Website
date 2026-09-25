@@ -2,17 +2,26 @@
 	@component
 	A small "Updating…" mark for a view whose results are being recomputed (see
 	`WorkerTask`). It fades in after a short pause, so quick updates never show
-	it. Screen readers get `aria-busy` on the view instead.
+	it. Beside the view it marks it is hidden from screen readers, which get
+	`aria-busy` on the view instead; with `standalone` (a placeholder that is
+	the only content, such as "Comparing…") the label is read as a status.
 -->
 <script lang="ts">
 	interface Props {
 		label?: string;
+		/** The only content where it stands: read by screen readers as a status. */
+		standalone?: boolean;
 	}
 
-	let { label = 'Updating…' }: Props = $props();
+	let { label = 'Updating…', standalone = false }: Props = $props();
 </script>
 
-<span class="updating" aria-hidden="true"><span class="dot"></span>{label}</span>
+<span
+	class="updating"
+	role={standalone ? 'status' : undefined}
+	aria-hidden={standalone ? undefined : 'true'}
+	><span class="dot" aria-hidden="true"></span>{label}</span
+>
 
 <style>
 	.updating {

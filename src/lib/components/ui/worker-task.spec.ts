@@ -227,24 +227,138 @@ describe('WorkerTask with a worker', () => {
 		expect(task.output).toBe(4);
 	});
 
-	it('abandons a long request for a newer one', () => {
+	it('abandons a long request for a newer one at once', () => {
+		const { task, workers, last } = setup({ restartAfter: 300 });
+		task.run(1);
+		const first = last();
+		first.ready();
+		vi.advanceTimersByTime(350);
+		task.run(2);
+		expect(first.terminated).toBe(true);
+		expect(workers).toHaveLength(2);
+		expect(last().posted.map((r) => r.input)).toEqual([2]);
+		last().ready();
+		last().respond();
+		expect(task.output).toBe(4);
+		expect(task.status).toBe('idle');
+	});
+
+	it('drops the waiting request when it restarts for a newer one', () => {
 		const { task, workers, last } = setup({ restartAfter: 300 });
 		task.run(1);
 		const first = last();
 		first.ready();
 		vi.advanceTimersByTime(100);
 		task.run(2);
-		// Not running long enough: 2 waits.
-		expect(workers).toHaveLength(1);
-		vi.advanceTimersByTime(250);
+		vi.advanceTimersByTime(100);
 		task.run(3);
+		// 1 has run 200 ms: 3 replaces 2 as the waiting request.
+		expect(workers).toHaveLength(1);
+		vi.advanceTimersByTime(100);
 		expect(first.terminated).toBe(true);
 		expect(workers).toHaveLength(2);
-		expect(last().posted.map((r) => r.input)).toEqual([3]);
-		last().ready();
-		last().respond();
+		const second = last();
+		second.ready();
+		second.respond();
 		expect(task.output).toBe(9);
 		expect(task.status).toBe('idle');
+		// Neither 1 nor 2 is sent to the new worker, before or after 3.
+		expect(second.posted.map((r) => r.input)).toEqual([3]);
+		// The next request is posted at once to the idle worker.
+		task.run(4);
+		expect(second.posted.map((r) => r.input)).toEqual([3, 4]);
+	});
+
+	it('drops the waiting request when a newer one restarts the worker at once', () => {
+		const { task, workers, last } = setup({ restartAfter: 300 });
+		task.run(1);
+		last().ready();
+		vi.advanceTimersByTime(100);
+		task.run(2);
+		// The clock moves without firing timers: 3 arrives as 1 reaches 300 ms.
+		vi.setSystemTime(Date.now() + 200);
+		task.run(3);
+		expect(workers).toHaveLength(2);
+		const second = last();
+		second.ready();
+		second.respond();
+		expect(task.output).toBe(9);
+		expect(second.posted.map((r) => r.input)).toEqual([3]);
+		vi.advanceTimersByTime(1000);
+		expect(workers).toHaveLength(2);
+		expect(second.posted.map((r) => r.input)).toEqual([3]);
+	});
+
+	it('restarts for the waiting request once the older one has run restartAfter ms', () => {
+		const { task, workers, last } = setup({ restartAfter: 300, timeLimit: 5000 });
+		task.run(1);
+		const first = last();
+		first.ready();
+		vi.advanceTimersByTime(100);
+		task.run(2);
+		// No more requests: 2 still gets the worker 300 ms after 1 started, not after the time limit.
+		vi.advanceTimersByTime(199);
+		expect(workers).toHaveLength(1);
+		expect(task.status).toBe('working');
+		vi.advanceTimersByTime(1);
+		expect(first.terminated).toBe(true);
+		expect(workers).toHaveLength(2);
+		expect(task.status).toBe('working');
+		const second = last();
+		expect(second.posted.map((r) => r.input)).toEqual([2]);
+		second.ready();
+		second.respond();
+		expect(task.output).toBe(4);
+		expect(task.status).toBe('idle');
+		// The restart did not report a time-out, and the old time limit is gone.
+		vi.advanceTimersByTime(10_000);
+		expect(task.status).toBe('idle');
+		expect(workers).toHaveLength(2);
+	});
+
+	it('counts restartAfter from when the worker has loaded', () => {
+		const { task, workers, last } = setup({ restartAfter: 300 });
+		task.run(1);
+		task.run(2);
+		vi.advanceTimersByTime(1000);
+		// 1 has not started: nothing to abandon yet.
+		expect(workers).toHaveLength(1);
+		last().ready();
+		vi.advanceTimersByTime(299);
+		expect(workers).toHaveLength(1);
+		vi.advanceTimersByTime(1);
+		expect(workers).toHaveLength(2);
+		expect(last().posted.map((r) => r.input)).toEqual([2]);
+	});
+
+	it('keeps the worker when the older request finishes before restartAfter', () => {
+		const { task, workers, last } = setup({ restartAfter: 300 });
+		task.run(1);
+		const w = last();
+		w.ready();
+		vi.advanceTimersByTime(100);
+		task.run(2);
+		vi.advanceTimersByTime(100);
+		w.respond(0);
+		expect(w.posted.map((r) => r.input)).toEqual([1, 2]);
+		vi.advanceTimersByTime(1000);
+		expect(workers).toHaveLength(1);
+		expect(w.terminated).toBe(false);
+		w.respond(1);
+		expect(task.output).toBe(4);
+	});
+
+	it('does not restart when the input goes back to the one shown', () => {
+		const { task, workers, last } = setup({ restartAfter: 300, initial: 2 });
+		task.run(5);
+		last().ready();
+		vi.advanceTimersByTime(100);
+		task.run(6);
+		task.run(2);
+		vi.advanceTimersByTime(1000);
+		expect(workers).toHaveLength(1);
+		expect(task.status).toBe('idle');
+		expect(task.output).toBe(4);
 	});
 
 	it('reports an error answer', () => {

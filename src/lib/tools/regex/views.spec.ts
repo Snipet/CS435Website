@@ -8,7 +8,9 @@ import { languageBlocked, analysisFailed, TOO_SLOW } from './messages';
 import {
 	computeViews,
 	derivationFromPlain,
+	languageNote,
 	sameExpression,
+	selectedSample,
 	testFromPlain,
 	testRows,
 	testToPlain,
@@ -195,6 +197,73 @@ describe('testRows', () => {
 		const rows = testRows(['aa'], done, parse.resolved, false);
 		expect(rows[0]).toMatchObject({ text: 'aa', stale: true });
 		expect(testRows(['aa'], null, null, false)).toEqual([null]);
+	});
+});
+
+describe('selectedSample', () => {
+	/** The views for `req` as the page holds them, with the tree they refer to. */
+	function views(over: Partial<ViewsRequest>) {
+		const req = request(over);
+		const parse = analyzeExpression(req, { build: false });
+		return {
+			done: { input: req, data: viaWorker(req) },
+			tree: { root: parse.re.regex, print: { ...parse.print, parens: 'minimal' as const } }
+		};
+	}
+
+	it("shows the selected node's strings for the R they were computed for", () => {
+		const { done, tree } = views({ re: 'aa|bb', node: [1] });
+		expect(selectedSample(done, [1], true, tree, tree)).toMatchObject({ strings: ['bb'] });
+		// Another node of the same R: nothing until its strings are computed.
+		expect(selectedSample(done, [0], true, tree, tree)).toBeNull();
+		expect(selectedSample(null, [1], true, tree, tree)).toBeNull();
+	});
+
+	it('shows nothing for another node at the same path after R changes', () => {
+		const then = views({ re: 'aa|bb', node: [1] });
+		const now = views({ re: 'aa|cc', node: [1] });
+		// L('c' 'c') = { "bb" } would be false: wait for the new strings.
+		expect(selectedSample(then.done, [1], false, now.tree, then.tree)).toBeNull();
+	});
+
+	it('keeps the strings of a node written the same way while R changes elsewhere', () => {
+		const then = views({ re: 'aa|bb', node: [1] });
+		const now = views({ re: 'ab|bb', node: [1] });
+		expect(selectedSample(then.done, [1], false, now.tree, then.tree)).toMatchObject({
+			strings: ['bb']
+		});
+	});
+
+	it('shows nothing when the path no longer leads to a node', () => {
+		const then = views({ re: 'aa|bb', node: [1] });
+		const now = views({ re: 'aa', node: [] });
+		expect(selectedSample(then.done, [1], false, now.tree, then.tree)).toBeNull();
+		const broken = { root: null, print: now.tree.print };
+		expect(selectedSample(then.done, [1], false, broken, then.tree)).toBeNull();
+	});
+});
+
+describe('languageNote', () => {
+	const tooLarge = viaWorker(request({ re: '(a|b)*a(a|b)^{16}' })).language;
+
+	it('prefers a problem in R or Σ as typed, which is never stale', () => {
+		expect(languageNote('Fix Σ first.', tooLarge, false)).toEqual({
+			text: 'Fix Σ first.',
+			stale: false
+		});
+	});
+
+	it('marks the size of an earlier R as stale', () => {
+		expect(tooLarge?.ok).toBe(false);
+		const now = languageNote(null, tooLarge, true);
+		expect(now).toEqual({ text: expect.stringMatching(/more than 300 states/), stale: false });
+		expect(languageNote(null, tooLarge, false)).toEqual({ text: now!.text, stale: true });
+	});
+
+	it('has nothing to say when L(R) was built or is not known yet', () => {
+		const built = viaWorker(request({ re: 'a*' })).language;
+		expect(languageNote(null, built, false)).toBeNull();
+		expect(languageNote(null, null, false)).toBeNull();
 	});
 });
 

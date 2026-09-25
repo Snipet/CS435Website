@@ -615,7 +615,7 @@
 	{:else if !nfa && !source.ok}
 		<Callout tone="info">No NFA yet: fix the problems listed under the input.</Callout>
 	{:else if !nfa}
-		<p class="building"><Updating label="Building the NFA…" /></p>
+		<p class="building"><Updating label="Building the NFA…" standalone /></p>
 	{/if}
 
 	{#if nfa}

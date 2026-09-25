@@ -14,9 +14,11 @@
  * ```
  *
  * - One request runs at a time and at most one waits; a newer request replaces
- *   the waiting one, and a response to an older request is dropped. A request
- *   that has already run `restartAfter` ms when a newer one arrives is
- *   abandoned (the worker is restarted).
+ *   the waiting one, and a response to an older request is dropped. A running
+ *   request that is no longer the latest is abandoned once it has run
+ *   `restartAfter` ms (at once if a newer one arrives later than that): the
+ *   worker is restarted with the waiting request, so the newest request never
+ *   waits long behind an older one.
  * - A request still running after `timeLimit` ms is abandoned: the worker is
  *   terminated (a new one is created for the next request) and, when it was
  *   the latest request, the status becomes 'timed-out'. The clock starts once
@@ -45,7 +47,7 @@ export interface WorkerTaskOptions<I, O> {
 	initial?: I;
 	/** Milliseconds a request may run before it is abandoned. */
 	timeLimit?: number;
-	/** Milliseconds after which a running request gives way to a newer one. */
+	/** Milliseconds after which a running request gives way to a newer, waiting one. */
 	restartAfter?: number;
 	/** Requests with equal keys are the same request (default `JSON.stringify`). */
 	key?: (input: I) => string;
@@ -85,7 +87,10 @@ export class WorkerTask<I, O> {
 	#ready = false;
 	/** Compute on the main thread (no worker, or it failed to load). */
 	#sync: boolean;
+	/** Fires when the running request reaches the time limit. */
 	#timer: ReturnType<typeof setTimeout> | null = null;
+	/** Fires when the running request, superseded by the waiting one, has run `restartAfter` ms. */
+	#restartTimer: ReturnType<typeof setTimeout> | null = null;
 
 	constructor(options: WorkerTaskOptions<I, O>) {
 		this.#compute = options.compute;
@@ -146,17 +151,43 @@ export class WorkerTask<I, O> {
 		if (key === this.#doneKey) {
 			// Back to the input `output` is for: nothing to wait for.
 			this.#queued = null;
+			this.#clearRestart();
 			this.#status = 'idle';
 			this.#error = null;
 			return;
 		}
 		this.#status = 'working';
+		// `req` is newer than a waiting request, which is dropped whatever happens next.
+		this.#queued = null;
+		if (!this.#flight) this.#dispatch(req);
+		else {
+			this.#queued = req;
+			this.#armRestart();
+		}
+	}
+
+	/**
+	 * Restarts the worker with the waiting request once the running one (older,
+	 * so its answer would be dropped) has run `restartAfter` ms: at once if it
+	 * already has, otherwise when it does. Until the worker has loaded the
+	 * running request has not started, and the clock is armed when it does.
+	 */
+	#armRestart() {
+		this.#clearRestart();
 		const flight = this.#flight;
-		if (!flight) this.#dispatch(req);
-		else if (flight.started !== null && Date.now() - flight.started >= this.#restartAfter) {
-			this.#stopWorker();
-			this.#dispatch(req);
-		} else this.#queued = req;
+		if (!flight || flight.started === null || !this.#queued) return;
+		const left = flight.started + this.#restartAfter - Date.now();
+		if (left <= 0) this.#restart();
+		else this.#restartTimer = setTimeout(() => this.#restart(), left);
+	}
+
+	#restart() {
+		this.#restartTimer = null;
+		const next = this.#queued;
+		if (!next || !this.#flight) return;
+		this.#queued = null;
+		this.#stopWorker();
+		this.#dispatch(next);
 	}
 
 	/** Posts `req` to the worker (started if needed), or computes it here when there is none. */
@@ -223,6 +254,7 @@ export class WorkerTask<I, O> {
 
 	#stopWorker() {
 		this.#clearTimer();
+		this.#clearRestart();
 		this.#worker?.terminate();
 		this.#worker = null;
 		this.#ready = false;
@@ -248,11 +280,18 @@ export class WorkerTask<I, O> {
 		flight.started = Date.now();
 		this.#clearTimer();
 		this.#timer = setTimeout(() => this.#timeout(), this.#timeLimit);
+		// A request that arrived while the worker was loading waits at most `restartAfter` from now.
+		this.#armRestart();
 	}
 
 	#clearTimer() {
 		if (this.#timer !== null) clearTimeout(this.#timer);
 		this.#timer = null;
+	}
+
+	#clearRestart() {
+		if (this.#restartTimer !== null) clearTimeout(this.#restartTimer);
+		this.#restartTimer = null;
 	}
 
 	#onmessage(message: TaskMessage<O>) {
@@ -264,6 +303,7 @@ export class WorkerTask<I, O> {
 		const flight = this.#flight;
 		if (!flight || message.id !== flight.id) return;
 		this.#clearTimer();
+		this.#clearRestart();
 		this.#flight = null;
 		if (this.#isLatest(flight)) {
 			if (message.ok) this.#deliver(flight, message.output);
