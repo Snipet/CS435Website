@@ -20,7 +20,8 @@ import {
 import {
 	activePreset as grammarActivePreset,
 	applyPreset as applyGrammarPreset,
-	presetById as grammarPreset
+	presetById as grammarPreset,
+	presets as grammarPresets
 } from '$lib/tools/grammar/presets';
 import {
 	DEFAULT_MAX_LENGTH,
@@ -63,6 +64,7 @@ import Page from './+page.svelte';
 import {
 	ENDS_IN_ONE,
 	EXAM,
+	FOUR_TUPLE,
 	HAND_CODED_SWITCH,
 	NOTATION_SECTIONS,
 	PLAIN_SLUGS,
@@ -359,6 +361,7 @@ describe('tool links', () => {
 			Lookahead: ['lexer'],
 			'maximal munch': ['lexer'],
 			'first match': ['lexer'],
+			Disambiguation: ['lexer'],
 			'Languages and alphabets': ['regex'],
 			'Regular Expressions': ['regex'],
 			grep: ['regex'],
@@ -382,6 +385,33 @@ describe('tool links', () => {
 			'Predictive RD': ['rd-predictive']
 		};
 		for (const [text, tools] of Object.entries(expected)) expect(slugs(text), text).toEqual(tools);
+	});
+
+	it('link Tokens vs. lexemes, Lookahead and Disambiguation to the Scanner Rules tool, each on its own row', () => {
+		for (const text of ['Tokens (categories) vs. lexemes', 'Lookahead', 'Disambiguation']) {
+			expect(chipTexts(text)[0], text).toMatch(/^tool: Scanner Rules( · |$)/);
+		}
+		// The row itself, and not only the two points under it.
+		expect(chipTexts('Disambiguation')).toEqual([
+			'tool: Scanner Rules',
+			'notation: Tokens and lexemes'
+		]);
+		expect(chipTexts('maximal munch')).toEqual(['tool: Scanner Rules · foo+3']);
+		expect(chipTexts('first match')).toEqual(['tool: Scanner Rules · new foo']);
+	});
+
+	it('link Languages and alphabets, Regular Expressions and grep to the regex tool and to its notation section', () => {
+		for (const text of ['Languages and alphabets', 'Regular Expressions', 'grep']) {
+			const chips = chipTexts(text);
+			expect(chips[0], text).toBe('tool: Regular Expressions');
+			expect(chips, text).toContain('notation: Regular expressions');
+		}
+		// Alphabets and languages are defined in the section before it.
+		expect(chipTexts('Languages and alphabets')).toEqual([
+			'tool: Regular Expressions',
+			'notation: Sets, strings, and languages',
+			'notation: Regular expressions'
+		]);
 	});
 
 	it('leave the topics the site does not cover without links', () => {
@@ -532,7 +562,34 @@ describe('the state a link opens its tool on', () => {
 		const loaded = grammarState(state);
 		expect(loaded).toEqual(applyGrammarPreset(preset, { maxLength: DEFAULT_MAX_LENGTH }));
 		expect(grammarActivePreset(loaded)?.id).toBe('four-tuple');
-		expect(opened('Formal defn of CFG (N, T, S, P)', 'grammar').example).toBe('N ? T ? S ?');
+	});
+
+	it('names the four-tuple link by the panel of the grammar tool, not by the slide’s question', () => {
+		const link = opened('Formal defn of CFG (N, T, S, P)', 'grammar');
+		expect(grammarPreset('four-tuple')!.label).toBe('N ? T ? S ?');
+		expect(link.example).toBe('Four-tuple');
+		expect(link.example).toBe(FOUR_TUPLE);
+		expect(link.code).toBe(false);
+		// The title of the panel on the tool's page.
+		expect(source('../grammar/+page.svelte')).toContain(`<Panel title="${FOUR_TUPLE}"`);
+		expect(chipTexts('Formal defn of CFG (N, T, S, P)')).toEqual([
+			'tool: Context-Free Grammars · Four-tuple',
+			'notation: Context-free grammars'
+		]);
+	});
+
+	it('is named by an input, a view or a title, never by a question from a slide', () => {
+		const questions = new Set(
+			grammarPresets.flatMap((p) => (p.questions ?? []).map((q) => q.question))
+		);
+		expect(questions).toContain('N ? T ? S ?');
+		for (const link of toolLinks) {
+			if (link.open === undefined) continue;
+			const where = `${link.slug}: ${link.example}`;
+			expect(link.example, where).not.toMatch(/\?/);
+			expect(questions.has(link.example), where).toBe(false);
+			expect(link.example.trim(), where).toBe(link.example);
+		}
 	});
 
 	it('is the precedence-cascade preset of the ambiguity tool', () => {
@@ -607,7 +664,7 @@ describe('notation links', () => {
 			line(text).links.flatMap((l) => (l.kind === 'notation' ? [l.section] : []));
 		const expected: Record<string, NotationSection[]> = {
 			'Tokens (categories) vs. lexemes': ['tokens'],
-			'Languages and alphabets': ['sets'],
+			'Languages and alphabets': ['sets', 'regex'],
 			'Regular Expressions': ['regex'],
 			Disambiguation: ['tokens'],
 			'DFAs, NFAs': ['automata'],
@@ -800,6 +857,44 @@ describe('the site', () => {
 				expect(line(words.join(' ')).stars, item).toBe(stars.length);
 			}
 		});
+	});
+});
+
+describe('the contract', () => {
+	// docs/ARCHITECTURE.md §2 lists the routes and says what this page may read of a tool.
+	const doc = source('../../../docs/ARCHITECTURE.md');
+	const imports = [
+		...source('./topics.ts').matchAll(
+			/^import (type )?\{[^}]*\} from '\$lib\/tools\/([a-z-]+)\/([\w.-]+)';$/gm
+		)
+	].map((m) => ({ typeOnly: m[1] !== undefined, folder: m[2], module: m[3] }));
+
+	it('lists the route next to the notation page', () => {
+		const tree = /```\n(src\/[\s\S]*?)```/.exec(doc)?.[1].split('\n') ?? [];
+		const notation = tree.findIndex((l) => /^ {4}notation\/\+page\.svelte {2,}\S/.test(l));
+		expect(notation).toBeGreaterThan(0);
+		expect(tree[notation + 1]).toMatch(/^ {4}midterm\/\+page\.svelte {2,}\S/);
+	});
+
+	it('reads of a tool folder only its presets, its groupings and the types of its state', () => {
+		expect(imports.length).toBeGreaterThan(5);
+		for (const { typeOnly, folder, module } of imports) {
+			const where = `${folder}/${module}`;
+			expect(['presets', 'groupings', 'state'], where).toContain(module);
+			if (module === 'state') expect(typeOnly, where).toBe(true);
+			// A folder of a registered tool, never another tool's components or engine.
+			expect(toolBySlug(folder), where).toBeDefined();
+		}
+		expect(doc).toContain('src/routes/midterm/topics.ts');
+		for (const module of new Set(imports.map((i) => i.module)))
+			expect(doc, module).toMatch(new RegExp(`\\b${module}\\.ts\\b`));
+	});
+
+	it('names the tools it opens on a view of their own, which have no LinkStates entry', () => {
+		const viewed = [...new Set(toolLinks.filter((l) => l.open === 'view').map((l) => l.slug))];
+		expect(viewed.sort()).toEqual(['phases', 't-diagrams']);
+		const section = /### 5\.1a Cross-tool links\n([\s\S]*?)\n### /.exec(doc)?.[1] ?? '';
+		for (const slug of viewed) expect(section, slug).toContain(`\`${slug}\``);
 	});
 });
 

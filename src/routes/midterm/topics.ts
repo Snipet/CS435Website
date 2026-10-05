@@ -165,13 +165,24 @@ function flexOn(id: string, example: string, view?: FlexView): TopicLink {
 	return linked('flex', state, example);
 }
 
-/** The Context-Free Grammars tool on one of its presets, with the slide's questions. */
-function grammarOn(id: string): TopicLink {
+/**
+ * The Context-Free Grammars tool on one of its presets, with the slide's
+ * questions. The chip names what the link is for (`example`, a panel of the
+ * tool): a preset's own label may be a question from its slide ("N ? T ? S ?"),
+ * which says nothing on a chip.
+ */
+function grammarOn(id: string, example: string): TopicLink {
 	const preset = grammarPreset(id);
 	if (!preset) return tool('grammar');
 	const state = { ...preset.value, preset: preset.id };
-	return linked('grammar', state, preset.label);
+	return linked('grammar', state, example);
 }
+
+/**
+ * The panel of the Context-Free Grammars tool that lists N, T, S and P, by its
+ * title on the tool's page (the spec compares the two).
+ */
+export const FOUR_TUPLE = 'Four-tuple';
 
 /**
  * The Context-Free Grammars tool on the derivation of ( int + int ) * int
@@ -341,10 +352,12 @@ export const sections: readonly Section[] = [
 		topics: [
 			topic('Tokens (categories) vs. lexemes', { links: [tool('lexer'), notation('tokens')] }),
 			topic('Lookahead', { links: [lexerOn('lookahead-iffy')] }),
-			topic('Languages and alphabets', { links: [tool('regex'), notation('sets')] }),
+			topic('Languages and alphabets', {
+				links: [tool('regex'), notation('sets'), notation('regex')]
+			}),
 			topic('Regular Expressions', { stars: 1, links: [tool('regex'), notation('regex')] }),
 			topic('Disambiguation', {
-				links: [notation('tokens')],
+				links: [tool('lexer'), notation('tokens')],
 				sub: [
 					topic('maximal munch', { links: [lexerOn('foo-plus-3')] }),
 					topic('first match', { links: [lexerOn('new-foo')] })
@@ -382,7 +395,7 @@ export const sections: readonly Section[] = [
 		topics: [
 			topic('Grammars', { links: [tool('grammar'), notation('productions')] }),
 			topic('Formal defn of CFG (N, T, S, P)', {
-				links: [grammarOn('four-tuple'), notation('cfg')]
+				links: [grammarOn('four-tuple', FOUR_TUPLE), notation('cfg')]
 			}),
 			topic('Chomsky Hierarchy', {
 				stars: 1,
