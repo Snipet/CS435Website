@@ -54,7 +54,7 @@
 	<section class="section" id="reference" aria-labelledby="reference-title">
 		<header class="section-head">
 			<h2 id="reference-title">Reference</h2>
-			<p>Symbols and conventions shared by the tools</p>
+			<p>Symbols and conventions shared by the tools, and the midterm review list</p>
 		</header>
 		<ul class="cards">
 			<li>
@@ -69,6 +69,21 @@
 					>
 					<span class="card-sample mono" aria-hidden="true"
 						>L(A | B) = &#123; s | s ∈ L(A) or s ∈ L(B) &#125;</span
+					>
+				</a>
+			</li>
+			<li>
+				<a class="card" href={resolve('/midterm')}>
+					<span class="card-title">
+						Midterm Review
+						<Icon name="arrow-right" size={18} class="card-arrow" />
+					</span>
+					<span class="card-summary"
+						>The midterm review list, with the tools and notation sections on this site for each
+						topic.</span
+					>
+					<span class="card-sample" aria-hidden="true"
+						>★★ Phases of Compilation · ★ T-Diagrams · ★ Regular Expressions</span
 					>
 				</a>
 			</li>
