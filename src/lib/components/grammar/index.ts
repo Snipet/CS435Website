@@ -5,6 +5,7 @@ export { default as ParseTreeView } from './ParseTreeView.svelte';
 export { default as TokenStream } from './TokenStream.svelte';
 
 export {
+	boxWidth,
 	describeTree,
 	isEpsilonNode,
 	labelWidth,
@@ -13,6 +14,7 @@ export {
 	nodeAtPath,
 	pathKey,
 	splitSubscript,
+	treeSizing,
 	type LabelParts,
 	type TreeDirection,
 	type TreeLabeler,
@@ -20,8 +22,16 @@ export {
 	type TreeLayoutEdge,
 	type TreeLayoutNode,
 	type TreeLayoutOptions,
-	type TreePath
+	type TreePath,
+	type TreeSizing
 } from './tree-layout';
+export {
+	createGrammarInput,
+	type EditInfo,
+	type GrammarField,
+	type GrammarInput,
+	type GrammarInputHost
+} from './grammar-input';
 export {
 	classifyGrammarText,
 	convertArrows,

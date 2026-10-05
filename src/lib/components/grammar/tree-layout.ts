@@ -32,6 +32,13 @@ export const LEVEL_HEIGHT = 44;
 export const LABEL_GAP = 16;
 /** Space between a label box and the end of an edge. */
 export const EDGE_INSET = 2;
+/** Room on each side of a label inside its box (mark, hover and click area). */
+export const BOX_INSET = 6;
+/** Least side of a label's box. */
+export const BOX_SIZE = LABEL_HEIGHT + 2;
+/** Least width and height, in CSS px, of a node that can be clicked. */
+export const MIN_TARGET = 24;
+const TARGET_SLACK = 0.25;
 
 export interface LabelParts {
 	base: string;
@@ -307,6 +314,55 @@ export function layoutTree(tree: ParseNode, opts: TreeLayoutOptions = {}): TreeL
 		edges,
 		width: round(maxX - minX + 2 * padding),
 		height: round(2 * padding + LABEL_HEIGHT + maxDepth * levelHeight)
+	};
+}
+
+/** Width of the box around a label of `width`: the label with room, at least `least` wide. */
+export function boxWidth(width: number, least: number = BOX_SIZE): number {
+	return Math.max(width + 2 * BOX_INSET, least);
+}
+
+export interface TreeSizing {
+	/** CSS px per layout unit when the tree has room. */
+	scale: number;
+	/** The same at the smallest size the tree is drawn at; narrower than that, it scrolls. */
+	minScale: number;
+	/** Least width, and the height, of a node's click area in layout units. */
+	target: number;
+	/** `gap` and `levelHeight` for `layoutTree` that keep those areas apart. */
+	gap: number;
+	levelHeight: number;
+}
+
+/**
+ * How far a tree with labels of `labelSize` px may shrink. A tree that is only
+ * looked at shrinks to labels of `minLabelSize` px. One with clickable nodes
+ * stops where a node's click area would get smaller than MIN_TARGET px a side;
+ * with labels below FONT_SIZE px the areas are larger than the label boxes
+ * instead, and the labels stand as far apart as the areas need.
+ */
+export function treeSizing(
+	labelSize: number,
+	minLabelSize: number,
+	interactive: boolean
+): TreeSizing {
+	const size = Math.max(1, labelSize);
+	const scale = size / FONT_SIZE;
+	let minScale = Math.max(1, Math.min(minLabelSize, size)) / FONT_SIZE;
+	let target = BOX_SIZE;
+	if (interactive) {
+		minScale = Math.min(scale, Math.max(minScale, MIN_TARGET / BOX_SIZE));
+		// A little over, so an area the browser snaps to its layout grid is not under.
+		target = Math.max(BOX_SIZE, (MIN_TARGET + TARGET_SLACK) / minScale);
+	}
+	return {
+		scale,
+		minScale,
+		target,
+		// Two one-character labels side by side are the closest two areas get;
+		// this leaves one unit between them.
+		gap: Math.max(LABEL_GAP, target - CHAR_WIDTH + 1),
+		levelHeight: Math.max(LEVEL_HEIGHT, target)
 	};
 }
 

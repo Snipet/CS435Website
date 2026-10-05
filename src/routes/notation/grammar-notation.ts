@@ -2,7 +2,7 @@
  * Examples for the "Grammars and parsing" sections of the notation page, taken
  * from the three parsing decks. Trees and derivations are written out by hand.
  */
-import { highlightGrammar, type ChainStep } from '$lib/components/grammar';
+import { highlightGrammar, tokenizeGrammarText, type ChainStep } from '$lib/components/grammar';
 
 export interface CodeSegment {
 	text: string;
@@ -28,7 +28,7 @@ export function grammarSegments(
 	return out;
 }
 
-/** Top-Down Parsing, slide 4. */
+/** Top-Down Parsing, slides 4 and 31–34. */
 export const expressionGrammar = `E → T | T + E
 T → int | int * T | ( E )`;
 
@@ -98,14 +98,50 @@ export const rewriteChain: { forms: string[][]; steps: ChainStep[]; nonterminals
 	nonterminals: ['E']
 };
 
-/** Top-Down Parsing, slides 31–34: one function per production, numbered from 1. */
-export const productionFunctions: { name: string; number: number; production: string }[] = [
-	{ name: 'E', number: 1, production: 'E → T' },
-	{ name: 'E', number: 2, production: 'E → T + E' },
-	{ name: 'T', number: 1, production: 'T → int' },
-	{ name: 'T', number: 2, production: 'T → int * T' },
-	{ name: 'T', number: 3, production: 'T → ( E )' }
-];
+export interface ProductionFunction {
+	/** The non-terminal. */
+	name: string;
+	/** Position of the production among those of `name`, from 1. */
+	number: number;
+	production: string;
+}
+
+/**
+ * One function per production, numbered from 1 for each non-terminal in the
+ * order the grammar text writes its productions.
+ */
+export function numberProductions(text: string): ProductionFunction[] {
+	const tokens = tokenizeGrammarText(text).filter((t) => t.kind !== 'comment');
+	const out: ProductionFunction[] = [];
+	const counts = new Map<string, number>();
+	let name: string | null = null;
+	let rhs: string[] = [];
+	const close = () => {
+		if (name === null) return;
+		const number = (counts.get(name) ?? 0) + 1;
+		counts.set(name, number);
+		out.push({ name, number, production: `${name} → ${rhs.join(' ') || 'ε'}` });
+		rhs = [];
+	};
+	for (let k = 0; k < tokens.length; k++) {
+		const t = tokens[k];
+		if (t.kind === 'symbol' && tokens[k + 1]?.kind === 'arrow') {
+			close();
+			name = t.text;
+			k++;
+		} else if (t.kind === 'bar') close();
+		else if (t.kind !== 'epsilon') rhs.push(text.slice(t.from, t.to));
+	}
+	close();
+	return out;
+}
+
+/**
+ * Top-Down Parsing, slides 31–34: the functions E1, E2, T1, T2, T3. The slides
+ * number them for `expressionGrammar`, whose order of productions differs from
+ * the grammar of the instance tree on slide 20.
+ */
+export const productionFunctions: ProductionFunction[] = numberProductions(expressionGrammar);
 
 /** Top-Down Parsing, slides 7, 11 and 16: the status messages, word for word. */
 export const statusMessages: { text: string; when: string }[] = [

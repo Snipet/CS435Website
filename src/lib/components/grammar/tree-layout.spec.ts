@@ -11,11 +11,15 @@ import {
 	sumTrees
 } from './fixtures';
 import {
+	BOX_SIZE,
 	CHAR_WIDTH,
+	FONT_SIZE,
 	LABEL_GAP,
 	LABEL_HEIGHT,
 	LEVEL_HEIGHT,
+	MIN_TARGET,
 	SUB_SCALE,
+	boxWidth,
 	describeTree,
 	isEpsilonNode,
 	labelWidth,
@@ -24,6 +28,7 @@ import {
 	nodeAtPath,
 	pathKey,
 	splitSubscript,
+	treeSizing,
 	type TreeLayout
 } from './tree-layout';
 
@@ -308,6 +313,109 @@ describe('labelWidth', () => {
 		expect(labelWidth({ base: 'E', sub: '12' })).toBeCloseTo(CHAR_WIDTH * (1 + 2 * SUB_SCALE));
 		expect(labelWidth({ base: '', sub: '' })).toBeCloseTo(CHAR_WIDTH);
 		expect(labelWidth({ base: 'S’', sub: '' })).toBeCloseTo(2 * CHAR_WIDTH);
+	});
+});
+
+describe('boxWidth', () => {
+	it('leaves room around the label and is never narrower than it is high', () => {
+		expect(boxWidth(3 * CHAR_WIDTH)).toBeCloseTo(3 * CHAR_WIDTH + 12);
+		expect(boxWidth(CHAR_WIDTH)).toBe(BOX_SIZE);
+		expect(boxWidth(CHAR_WIDTH, 30)).toBe(30);
+		expect(boxWidth(40, 30)).toBe(52);
+	});
+});
+
+describe('treeSizing', () => {
+	const labelSizes = [8, 10, 12, 14, 15, 16, 18, 20, 24, 32];
+	const minSizes = [6, 11, 16, 40];
+	const cases = labelSizes.flatMap((size) => minSizes.map((min): [number, number] => [size, min]));
+
+	it('lets a tree that is only looked at shrink to the smallest label size', () => {
+		expect(treeSizing(16, 11, false)).toEqual({
+			scale: 1,
+			minScale: 11 / FONT_SIZE,
+			target: BOX_SIZE,
+			gap: LABEL_GAP,
+			levelHeight: LEVEL_HEIGHT
+		});
+		expect(treeSizing(20, 11, false).scale).toBe(1.25);
+		// The smallest size is never above the natural one.
+		expect(treeSizing(10, 11, false).minScale).toBe(10 / FONT_SIZE);
+	});
+
+	// A wide tree at 360 px: shrunk to 11 px labels, a one-character node would
+	// be a 16.5 px target.
+	it('stops a tree with clickable nodes from shrinking below 24 px targets', () => {
+		const looked = treeSizing(16, 11, false);
+		expect(boxWidth(CHAR_WIDTH, looked.target) * looked.minScale).toBeCloseTo(16.5);
+		const clicked = treeSizing(16, 11, true);
+		expect(clicked.minScale).toBe(1);
+		expect(boxWidth(CHAR_WIDTH, clicked.target) * clicked.minScale).toBeGreaterThanOrEqual(
+			MIN_TARGET
+		);
+		expect(clicked.target * clicked.minScale).toBeGreaterThanOrEqual(MIN_TARGET);
+	});
+
+	it.each(cases)('keeps every target at least 24 px: labels %d px, smallest %d px', (size, min) => {
+		const s = treeSizing(size, min, true);
+		expect(s.target * s.minScale).toBeGreaterThanOrEqual(MIN_TARGET);
+		expect(s.target).toBeGreaterThanOrEqual(BOX_SIZE);
+		expect(s.minScale).toBeLessThanOrEqual(s.scale);
+		// Clickable nodes never let a tree shrink further than it otherwise would.
+		expect(s.minScale).toBeGreaterThanOrEqual(treeSizing(size, min, false).minScale);
+		expect(s.levelHeight).toBeGreaterThanOrEqual(s.target);
+	});
+
+	it('shrinks a tree with larger labels as far as the targets allow', () => {
+		const s = treeSizing(24, 11, true);
+		expect(s.scale).toBe(1.5);
+		expect(s.minScale).toBe(1);
+	});
+
+	it('does not change the drawing at the default label size', () => {
+		const s = treeSizing(16, 11, true);
+		expect(s.gap).toBe(LABEL_GAP);
+		expect(s.levelHeight).toBe(LEVEL_HEIGHT);
+		for (const [, tree] of samples) {
+			expect(layoutTree(tree, { gap: s.gap, levelHeight: s.levelHeight })).toEqual(
+				layoutTree(tree)
+			);
+		}
+	});
+
+	it('moves smaller labels apart as far as their targets need', () => {
+		const s = treeSizing(12, 11, true);
+		expect(s.minScale).toBe(0.75);
+		expect(s.target).toBeGreaterThan(BOX_SIZE);
+		expect(s.gap).toBeGreaterThan(LABEL_GAP);
+		expect(treeSizing(12, 11, false).gap).toBe(LABEL_GAP);
+	});
+
+	it.each(samples)('keeps the targets of a level apart at every label size: %s', (_, tree) => {
+		for (const size of labelSizes) {
+			const s = treeSizing(size, 11, true);
+			const layout = layoutTree(tree, { gap: s.gap, levelHeight: s.levelHeight });
+			for (const level of levels(layout)) {
+				for (let i = 1; i < level.length; i++) {
+					const a = level[i - 1];
+					const b = level[i];
+					const apart =
+						b.x - boxWidth(b.width, s.target) / 2 - (a.x + boxWidth(a.width, s.target) / 2);
+					expect(apart).toBeGreaterThanOrEqual(1 - EPS);
+				}
+			}
+			// Rows are a level apart, and a target is no higher than that.
+			for (const n of layout.nodes) {
+				if (n.parent !== null)
+					expect(n.y - layout.nodes[n.parent].y).toBeGreaterThanOrEqual(s.target);
+			}
+		}
+	});
+
+	it('stays finite for sizes that make no sense', () => {
+		for (const s of [treeSizing(0, 0, true), treeSizing(-4, 11, true), treeSizing(16, -1, false)]) {
+			expect(Object.values(s).every((v) => Number.isFinite(v) && v > 0)).toBe(true);
+		}
 	});
 });
 

@@ -27,12 +27,8 @@
 	import { tick } from 'svelte';
 	import CodeEditor from '$lib/components/ui/CodeEditor.svelte';
 	import type { Diagnostic } from '$lib/theory/diagnostics';
-	import {
-		convertArrows,
-		highlightGrammar,
-		paletteInsertion,
-		type ArrowConversion
-	} from './grammar-text';
+	import { createGrammarInput } from './grammar-input';
+	import { highlightGrammar } from './grammar-text';
 
 	interface Props {
 		value?: string;
@@ -86,74 +82,29 @@
 	// Called by CodeEditor while it renders, so it follows the lists and `ebnf`.
 	const highlight = (text: string) => highlightGrammar(text, { nonterminals, terminals, ebnf });
 
-	// What the last edit was. Undo and redo are not rewritten (undoing a
-	// conversion would convert again), nor is text an input method is composing.
-	let lastEdit = { history: false, composing: false };
+	// The palette and the `->` conversion (see grammar-input.ts).
+	const editing = createGrammarInput({
+		field: () => element,
+		// execCommand keeps the browser's undo stack; each call fires `input`.
+		insertText: (text) =>
+			typeof document.execCommand === 'function' && document.execCommand('insertText', false, text),
+		setText: async (text) => {
+			value = text;
+			await tick();
+		},
+		readonly: () => readonly,
+		ebnf: () => ebnf,
+		oninput: (text) => oninput?.(text)
+	});
+
 	$effect(() => {
 		const ta = element;
 		if (!ta) return;
-		// Capturing, so it runs before CodeEditor's own handler calls `handleInput`.
-		const note = (event: Event) => {
-			const e = event as InputEvent;
-			lastEdit = {
-				history: (e.inputType ?? '').startsWith('history'),
-				composing: e.isComposing === true
-			};
-		};
+		// Capturing, so it runs before CodeEditor's own handler calls `editing.input`.
+		const note = (event: Event) => editing.note(event as InputEvent);
 		ta.addEventListener('input', note, true);
 		return () => ta.removeEventListener('input', note, true);
 	});
-
-	let converting = false;
-
-	/** Replaces each `->` in the textarea and puts the caret back where it was. */
-	async function applyArrows(ta: HTMLTextAreaElement, result: ArrowConversion) {
-		// execCommand keeps the browser's undo stack; each call fires `input`.
-		let native = typeof document.execCommand === 'function';
-		for (let k = result.ranges.length - 1; k >= 0 && native; k--) {
-			ta.setSelectionRange(result.ranges[k].start, result.ranges[k].end);
-			native = document.execCommand('insertText', false, '→');
-		}
-		if (ta.value !== result.text) {
-			value = result.text;
-			await tick();
-		}
-		ta.setSelectionRange(result.caret, result.caret);
-	}
-
-	async function handleInput(next: string) {
-		if (converting) return;
-		const ta = element;
-		if (ta && !readonly && !lastEdit.history && !lastEdit.composing) {
-			const result = convertArrows(next, ta.selectionStart ?? next.length, { ebnf });
-			if (result.changed) {
-				converting = true;
-				try {
-					await applyArrows(ta, result);
-				} finally {
-					converting = false;
-				}
-				oninput?.(value);
-				return;
-			}
-		}
-		oninput?.(next);
-	}
-
-	async function insert(symbol: string) {
-		const ta = element;
-		if (!ta || readonly) return;
-		const start = ta.selectionStart ?? value.length;
-		const end = ta.selectionEnd ?? start;
-		const text = paletteInsertion(symbol, value, start, end);
-		ta.focus();
-		ta.setSelectionRange(start, end);
-		if (document.execCommand?.('insertText', false, text)) return;
-		value = value.slice(0, start) + text + value.slice(end);
-		oninput?.(value);
-		await tick();
-		ta.setSelectionRange(start + text.length, start + text.length);
-	}
 
 	let focusIndex = $state(0);
 	const buttons: HTMLButtonElement[] = $state([]);
@@ -187,7 +138,7 @@
 							title={item.title}
 							aria-label="Insert {item.insert} ({item.name})"
 							onmousedown={(event) => event.preventDefault()}
-							onclick={() => insert(item.insert)}
+							onclick={() => editing.insert(item.insert)}
 							onkeydown={paletteKeydown}
 							onfocus={() => (focusIndex = i)}>{item.insert}</button
 						>
@@ -210,7 +161,7 @@
 		{maxRows}
 		{placeholder}
 		tabInserts={false}
-		oninput={handleInput}
+		oninput={editing.input}
 	/>
 </div>
 

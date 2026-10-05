@@ -1070,8 +1070,11 @@
 
 				<h3>Typing the symbols</h3>
 				<p>
-					Grammar fields turn <span class="f">-&gt;</span> into <span class="f">→</span> as you type,
-					and the buttons above a field insert a symbol at the cursor.
+					Grammar fields turn <span class="f">-&gt;</span> into <span class="f">→</span> as you
+					type, and the buttons above a field insert a symbol at the cursor. Inside quotes and
+					comments
+					<span class="f">-&gt;</span> stays as typed, so a terminal spelled that way is written
+					<span class="f">'-&gt;'</span>.
 				</p>
 				<div class="table-wrap">
 					<table class="ref compact">
@@ -1420,8 +1423,13 @@
 				<p>
 					The function that checks the <i>i</i>-th production of a non-terminal carries that number,
 					counted from 1 in the order the productions are written. The function without a number
-					tries them in that order.
+					tries them in that order. The slides number the functions for the grammar below, which has
+					the same productions as the grammar of the tree above in another order:
 				</p>
+				<figure>
+					{@render grammar(expressionGrammar)}
+					<figcaption><CitationTag cite={{ deck: '11', slide: [31, 34] }} /></figcaption>
+				</figure>
 				<div class="table-wrap">
 					<table class="ref compact">
 						<thead><tr><th scope="col">Function</th><th scope="col">Checks</th></tr></thead>

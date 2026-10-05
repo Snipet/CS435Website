@@ -14,10 +14,12 @@
 		FONT_SIZE,
 		LABEL_HEIGHT,
 		SUB_SCALE,
+		boxWidth,
 		describeTree,
 		layoutTree,
 		neighborOf,
 		pathKey,
+		treeSizing,
 		type TreeDirection,
 		type TreeLabeler,
 		type TreeLayout,
@@ -43,7 +45,11 @@
 		ariaLabel?: string;
 		/** Label size in px when the tree has room. */
 		labelSize?: number;
-		/** The tree shrinks with its container down to this label size, then scrolls sideways. */
+		/**
+		 * The tree shrinks with its container down to this label size, then scrolls
+		 * sideways. With `onnodeclick` it stops shrinking sooner: every node stays a
+		 * target of at least 24 px a side (see `treeSizing`).
+		 */
 		minLabelSize?: number;
 	}
 
@@ -70,8 +76,11 @@
 	/** Trees up to this size are spelled out for screen readers. */
 	const DESCRIBE_MAX = 200;
 
-	const layout = $derived(layoutTree(tree, { labels }));
 	const interactive = $derived(!!onnodeclick);
+	const sizing = $derived(treeSizing(labelSize, minLabelSize, interactive));
+	const layout = $derived(
+		layoutTree(tree, { labels, gap: sizing.gap, levelHeight: sizing.levelHeight })
+	);
 
 	type Mark = 'current' | 'matched' | 'fresh';
 	const MARK_TONE = { current: 'active', matched: 'accept', fresh: 'info' } as const;
@@ -143,8 +152,6 @@
 		});
 	});
 
-	const scale = $derived(labelSize / FONT_SIZE);
-	const minScale = $derived(Math.min(minLabelSize, labelSize) / FONT_SIZE);
 	const color = $derived(tone === undefined ? null : toneColors(tone).fg);
 
 	const label = $derived.by(() => {
@@ -226,14 +233,8 @@
 
 {#snippet body(n: TreeLayoutNode, w: number)}
 	{@const mark = marks.get(n.id)}
-	<rect
-		class="hit"
-		x={-w / 2}
-		y={-LABEL_HEIGHT / 2 - 1}
-		width={w}
-		height={LABEL_HEIGHT + 2}
-		rx="5"
-	/>
+	{@const hit = boxWidth(n.width, sizing.target)}
+	<rect class="hit" x={-hit / 2} y={-sizing.target / 2} width={hit} height={sizing.target} rx="5" />
 	{#if mark}
 		{@const c = toneColors(MARK_TONE[mark])}
 		<rect
@@ -274,9 +275,8 @@
 <div
 	bind:this={box}
 	class="parse-tree"
-	style="--tree-w: {frame.width * scale}px; --tree-min: {frame.width * minScale}px;{color
-		? ` --tree-fg: ${color};`
-		: ''}"
+	style="--tree-w: {frame.width * sizing.scale}px; --tree-min: {frame.width *
+		sizing.minScale}px;{color ? ` --tree-fg: ${color};` : ''}"
 	role={scrollRegion ? 'group' : undefined}
 	aria-label={scrollRegion ? `${ariaLabel}, scrolls sideways` : undefined}
 	tabindex={scrollRegion ? 0 : undefined}
@@ -284,8 +284,8 @@
 	<svg
 		bind:this={svg}
 		viewBox="0 0 {frame.width} {frame.height}"
-		width={frame.width * scale}
-		height={frame.height * scale}
+		width={frame.width * sizing.scale}
+		height={frame.height * sizing.scale}
 		role={interactive ? 'group' : 'img'}
 		aria-label={label}
 		aria-describedby={interactive ? `${uid}-keys` : undefined}
@@ -305,7 +305,7 @@
 		</g>
 		{#each layout.nodes as n (n.key)}
 			{@const p = frame.nodes[n.index]}
-			{@const w = Math.max(n.width + 12, 24)}
+			{@const w = boxWidth(n.width)}
 			{@const opacity = p.opacity * (dimmed.has(n.id) ? 0.4 : 1)}
 			{#if interactive && n.node}
 				<g
