@@ -8,7 +8,7 @@
 	import { countText, verdictNote, verdictTone, type Listing } from './model';
 
 	interface Props {
-		listing: Pick<Listing, 'trees' | 'truncated'>;
+		listing: Pick<Listing, 'trees' | 'total'>;
 		/** What the trees belong to: "the grammar", "the rewritten grammar". */
 		what?: string;
 		/** A further sentence after the verdict. */

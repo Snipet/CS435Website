@@ -10,7 +10,15 @@
 	import CompareCheck from './CompareCheck.svelte';
 	import type { CompareResult } from './compare';
 	import Fact from './Fact.svelte';
-	import { treeTone, type Listing, type RewriteAnalysis, type TreeEntry } from './model';
+	import {
+		rewriteSummary,
+		shownText,
+		treeTitle,
+		treeTone,
+		type Listing,
+		type RewriteAnalysis,
+		type TreeEntry
+	} from './model';
 	import type { AmbiguityState } from './state';
 	import TreeCard from './TreeCard.svelte';
 	import Verdict from './Verdict.svelte';
@@ -59,32 +67,17 @@
 	/** The trees are for an earlier rewritten grammar: the one typed has errors. */
 	const outdated = $derived(rewrite !== typed);
 	const listing = $derived(rewrite.listing);
-	const crossed = $derived(rewrite.matches.filter((m) => m === null).length);
 	/** Width share of a group of cards: its number of trees, up to four. */
 	const span = (n: number) => Math.max(1, Math.min(4, n));
 
 	/** Slide 10: "int * int + int has only one parse tree now". */
 	const onlyOneNow = $derived(
-		listing?.trees.length === 1 &&
-			!listing.truncated &&
-			original !== null &&
-			(original.trees.length > 1 || original.truncated)
+		listing?.total === 1 && original !== null && original.total !== 1 && original.trees.length > 0
 			? 'The string has only one parse tree now.'
 			: ''
 	);
 
-	const originalSummary = $derived.by(() => {
-		if (!original || !listing) return '';
-		const n = original.trees.length;
-		if (n === 0) return 'The original grammar has no parse tree for the string.';
-		if (crossed === 0)
-			return n === 1
-				? 'Its tree has the structure of a tree of the rewritten grammar.'
-				: `All ${n} trees have the structure of a tree of the rewritten grammar.`;
-		const which =
-			n === 1 ? 'The tree is' : `${crossed} of the ${n} trees ${crossed === 1 ? 'is' : 'are'}`;
-		return `${which} crossed out: no tree of the rewritten grammar has ${crossed === 1 ? 'its' : 'their'} structure.`;
-	});
+	const originalSummary = $derived(original && listing ? rewriteSummary(original, rewrite) : '');
 </script>
 
 <div class="rewrite-tab">
@@ -157,7 +150,7 @@
 								{@const origin = rewrite.origins[entry.number - 1]}
 								{@const value = entry.value ? evaluationText(entry.value) : null}
 								<TreeCard
-									title="Tree {entry.number}"
+									title={treeTitle(entry)}
 									grouping={entry.grouping}
 									tree={drawn(entry)}
 									tone={treeTone(origin ?? entry.number)}
@@ -165,20 +158,22 @@
 									level={4}
 								>
 									<Fact label="Bracket form" mono>{entry.bracket}</Fact>
-									{#if value}<Fact label="Value" mono>{value}</Fact>{/if}
+									{#if value}<Fact label="Values" mono>{value}</Fact>{/if}
 									{#if origin === null}
 										<p class="why">No tree of the original grammar has this structure.</p>
 									{/if}
 								</TreeCard>
 							{/each}
 						</div>
-						{#if listing.truncated}<p class="more">… and more trees.</p>{/if}
+						{#if listing.truncated}
+							<p class="more">{shownText(listing, listing.trees.length)}</p>
+						{/if}
 					{/if}
 				</section>
 
 				<section
 					class="group"
-					style="--n: {span(original.trees.length)}"
+					style="--n: {span(rewrite.originals.length)}"
 					aria-labelledby="{uid}-old"
 				>
 					<header class="group-head">
@@ -186,35 +181,41 @@
 						<p class="summary" role="status">{originalSummary}</p>
 					</header>
 					<div class="cards">
-						{#each original.trees as entry (entry.number)}
-							{@const match = rewrite.matches[entry.number - 1]}
+						{#each rewrite.originals as entry, i (entry.bracket)}
+							{@const match = rewrite.matches[i]}
+							{@const crossed = rewrite.comparable && match === null}
 							<TreeCard
-								title="Tree {entry.number}"
+								title={treeTitle(entry)}
 								grouping={entry.grouping}
 								tree={drawn(entry)}
 								tone={treeTone(entry.number)}
 								{labels}
-								rejected={match === null}
+								rejected={crossed}
 								level={4}
 							>
 								{#snippet status()}
-									{#if match === null}
+									{#if crossed}
 										<Badge tone="reject">Crossed out</Badge>
-									{:else}
+									{:else if match !== null}
 										<Badge tone="accept">Kept</Badge>
 									{/if}
 								{/snippet}
-								<p class="why">
-									{#if match === null}
-										No tree of the rewritten grammar has this structure.
-									{:else}
-										Same structure as tree {match} of the rewritten grammar.
-									{/if}
-								</p>
+								{#if crossed}
+									<p class="why">No tree of the rewritten grammar has this structure.</p>
+								{:else if match}
+									<p class="why">Same structure as tree {match} of the rewritten grammar.</p>
+								{:else if match === 0}
+									<p class="why">
+										Same structure as a tree of the rewritten grammar that is not among the
+										{listing.trees.length} shown.
+									</p>
+								{/if}
 							</TreeCard>
 						{/each}
 					</div>
-					{#if original.truncated}<p class="more">… and more trees.</p>{/if}
+					{#if original.truncated}
+						<p class="more">{shownText(original, rewrite.originals.length)}</p>
+					{/if}
 				</section>
 			</div>
 			{#if links.length}

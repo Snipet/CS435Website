@@ -52,7 +52,9 @@ function view(preset: AmbiguityPreset) {
 	const original = source.ready ? listTrees(source.grammar!, source) : null;
 	const rewrite = analyzeRewrite(source, original, state.rewrite);
 	const declarations =
-		source.grammar && original ? analyzeDeclarations(source.grammar, original, state.decls) : null;
+		source.grammar && original
+			? analyzeDeclarations(source.grammar, source, original, state.decls)
+			: null;
 	const labels = leafLabeler(source.display);
 	return { preset, state, source, original, rewrite, declarations, labels };
 }
@@ -136,6 +138,28 @@ describe('every preset', () => {
 			presets[0].id
 		);
 		expect(presetFor({ ...state, input: 'int' })).toBeUndefined();
+	});
+
+	it('stays the one shown when a view switch is turned', () => {
+		// Slides 3–4 and slide 6 share the grammar and the string.
+		const sum = presetState(presets.find((p) => p.id === 'sum')!);
+		const definition = presetState(presets.find((p) => p.id === 'definition')!);
+		expect([sum.grammar, sum.input]).toEqual([definition.grammar, definition.input]);
+		// Turning the derivations on under slides 3–4 does not move the page to slide 6 …
+		const turnedOn = { ...sum, derivations: true };
+		expect(presetFor(turnedOn, 'sum')?.id).toBe('sum');
+		expect(presetFor({ ...sum, flipped: [2] }, 'sum')?.id).toBe('sum');
+		// … nor turning them off under slide 6 to slides 3–4.
+		expect(presetFor({ ...definition, derivations: false }, 'definition')?.id).toBe('definition');
+		expect(presetFor({ ...definition, flipped: [1] }, 'definition')?.id).toBe('definition');
+		// A link carries no preset: the switch says which of the two it is.
+		expect(presetFor(turnedOn)?.id).toBe('definition');
+		expect(presetFor(turnedOn, null)?.id).toBe('definition');
+		expect(presetFor(sum)?.id).toBe('sum');
+		// The preset loaded last counts only while it fits the state.
+		expect(presetFor(sum, 'cascade')?.id).toBe('sum');
+		expect(presetFor({ ...sum, input: 'int' }, 'sum')).toBeUndefined();
+		for (const p of presets) expect(presetFor(presetState(p), p.id)?.id).toBe(p.id);
 	});
 
 	it('starts on int * int + int (slide 5)', () => {

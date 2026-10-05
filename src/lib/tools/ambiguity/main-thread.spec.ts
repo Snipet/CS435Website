@@ -31,7 +31,9 @@ describe('the page on the main thread', () => {
 			for (const entry of original.trees) leftmostChain(source.grammar!, entry.tree);
 			const rewrite = analyzeRewrite(source, original, state.rewrite);
 			expect(rewrite.empty).toBe(state.rewrite === '');
-			expect(analyzeDeclarations(source.grammar!, original, state.decls).problems).toEqual([]);
+			expect(analyzeDeclarations(source.grammar!, source, original, state.decls).problems).toEqual(
+				[]
+			);
 			expect(buildCascade(state.levels, state.atoms).grammar).not.toBeNull();
 			expect(presetFor(state)).toBe(preset);
 		}

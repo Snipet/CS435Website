@@ -235,19 +235,32 @@ const sameDeclarations = (a: AmbiguityState['decls'], b: AmbiguityState['decls']
 	a.every((d, i) => d.assoc === b[i].assoc && d.ops.trim() === b[i].ops.trim());
 
 /**
- * The preset the page is showing: the one with this grammar, string, rewritten
- * grammar, declarations and derivations switch. The other fields (tab, values,
- * labels, abbreviation, the cascade builder, the compared length) may differ.
+ * The preset the page is showing: one with this grammar, string, rewritten
+ * grammar and declarations. The other fields (tab, values, labels, the view
+ * switches, the cascade builder, the compared length) may differ.
+ *
+ * Two presets share the grammar and the string of slides 3–4 and differ only
+ * in whether the leftmost derivations are shown. `loaded` is the id of the
+ * preset that was loaded last: while it still fits, it stays the one shown,
+ * so turning a view switch does not move the page to the other preset.
+ * Without it (a state from a link), the derivations switch decides.
  */
-export function presetFor(state: AmbiguityState): AmbiguityPreset | undefined {
-	return presets.find((p) => {
+export function presetFor(
+	state: AmbiguityState,
+	loaded?: string | null
+): AmbiguityPreset | undefined {
+	const fitting = presets.filter((p) => {
 		const v = presetState(p);
 		return (
 			v.grammar === state.grammar &&
 			v.input === state.input &&
 			v.rewrite === state.rewrite &&
-			v.derivations === state.derivations &&
 			sameDeclarations(v.decls, state.decls)
 		);
 	});
+	return (
+		fitting.find((p) => p.id === loaded) ??
+		fitting.find((p) => presetState(p).derivations === state.derivations) ??
+		fitting[0]
+	);
 }

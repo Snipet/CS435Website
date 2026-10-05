@@ -87,6 +87,49 @@ describe('buildCascade', () => {
 		expect(parseGrammar(c.text).grammar!.terminals).toEqual(['==', '!=', '+', 'id']);
 	});
 
+	it('keeps an operator of several characters whole when it is typed without quotes', () => {
+		// As the C table writes its levels: == != then && then ||.
+		const c = buildCascade([left('||'), left('&&'), left('== !='), left('<< >>')], 'int');
+		expect(c.problems).toEqual([]);
+		expect(c.text).toBe(
+			[
+				'E → E "||" T | T',
+				'T → T "&&" F | F',
+				'F → F "==" G | F "!=" G | G',
+				'G → G "<<" H | G ">>" H | H',
+				'H → int'
+			].join('\n')
+		);
+		expect(parseGrammar(c.text).grammar!.terminals).toEqual([
+			'||',
+			'&&',
+			'==',
+			'!=',
+			'<<',
+			'>>',
+			'int'
+		]);
+		// With and without quotes: the same grammar.
+		expect(buildCascade([left('"==" !=')], 'int').text).toBe(
+			buildCascade([left('== "!="')], 'int').text
+		);
+		// The generated grammar parses a string of those operators in one way.
+		const tokens = ['int', '==', 'int', '&&', 'int', '||', 'int', '!=', 'int'];
+		const { trees } = parseTrees(c.grammar!, tokens);
+		expect(trees.map((t) => shapeText(shapeOf(t)))).toEqual([
+			'((int == int) && int) || (int != int)'
+		]);
+	});
+
+	it('reads characters typed without a space as one operator', () => {
+		const c = buildCascade([left('+-')], 'int');
+		expect(c.text).toBe('E → E "+-" T | T\nT → int');
+		expect(buildCascade([left('+ -')], 'int').text).toBe('E → E + T | E - T | T\nT → int');
+		// A repeat is found on whole operators: = and == are two.
+		const two = buildCascade([right('='), left('== =')], 'int');
+		expect(two.problems).toEqual(['= is on levels 1 and 2: the grammar is ambiguous for =.']);
+	});
+
 	it('leaves out a level without operators and reports repeats', () => {
 		const c = buildCascade([left('+'), left(' '), left('* +')], DEFAULT_ATOMS);
 		expect(c.text).toBe('E → E + T | T\nT → T * F | T + F | F\nF → int | ( E )');

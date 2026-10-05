@@ -17,17 +17,16 @@
  *   F → int | ( E )
  *
  * In the atoms, E is the start symbol of the generated grammar.
+ *
+ * The operators of a level are words separated by spaces (operators.ts), so
+ * `== !=` is a level with the two operators == and !=; the generated grammar
+ * writes them in quotes, as a grammar has to.
  */
-import {
-	makeGrammar,
-	parseGrammar,
-	printGrammar,
-	tokenizeInput,
-	type Grammar
-} from '$lib/theory/grammar';
+import { makeGrammar, parseGrammar, printGrammar, type Grammar } from '$lib/theory/grammar';
+import { operatorsOf } from './operators';
 
 export interface CascadeLevel {
-	/** Operators of this level, separated by spaces (`+ -`). */
+	/** Operators of this level, separated by spaces (`+ -`, `== !=`). */
 	ops: string;
 	assoc: 'left' | 'right';
 }
@@ -81,7 +80,7 @@ export function buildCascade(levels: readonly CascadeLevel[], atoms: string): Ca
 	}
 	const alternatives = parsed.grammar.productions.map((p) => p.rhs);
 
-	const operators = levels.map((level) => [...new Set(tokenizeInput(level.ops, []).tokens)]);
+	const operators = levels.map((level) => [...new Set(operatorsOf(level.ops))]);
 	const seen = new Map<string, number>();
 	operators.forEach((ops, i) => {
 		if (ops.length === 0) problems.push(`Level ${i + 1} has no operator and is left out.`);

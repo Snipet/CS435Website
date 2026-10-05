@@ -44,7 +44,9 @@ function setup(model: AmbiguityState) {
 		typed: rewrite,
 		rewrite,
 		analysis:
-			source.grammar && original ? analyzeDeclarations(source.grammar, original, model.decls) : null
+			source.grammar && original
+				? analyzeDeclarations(source.grammar, source, original, model.decls)
+				: null
 	};
 }
 
@@ -56,6 +58,11 @@ const idle = (result: CompareResult | null): ComponentProps<typeof RewriteTab>['
 });
 
 const preset = (id: string) => presetState(presets.find((p) => p.id === id)!);
+
+/** Six operands: 42 trees under an ambiguous grammar, of which 20 are listed. */
+const SIX = 'int + int + int + int + int + int';
+const LEFT_NESTED = '((((int + int) + int) + int) + int) + int';
+const RIGHT_NESTED = 'int + (int + (int + (int + (int + int))))';
 
 describe('the page', () => {
 	const { body, head } = render(Page);
@@ -81,9 +88,20 @@ describe('the page', () => {
 		expect(shown).toContain('Ambiguity, Precedence, Associativity & Top-Down Parsing · slide 5');
 		expect(shown).toContain('Which one do we want?');
 		expect(shown).toContain('Show answer');
-		// Closed: the only open disclosure is the cascade builder.
-		expect(count(body, /<details/g)).toBe(3);
+		// The answer, the derivation of each of the two trees, the cascade builder and
+		// the reference table. Closed: the only open disclosure is the cascade builder.
+		expect(count(body, /<details/g)).toBe(5);
 		expect(count(body, /<details[^>]* open/g)).toBe(1);
+	});
+
+	it('gives each tree a switch for its leftmost derivation, and its value', () => {
+		// One per tree, closed; the derivations themselves are not drawn yet.
+		expect(count(shown, /Leftmost derivation /g)).toBe(2);
+		expect(body).not.toContain('aria-label="Leftmost derivation of tree');
+		expect(shown).toContain('All leftmost derivations');
+		expect(count(shown, /Values \(2 \* 3\) \+ 4 = 10/g)).toBe(1);
+		expect(shown).toContain('Values 2 * (3 + 4) = 14');
+		expect(shown).not.toMatch(/Value [(\d]/);
 	});
 
 	it('has both tabs, the cascade builder and the reference table', () => {
@@ -108,7 +126,7 @@ describe('the page', () => {
 			expect(body).toMatch(new RegExp(`<label[^>]* for="[^"]+">${label}</label>`));
 		expect(count(body, /<input[^>]* role="switch"/g)).toBe(2);
 		expect(shown).toContain('Abbreviated trees');
-		expect(shown).toContain('Leftmost derivations');
+		expect(shown).toContain('All leftmost derivations');
 		expect(body).toContain('aria-label="Associativity of level 2"');
 		expect(body).toContain('aria-label="Move level 2 up (lower precedence)"');
 		expect(body).toContain('role="status"');
@@ -216,6 +234,58 @@ describe('Rewrite the grammar', () => {
 		expect(shown).toContain('2 parse trees: the rewritten grammar is ambiguous');
 		expect(shown).toContain('All 2 trees have the structure of a tree of the rewritten grammar.');
 	});
+
+	it('matches the cascade’s tree with tree 1 of the 42 trees of six operands', () => {
+		const body = renderTab({ ...preset('cascade'), input: SIX, values: '' });
+		const shown = text(body);
+		expect(shown).toContain('1 parse tree. The string has only one parse tree now.');
+		expect(shown).toContain(`Tree 1 ${LEFT_NESTED} Kept`);
+		expect(shown).toContain('Same structure as tree 1 of the rewritten grammar.');
+		expect(shown).toContain(
+			'19 of the 20 trees shown are crossed out: no tree of the rewritten grammar has their structure.'
+		);
+		expect(shown).toContain('… and more: 20 of the 42 parse trees are shown.');
+		// The rewritten grammar's tree has a counterpart, and not every tree is crossed out.
+		expect(shown).not.toContain('No tree of the original grammar has this structure.');
+		expect(shown).not.toContain('20 of the 20');
+		expect(count(body, /class="cross/g)).toBe(19);
+		expect(count(body, /class="parse-tree/g)).toBe(21);
+	});
+
+	it('draws a kept tree from outside the listed ones first, under its number', () => {
+		const body = renderTab({
+			...preset('cascade'),
+			input: SIX,
+			values: '',
+			rewrite: 'E → T + E | T\nT → int | ( E )'
+		});
+		const shown = text(body);
+		expect(shown).toContain(`Tree 42 ${RIGHT_NESTED} Kept`);
+		expect(shown.indexOf('Tree 42 ')).toBeLessThan(shown.indexOf('Tree 1 (((('));
+		expect(shown).toContain('A kept tree from outside the listed ones is shown first.');
+		expect(shown).not.toContain('No tree of the original grammar has this structure.');
+		expect(count(body, /class="cross/g)).toBe(19);
+		expect(shown).not.toContain('Tree 20 ');
+	});
+
+	it('crosses out nothing when the rewritten grammar groups the string in another way', () => {
+		// The tail form: neither the left-nested nor the right-nested tree.
+		const body = renderTab({
+			...preset('cascade'),
+			input: 'int + int + int',
+			rewrite: 'E → T X\nX → + T X | ε\nT → int | ( E )'
+		});
+		const shown = text(body);
+		expect(shown).toContain('Tree 1 int (+ int (+ int))');
+		expect(shown).toContain('No tree of the original grammar has this structure.');
+		expect(shown).toContain(
+			'The rewritten grammar groups the string differently from every tree of the original grammar, so the trees are not matched and none is crossed out.'
+		);
+		expect(body).not.toContain('class="cross');
+		expect(shown).not.toContain('Crossed out');
+		expect(shown).not.toContain('Kept');
+		expect(shown).not.toContain('No tree of the rewritten grammar has this structure.');
+	});
 });
 
 describe('Same strings?', () => {
@@ -303,6 +373,83 @@ describe('Declarations', () => {
 		const ifs = text(renderTab(preset('dangling-else')));
 		expect(ifs).toContain('no production of the form A → A op A');
 	});
+
+	it('selects tree 1 of the 42 trees of six operands for %left +', () => {
+		const body = renderTab({ ...preset('left-assoc'), input: SIX, values: '' });
+		const shown = text(body);
+		expect(shown).toContain('The declarations keep one of the 42 trees and cross out the rest.');
+		expect(shown).toContain(`Tree 1 ${LEFT_NESTED} Selected`);
+		expect(shown).toContain('The declarations allow only this tree.');
+		expect(shown).toContain('… and more: 20 of the 42 parse trees are shown.');
+		// A tree is allowed: the string is not a syntax error.
+		expect(shown).not.toContain('syntax error');
+		expect(count(body, /class="cross/g)).toBe(19);
+		expect(count(shown, /Crossed out/g)).toBe(19);
+	});
+
+	it('draws the tree %right + selects first although it is the last of the 42', () => {
+		const body = renderTab({
+			...preset('left-assoc'),
+			input: SIX,
+			values: '',
+			decls: [{ assoc: 'right', ops: '+' }]
+		});
+		const shown = text(body);
+		expect(shown).toContain(`Tree 42 ${RIGHT_NESTED} Selected`);
+		expect(shown.indexOf('Tree 42 ')).toBeLessThan(shown.indexOf('Tree 1 (((('));
+		expect(shown).toContain(
+			'The declarations keep one of the 42 trees and cross out the rest. A kept tree from outside the listed ones is shown first.'
+		);
+		expect(shown).not.toContain('syntax error');
+		expect(count(body, /class="cross/g)).toBe(19);
+	});
+
+	it('says a string is a syntax error when the declarations allow none of its 42 trees', () => {
+		const shown = text(
+			renderTab({
+				...preset('left-assoc'),
+				input: SIX,
+				decls: [{ assoc: 'nonassoc', ops: '+' }]
+			})
+		);
+		expect(shown).toContain(
+			'The declarations cross out all of the 42 trees: with them, the string is a syntax error.'
+		);
+		expect(count(shown, /Crossed out/g)).toBe(20);
+	});
+
+	it('leaves the tree of the cascade grammar alone, whatever is declared', () => {
+		const body = renderTab({
+			...preset('left-assoc'),
+			grammar: 'E → E + T | T\nT → T * F | F\nF → int | ( E )',
+			decls: [{ assoc: 'right', ops: '+' }]
+		});
+		const shown = text(body);
+		expect(shown).toContain('no production of the form A → A op A');
+		expect(shown).not.toContain('syntax error');
+		expect(shown).not.toContain('Crossed out');
+		expect(body).not.toContain('class="cross');
+		// Nor is the tree marked as kept by declarations that do not apply to it.
+		expect(shown).not.toContain('Kept');
+		expect(shown).not.toContain('The declarations allow');
+	});
+
+	it('takes an operator of several characters as one operator', () => {
+		const body = renderTab({
+			...preset('left-assoc'),
+			grammar: 'E → E "==" E | E + E | int',
+			input: 'int "==" int + int',
+			decls: [
+				{ assoc: 'nonassoc', ops: '==' },
+				{ assoc: 'left', ops: '+' }
+			]
+		});
+		const shown = text(body);
+		expect(body).toMatch(/<pre[^>]*>%nonassoc "=="\n%left \+<\/pre>/);
+		expect(shown).not.toContain('is not a terminal of the grammar');
+		expect(shown).toContain('Tree 2 int == (int + int) Selected');
+		expect(shown).toContain('+ binds tighter than ==, so == cannot be an operand of +.');
+	});
 });
 
 describe('the cascade builder, the preset notes and the reference', () => {
@@ -314,6 +461,25 @@ describe('the cascade builder, the preset notes and the reference', () => {
 		expect(body).toContain('E → E + T | T\nT → T * F | F\nF → int | ( E )');
 		expect(text(body)).toContain('Generated grammar');
 		expect(text(body)).not.toContain('This is the rewritten grammar.');
+	});
+
+	it('generates a grammar for operators of several characters typed without quotes', () => {
+		const { body } = render(CascadeBuilder, {
+			props: {
+				levels: [
+					{ ops: '&&', assoc: 'left' },
+					{ ops: '== !=', assoc: 'left' }
+				],
+				atoms: 'int',
+				current: '',
+				onuse: () => {}
+			}
+		});
+		const raw = body.replace(/&quot;/g, '"').replace(/&amp;/g, '&');
+		expect(raw).toContain('E → E "&&" T | T\nT → T "==" F | T "!=" F | F\nF → int');
+		expect(text(body)).toContain('the operators of a level are separated by spaces');
+		// Nothing is reported: == is one operator, not = twice.
+		expect(body).not.toContain('class="problems');
 	});
 
 	it('renders every preset note with its questions closed', () => {

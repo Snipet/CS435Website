@@ -26,14 +26,15 @@
 	import DeclarationsTab from '$lib/tools/ambiguity/DeclarationsTab.svelte';
 	import Fact from '$lib/tools/ambiguity/Fact.svelte';
 	import {
-		TREE_LIMIT,
 		analyzeDeclarations,
 		analyzeRewrite,
 		leafLabeler,
 		leftmostChain,
 		listTrees,
+		listedText,
 		readSource,
 		stringText,
+		treeTitle,
 		treeTone,
 		type Listing,
 		type Source,
@@ -41,10 +42,17 @@
 	} from '$lib/tools/ambiguity/model';
 	import PrecedenceTable from '$lib/tools/ambiguity/PrecedenceTable.svelte';
 	import PresetNote from '$lib/tools/ambiguity/PresetNote.svelte';
-	import { DEFAULT_STATE, presetFor, presets } from '$lib/tools/ambiguity/presets';
+	import {
+		DEFAULT_PRESET_ID,
+		DEFAULT_STATE,
+		presetFor,
+		presets
+	} from '$lib/tools/ambiguity/presets';
 	import RewriteTab from '$lib/tools/ambiguity/RewriteTab.svelte';
 	import { operandTerminals } from '$lib/tools/ambiguity/shape';
 	import {
+		derivationShown,
+		flipDerivation,
 		isAmbiguityHash,
 		stateFromHash,
 		type AmbiguityHash,
@@ -65,6 +73,8 @@
 	let model = $state<AmbiguityState>(stateFromHash(DEFAULT_STATE));
 	/** The cascade builder is open: at first for grammars with productions A → A op A. */
 	let builderOpen = $state(true);
+	/** The preset loaded last (or the one a loaded link is), shown for as long as it fits the state. */
+	let loaded = $state<string | null>(DEFAULT_PRESET_ID);
 
 	/** A grammar and a string without errors, with the string's trees. */
 	interface Shown {
@@ -83,6 +93,7 @@
 		lastRewrite = '';
 		loads++;
 		Object.assign(model, stateFromHash(value));
+		loaded = presetFor(model)?.id ?? null;
 		builderOpen = !source.grammar || binaryOperators(source.grammar).length > 0;
 	}
 
@@ -116,14 +127,19 @@
 			: analyzeRewrite(view, original, drawnRewrite)
 	);
 	const declarations = $derived(
-		view.grammar && original ? analyzeDeclarations(view.grammar, original, model.decls) : null
+		view.grammar && original ? analyzeDeclarations(view.grammar, view, original, model.decls) : null
 	);
-	const chains = $derived(
-		model.derivations && original && view.grammar
-			? original.trees.map((entry) => leftmostChain(view.grammar!, entry.tree))
-			: null
-	);
-	const preset = $derived(presetFor(model));
+	const preset = $derived(presetFor(model, loaded));
+
+	// Each tree has a switch for its leftmost derivation; the switch in the panel's
+	// header is for all of them (see state.ts).
+	function showDerivation(n: number, show: boolean) {
+		model.flipped = flipDerivation(model, n, show);
+	}
+	function showDerivations(show: boolean) {
+		model.derivations = show;
+		model.flipped = [];
+	}
 
 	// Listing both languages is the one unbounded computation: it runs in a worker.
 	const request = $derived<CompareRequest>({
@@ -193,6 +209,7 @@
 
 	function loadPreset(p: Preset<AmbiguityHash>) {
 		load(p.value);
+		loaded = p.id;
 	}
 </script>
 
@@ -265,7 +282,10 @@
 		{#snippet actions()}
 			<div class="switches">
 				<Toggle bind:checked={model.abbreviated} label="Abbreviated trees" />
-				<Toggle bind:checked={model.derivations} label="Leftmost derivations" />
+				<Toggle
+					bind:checked={() => model.derivations, showDerivations}
+					label="All leftmost derivations"
+				/>
 			</div>
 		{/snippet}
 
@@ -300,10 +320,11 @@
 
 				{#if original.trees.length}
 					<div class="trees">
-						{#each original.trees as entry, i (entry.number)}
+						{#each original.trees as entry (entry.number)}
 							{@const value = entry.value ? evaluationText(entry.value) : null}
+							{@const open = derivationShown(model, entry.number)}
 							<TreeCard
-								title="Tree {entry.number}"
+								title={treeTitle(entry)}
 								grouping={entry.grouping}
 								tree={drawn(entry)}
 								tone={treeTone(entry.number)}
@@ -311,22 +332,28 @@
 								labelSize={18}
 							>
 								<Fact label="Bracket form" mono>{entry.bracket}</Fact>
-								{#if chains?.[i]}
-									<Fact label="Leftmost derivation">
-										<DerivationChain
-											forms={chains[i].forms}
-											steps={chains[i].steps}
-											nonterminals={view.grammar?.nonterminals}
-											ariaLabel="Leftmost derivation of tree {entry.number}"
-										/>
-									</Fact>
-								{/if}
-								{#if value}<Fact label="Value" mono>{value}</Fact>{/if}
+								<div class="derivation">
+									<Disclosure
+										summary="Leftmost derivation"
+										bind:open={() => open, (show) => showDerivation(entry.number, show)}
+									>
+										{#if open && view.grammar}
+											{@const chain = leftmostChain(view.grammar, entry.tree)}
+											<DerivationChain
+												forms={chain.forms}
+												steps={chain.steps}
+												nonterminals={view.grammar.nonterminals}
+												ariaLabel="Leftmost derivation of tree {entry.number}"
+											/>
+										{/if}
+									</Disclosure>
+								</div>
+								{#if value}<Fact label="Values" mono>{value}</Fact>{/if}
 							</TreeCard>
 						{/each}
 					</div>
 					{#if original.truncated}
-						<p class="more">… and more. The first {TREE_LIMIT} parse trees are listed.</p>
+						<p class="more">{listedText(original)}</p>
 					{/if}
 				{/if}
 			</div>
@@ -334,9 +361,15 @@
 
 		{#if model.abbreviated}
 			<p class="legend">
-				Abbreviated: a node is its keyword or operator with only its sub-expressions as children.
-				{#if view.grammar?.terminals.includes('if')}
-					An <code>if</code> with two children is an if-then; with three, an if-then-else.
+				{#if view.grammar && operandTerminals(view.grammar).size === 0}
+					The trees are drawn in full: no terminal of the grammar is a whole right-hand side (as
+					<code>int</code> is in <code>E → int</code>), so its nodes have no sub-expressions to be
+					abbreviated to.
+				{:else}
+					Abbreviated: a node is its keyword or operator with only its sub-expressions as children.
+					{#if view.grammar?.terminals.includes('if')}
+						An <code>if</code> with two children is an if-then; with three, an if-then-else.
+					{/if}
 				{/if}
 			</p>
 		{/if}
@@ -493,5 +526,13 @@
 		grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
 		gap: var(--space-4);
 		min-width: 0;
+	}
+	/* The switch lines up with the rows around it, and the derivation gets the card's width. */
+	.derivation {
+		min-width: 0;
+		margin: -4px 0 -4px -4px;
+	}
+	.derivation :global(.disclosure > .content) {
+		padding: var(--space-1) 0 4px 4px;
 	}
 </style>

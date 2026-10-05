@@ -48,8 +48,9 @@
 
 <div class="builder">
 	<p class="hint">
-		Operator levels from lowest to highest precedence. Each level gets a non-terminal (E, T, F, …)
-		that refers to the next one; the last non-terminal derives the atoms.
+		Operator levels from lowest to highest precedence; the operators of a level are separated by
+		spaces (<code>== !=</code> is two operators). Each level gets a non-terminal (E, T, F, …) that refers
+		to the next one; the last non-terminal derives the atoms.
 	</p>
 
 	<div class="levels">

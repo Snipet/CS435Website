@@ -7,6 +7,8 @@ import { DEFAULT_STATE, presets, presetState } from './presets';
 import {
 	BLANK_STATE,
 	MAX_DECLARATIONS,
+	derivationShown,
+	flipDerivation,
 	isAmbiguityHash,
 	stateFromHash,
 	type AmbiguityState
@@ -38,6 +40,9 @@ describe('isAmbiguityHash', () => {
 			{ grammar: 'E → int', abbreviated: 'yes' },
 			{ grammar: 'E → int', tab: 'trees' },
 			{ grammar: 'E → int', maxLength: '7' },
+			{ grammar: 'E → int', flipped: 2 },
+			{ grammar: 'E → int', flipped: ['2'] },
+			{ grammar: 'E → int', flipped: [1.5] },
 			{ grammar: 'E → int', levels: [{ ops: '+', assoc: 'none' }] },
 			{ grammar: 'E → int', levels: 'x' },
 			{ grammar: 'E → int', decls: [{ ops: '+' }] },
@@ -45,6 +50,37 @@ describe('isAmbiguityHash', () => {
 			{ grammar: 'E → int', decls: [{ ops: '+', assoc: 'toString' }] }
 		];
 		for (const value of bad) expect(isAmbiguityHash(value)).toBe(false);
+	});
+});
+
+describe('the derivation switches', () => {
+	it('show one tree’s derivation at a time while the switch for all is off', () => {
+		let state = { derivations: false, flipped: [] as number[] };
+		expect([1, 2].map((n) => derivationShown(state, n))).toEqual([false, false]);
+		state = { ...state, flipped: flipDerivation(state, 2, true) };
+		expect(state.flipped).toEqual([2]);
+		expect([1, 2].map((n) => derivationShown(state, n))).toEqual([false, true]);
+		state = { ...state, flipped: flipDerivation(state, 1, true) };
+		expect(state.flipped).toEqual([1, 2]);
+		state = { ...state, flipped: flipDerivation(state, 2, false) };
+		expect(state.flipped).toEqual([1]);
+		expect([1, 2].map((n) => derivationShown(state, n))).toEqual([true, false]);
+	});
+
+	it('hide one tree’s derivation while the switch for all is on', () => {
+		let state = { derivations: true, flipped: [] as number[] };
+		expect([1, 2].map((n) => derivationShown(state, n))).toEqual([true, true]);
+		state = { ...state, flipped: flipDerivation(state, 1, false) };
+		expect(state.flipped).toEqual([1]);
+		expect([1, 2].map((n) => derivationShown(state, n))).toEqual([false, true]);
+		state = { ...state, flipped: flipDerivation(state, 1, true) };
+		expect(state.flipped).toEqual([]);
+	});
+
+	it('change nothing when a switch is set to what it shows', () => {
+		const state = { derivations: false, flipped: [3] };
+		expect(flipDerivation(state, 3, true)).toBe(state.flipped);
+		expect(flipDerivation(state, 1, false)).toBe(state.flipped);
 	});
 });
 
@@ -58,6 +94,7 @@ describe('stateFromHash', () => {
 			values: '',
 			abbreviated: false,
 			derivations: false,
+			flipped: [],
 			tab: 'rewrite',
 			rewrite: '',
 			levels: [...DEFAULT_LEVELS],
@@ -96,6 +133,23 @@ describe('stateFromHash', () => {
 		expect(state.levels).toHaveLength(MAX_LEVELS);
 		expect(state.levels[0]).toEqual({ ops: '+', assoc: 'left' });
 		expect(state.decls).toHaveLength(MAX_DECLARATIONS);
+	});
+
+	it('keeps the trees whose derivation switch differs from the switch for all', () => {
+		const hash = {
+			grammar: 'E → E + E | int',
+			derivations: true,
+			flipped: [3, 1, 3, 0, -2, 21, 20]
+		};
+		expect(isAmbiguityHash(hash)).toBe(true);
+		const state = stateFromHash(hash);
+		// Numbers of listed trees, each once, in order.
+		expect(state.flipped).toEqual([1, 3, 20]);
+		expect(state.derivations).toBe(true);
+		const back = decode(encode(state), isAmbiguityHash);
+		expect(stateFromHash(back!)).toEqual(state);
+		expect(stateFromHash({ grammar: '' }).flipped).toEqual([]);
+		expect(stateFromHash({ grammar: '' }).flipped).not.toBe(BLANK_STATE.flipped);
 	});
 
 	it('survives the URL hash for every preset', () => {

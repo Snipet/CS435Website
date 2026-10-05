@@ -7,7 +7,16 @@
 	import type { TreeHighlight, TreeLabeler } from '$lib/components/grammar';
 	import { Badge, Button, Icon, IconButton, Select, TextField } from '$lib/components/ui';
 	import { printDeclaration, type Assoc } from './declarations';
-	import { treeTone, type DeclarationAnalysis, type Listing, type TreeEntry } from './model';
+	import {
+		declarationSummary,
+		selectedTree,
+		shownText,
+		treeTitle,
+		treeTone,
+		type DeclarationAnalysis,
+		type Listing,
+		type TreeEntry
+	} from './model';
 	import { MAX_DECLARATIONS, type AmbiguityState } from './state';
 	import TreeCard from './TreeCard.svelte';
 
@@ -56,41 +65,17 @@
 	/** The two operators of each violation, marked in the full tree. */
 	function marks(index: number): TreeHighlight | undefined {
 		if (model.abbreviated || !analysis) return undefined;
-		const current = analysis.violations[index].flatMap((v) => v.marks);
+		const current = (analysis.violations[index] ?? []).flatMap((v) => v.marks);
 		return current.length ? { current } : undefined;
 	}
 
-	const summary = $derived.by(() => {
-		if (!original || !analysis) return '';
-		const n = original.trees.length;
-		const kept = analysis.kept.length;
-		const of = original.truncated
-			? `the ${n} trees listed`
-			: n === 1
-				? 'the tree'
-				: `the ${n} trees`;
-		if (n === 0) return 'The string has no parse tree.';
-		if (analysis.operators.length === 0)
-			return 'The grammar has no production of the form A → A op A, so declarations leave its trees as they are.';
-		if (model.decls.length === 0)
-			return n === 1
-				? 'No declarations: the tree is kept.'
-				: `No declarations: all ${n} trees are kept.`;
-		if (kept === 0)
-			return `The declarations cross out ${n === 1 ? of : `all of ${of}`}: with them, the string is a syntax error.`;
-		if (kept === n)
-			return n === 1 ? 'The declarations keep the tree.' : `The declarations keep all of ${of}.`;
-		if (kept === 1) return `The declarations keep one of ${of} and cross out the rest.`;
-		return `The declarations keep ${kept} of ${of}.`;
-	});
-	const selected = $derived(
-		analysis !== null &&
-			original !== null &&
-			analysis.kept.length === 1 &&
-			original.trees.length > 1 &&
-			!original.truncated
-			? analysis.kept[0]
-			: -1
+	const summary = $derived(
+		original && analysis ? declarationSummary(original, analysis, model.decls.length) : ''
+	);
+	const selected = $derived(original && analysis ? selectedTree(original, analysis) : -1);
+	/** Declarations say something about a tree only under a grammar they apply to. */
+	const applied = $derived(
+		model.decls.length > 0 && analysis !== null && analysis.operators.length > 0
 	);
 </script>
 
@@ -98,8 +83,9 @@
 	<section class="lines" aria-labelledby="{uid}-title">
 		<h3 id="{uid}-title">Declarations</h3>
 		<p class="hint">
-			One per line, lowest precedence first: operators on a later line bind tighter, as in bison,
-			and operators on one line share a precedence. They apply to productions of the form
+			One per line, lowest precedence first: operators on a later line bind tighter, as in bison.
+			The operators of a line are separated by spaces and share a precedence. Declarations apply to
+			productions of the form
 			<span class="formal">A → A op A</span>.
 		</p>
 		{#if model.decls.length}
@@ -195,10 +181,10 @@
 		{:else}
 			<p class="summary" role="status">{summary}</p>
 			<div class="cards">
-				{#each original.trees as entry, i (entry.number)}
-					{@const why = analysis.reasons[i]}
+				{#each analysis.trees as entry, i (entry.bracket)}
+					{@const why = analysis.reasons[i] ?? []}
 					<TreeCard
-						title="Tree {entry.number}"
+						title={treeTitle(entry)}
 						grouping={entry.grouping}
 						tree={drawn(entry)}
 						tone={treeTone(entry.number)}
@@ -212,7 +198,7 @@
 								<Badge tone="reject">Crossed out</Badge>
 							{:else if i === selected}
 								<Badge tone="accept">Selected</Badge>
-							{:else if model.decls.length > 0}
+							{:else if applied}
 								<Badge tone="accept">Kept</Badge>
 							{/if}
 						{/snippet}
@@ -224,13 +210,15 @@
 							</ul>
 						{:else if i === selected}
 							<p class="why">The declarations allow only this tree.</p>
-						{:else if model.decls.length > 0}
+						{:else if applied}
 							<p class="why">The declarations allow this tree.</p>
 						{/if}
 					</TreeCard>
 				{/each}
 			</div>
-			{#if original.truncated}<p class="more">… and more trees.</p>{/if}
+			{#if original.truncated}
+				<p class="more">{shownText(original, analysis.trees.length)}</p>
+			{/if}
 		{/if}
 	</section>
 </div>
