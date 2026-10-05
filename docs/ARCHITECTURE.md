@@ -51,6 +51,7 @@ src/
   routes/
     +page.svelte              home: tools grouped by compiler stage
     notation/+page.svelte     notation reference
+    midterm/+page.svelte      midterm review list; topics.ts holds the list and its links
     <slug>/+page.svelte       one route per tool
 docs/ARCHITECTURE.md          this file
 ```
@@ -59,6 +60,17 @@ A tool owns `src/routes/<slug>/`, `src/lib/tools/catalog/<slug>.ts`, and (if
 needed) `src/lib/tools/<slug>/` for tool-specific components, presets and
 logic. Tools never edit each other's folders. Anything two tools need goes into
 `theory/` or `components/`.
+
+`notation/` and `midterm/` are reference pages, not tools: no catalog entry, no
+`ToolPage`, no `syncToHash` state (their URL hash is an in-page anchor). The
+midterm page links each topic of the review list to the tools and notation
+sections that cover it. To open a tool on one of that tool's own presets or
+views, `src/routes/midterm/topics.ts` imports from tool folders, read-only, and
+only data: a tool's `presets.ts`, the phase table's `groupings.ts`, and the
+types of a tool's `state.ts`. It imports no tool's components or engine code,
+and a tool never imports from the page. Its spec checks every linked state
+against the tool's own hash validator and loader, every tool slug against the
+registry and `LinkStates`, and every notation anchor against the notation page.
 
 ## 3. Notation canon
 
@@ -862,6 +874,15 @@ state. One `syncToHash` per page. Link to a tool with `toolHref(slug)` from
 returns `null` when the target tool is not registered, so hide the link in that
 case (prerendering fails on links to pages that do not exist). A tool's own
 saved state must accept its `LinkStates` shape (extra fields are allowed).
+
+`phases`, `t-diagrams` and `tiny-vm` have no `LinkStates` entry: no tool links
+to them on a state. Link to them with `toolHref(slug)`, behind
+`toolBySlug(slug)` for the same reason. The midterm page (§2) is the one caller
+that opens two of them on a view: it appends `encode(state)` to
+`toolHref('phases')` and `toolHref('t-diagrams')`, where `state` has the shape
+the tool saves in its own hash (`Partial<PhasesState>`, `TDiagramsHash`), and
+its spec holds each of these states against the tool's validator. A tool that
+other tools start to link to on a state gets a `LinkStates` entry.
 
 ### 5.2 Graph components (`$lib/components/graph/`)
 
