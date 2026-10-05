@@ -476,29 +476,37 @@ describe('the analyses against the definitions, on random grammars', () => {
 		expect(sentences).toBeGreaterThan(2500);
 	});
 
-	it('puts in FOLLOW(A) every token that comes after an A in a parse tree', () => {
-		const next = random(12);
-		let seen = 0;
+	it('puts in FOLLOW(A) the tokens that come after an A in a parse tree, and hardly any other', () => {
+		const next = random(21);
+		let useful = 0;
+		let exact = 0;
 		for (let round = 0; round < ROUNDS; round++) {
 			const g = randomGrammar(next);
 			const follow = followSets(g);
-			const missing: string[] = [];
-			for (const tokens of bruteForce(g, 4).slice(0, 10)) {
-				for (const tree of parseTrees(g, tokens, { limit: 5 }).trees) {
+			const seen = new Map(g.nonterminals.map((n) => [n, new Set<string>()]));
+			for (const tokens of bruteForce(g, 6).slice(0, 150)) {
+				for (const tree of parseTrees(g, tokens, { limit: 30 }).trees) {
 					const stack: ParseNode[] = [tree];
 					while (stack.length > 0) {
 						const node = stack.pop()!;
 						if (node.terminal) continue;
-						const after = tokens[node.end!] ?? END_MARKER;
-						if (!follow.get(node.symbol)!.has(after)) missing.push(`${after} after ${node.symbol}`);
+						seen.get(node.symbol)!.add(tokens[node.end!] ?? END_MARKER);
 						stack.push(...node.children);
-						seen++;
 					}
 				}
 			}
-			expect(missing, JSON.stringify(g.productions)).toEqual([]);
+			for (const name of g.nonterminals)
+				expect(subset(seen.get(name)!, follow.get(name)!), JSON.stringify(g.productions)).toBe(
+					true
+				);
+			// With every non-terminal in use, short sentences already show nearly all of FOLLOW;
+			// what is missing needs a sentence longer than six tokens.
+			if (unreachable(g).length > 0 || unproductive(g).length > 0) continue;
+			useful++;
+			if (g.nonterminals.every((name) => seen.get(name)!.size === follow.get(name)!.size)) exact++;
 		}
-		expect(seen).toBeGreaterThan(5000);
+		expect(useful).toBeGreaterThan(400);
+		expect(exact / useful).toBeGreaterThan(0.9);
 	});
 
 	/** V →+ V α by search: null when the search is cut off. */
