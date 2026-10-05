@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parseGrammar } from '$lib/theory/grammar';
 import {
 	COMPARE_LENGTH,
 	LIST_LIMIT,
@@ -8,7 +9,6 @@ import {
 	type CompareRequest
 } from './compare';
 import { rewriteGrammar } from './transform';
-import { parseGrammar } from '$lib/theory/grammar';
 
 const request = (
 	original: string,
