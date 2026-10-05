@@ -9,7 +9,7 @@ import {
 	yieldOf
 } from './derive';
 import { parseTrees } from './earley';
-import { printSymbols } from './parse';
+import { makeGrammar, printSymbols } from './parse';
 import {
 	AMBIGUOUS,
 	CASCADE,
@@ -386,5 +386,59 @@ describe('bracketForm', () => {
 		expect(bracketForm(leaf('int'))).toBe('int');
 		expect(bracketForm(open('E'))).toBe('E');
 		expect(bracketForm(node('S', 0, leaf('1'), open('A')))).toBe('S(1 A)');
+	});
+});
+
+describe('trees of any depth', () => {
+	const depth = 20000;
+	// A0 → A1 ; … ; A19999 → A20000 ; A20000 → a
+	const chain = makeGrammar([
+		...Array.from({ length: depth }, (_, i) => ({ lhs: `A${i}`, rhs: [`A${i + 1}`] })),
+		{ lhs: `A${depth}`, rhs: ['a'] }
+	]);
+	const derivation: Derivation = {
+		start: ['A0'],
+		steps: chain.productions.map((p) => ({ index: 0, production: p.id, form: p.rhs }))
+	};
+	const deepest = (tree: ParseNode): ParseNode => {
+		let at = tree;
+		while (at.children.length > 0) at = at.children[at.children.length - 1];
+		return at;
+	};
+
+	it('builds the tree of a derivation of 20001 steps and numbers its tokens', () => {
+		const tree = treeFromDerivation(chain, derivation);
+		expect(tree).toMatchObject({ symbol: 'A0', production: 0, start: 0, end: 1 });
+		expect(deepest(tree)).toEqual({ symbol: 'a', terminal: true, children: [], start: 0, end: 1 });
+		expect(yieldOf(tree)).toEqual(['a']);
+		for (const order of ['leftmost', 'rightmost'] as const)
+			expect(derivationFromTree(chain, tree, order)).toEqual(derivation);
+	});
+
+	it('compares and writes such a tree', () => {
+		const tree = treeFromDerivation(chain, derivation);
+		const same = treeFromDerivation(chain, derivation);
+		expect(treeEquals(tree, same)).toBe(true);
+		deepest(same).symbol = 'b';
+		expect(treeEquals(tree, same)).toBe(false);
+		const text = bracketForm(tree);
+		expect(text.startsWith('A0( A1( A2( ')).toBe(true);
+		expect(text.includes(` A${depth - 1}( A${depth}(a) ) ) ) `)).toBe(true);
+		expect(text.endsWith(' ) ) )')).toBe(true);
+		expect(text.split('(')).toHaveLength(depth + 2);
+		expect(text.split(')')).toHaveLength(depth + 2);
+	});
+
+	it('handles 20000 nested parentheses from the parser', () => {
+		const g = grammar('S → ε | ( S )');
+		const tokens = Array.from({ length: 2 * depth }, (_, i) => (i < depth ? '(' : ')'));
+		const [tree] = parseTrees(g, tokens).trees;
+		expect(yieldOf(tree)).toEqual(tokens);
+		expect(treeEquals(tree, parseTrees(g, tokens).trees[0])).toBe(true);
+		const text = bracketForm(tree);
+		expect(text.startsWith('S( ( S( ( S( ')).toBe(true);
+		expect(text.includes(' ( S( ( S(ε) ) ) ) ) ')).toBe(true);
+		expect(text.endsWith(' ) ) ) )')).toBe(true);
+		expect(text.split('S(')).toHaveLength(depth + 2);
 	});
 });

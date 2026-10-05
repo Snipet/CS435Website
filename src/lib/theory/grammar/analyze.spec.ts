@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	chomskyType,
+	cycles,
 	firstOfSequence,
 	firstSets,
 	followSets,
@@ -8,13 +9,14 @@ import {
 	isFiniteLanguage,
 	leftRecursion,
 	nullable,
+	reservedSymbols,
 	sentenceLengths,
 	unproductive,
 	unreachable
 } from './analyze';
 import { applyStep } from './derive';
 import { parseTrees, recognizes } from './earley';
-import { ebnfToGrammar } from './parse';
+import { ebnfToGrammar, makeGrammar, parseGrammar } from './parse';
 import {
 	AMBIGUOUS,
 	ARITHMETIC,
@@ -163,6 +165,50 @@ describe('unreachable and unproductive', () => {
 	});
 });
 
+describe('reservedSymbols', () => {
+	it('is empty for the lecture grammars', () => {
+		for (const text of [ARITHMETIC, AMBIGUOUS, CASCADE, COOL, DANGLING_ELSE, ENGLISH, TOP_DOWN])
+			expect(reservedSymbols(grammar(text))).toEqual([]);
+		expect(reservedSymbols(predictive())).toEqual([]);
+	});
+
+	it('lists a terminal named $: in FOLLOW sets it looks like the end marker', () => {
+		// The augmented grammar of many textbooks.
+		const g = grammar('S’ → S $\nS → a S | ε');
+		expect(reservedSymbols(g)).toEqual(['$']);
+		// FOLLOW(S’) holds the end marker and FOLLOW(S) the terminal: the same string.
+		expect(show(followSets(g))).toEqual(['S’: $', 'S: $']);
+		expect(END_MARKER).toBe('$');
+	});
+
+	it('lists a terminal named ε: in FIRST sets it looks like the empty string', () => {
+		const g = grammar('T → S b\nS → "ε" a');
+		expect(g.terminals).toEqual(['b', 'ε', 'a']);
+		expect(reservedSymbols(g)).toEqual(['ε']);
+		// S is not nullable, but its FIRST set reads as if it were.
+		expect([...nullable(g)]).toEqual([]);
+		expect(firstSets(g).get('S')!.has(EPSILON)).toBe(true);
+	});
+
+	it('lists non-terminals with those names too, before the terminals', () => {
+		const g = makeGrammar([
+			{ lhs: 'S', rhs: ['ε', '$', 'x'] },
+			{ lhs: '$', rhs: ['a'] }
+		]);
+		expect(g.nonterminals).toEqual(['S', '$']);
+		expect(reservedSymbols(g)).toEqual(['$', 'ε']);
+		expect(reservedSymbols(makeGrammar([{ lhs: 'S', rhs: ['epsilon', '$$', 'ϵ'] }]))).toEqual([]);
+	});
+
+	it('is what parseGrammar warns about', () => {
+		for (const text of ['S’ → S $\nS → a S | ε', 'T → S b\nS → "ε" a', CASCADE]) {
+			const { grammar: g, diagnostics } = parseGrammar(text);
+			const warned = diagnostics.filter((d) => d.message.includes('is spelled like')).length;
+			expect(warned).toBe(reservedSymbols(g!).length);
+		}
+	});
+});
+
 describe('leftRecursion', () => {
 	/** Applies the chain to V, always at the first symbol. */
 	const replay = (g: Grammar, v: string, chain: number[]): string[] =>
@@ -255,6 +301,25 @@ describe('leftRecursion', () => {
 		expect(leftRecursion(grammar('S → A S b | c\nA → a'))).toEqual([]);
 	});
 
+	it('erases a nullable prefix through a chain of 12000 unit productions', () => {
+		const n = 12000;
+		// S → N0 S a | b ; N0 → N1 ; … ; N12000 → ε
+		const g = makeGrammar([
+			{ lhs: 'S', rhs: ['N0', 'S', 'a'] },
+			{ lhs: 'S', rhs: ['b'] },
+			...Array.from({ length: n }, (_, i) => ({ lhs: `N${i}`, rhs: [`N${i + 1}`] })),
+			{ lhs: `N${n}`, rhs: [] }
+		]);
+		const found = leftRecursion(g);
+		expect(found.map((r) => [r.nonterminal, r.immediate])).toEqual([['S', false]]);
+		const { chain } = found[0];
+		// S → N0 S a, then N0 → N1 … N11999 → N12000, then N12000 → ε.
+		expect(chain).toHaveLength(n + 2);
+		expect(chain.slice(0, 3)).toEqual([0, 2, 3]);
+		expect(chain[chain.length - 1]).toBe(n + 2);
+		expect(replay(g, 'S', chain)).toEqual(['S', 'a']);
+	});
+
 	it('gives chains that replay to a form starting with the non-terminal', () => {
 		const texts = [
 			CASCADE,
@@ -275,6 +340,89 @@ describe('leftRecursion', () => {
 			}
 		}
 		expect(checked).toBe(11);
+	});
+});
+
+describe('cycles', () => {
+	it('finds the non-terminals that derive themselves', () => {
+		expect(cycles(grammar('A → A | a'))).toEqual([['A']]);
+		expect(cycles(grammar('A → B | a\nB → A'))).toEqual([['A', 'B']]);
+		expect(cycles(grammar('S → A\nA → B | a\nB → A | a'))).toEqual([['A', 'B']]);
+		expect(cycles(grammar('S → x A\nA → B\nB → C | b\nC → A'))).toEqual([['A', 'B', 'C']]);
+	});
+
+	it('sees through nullable symbols around the non-terminal', () => {
+		// S → S S is S → S once the other S is erased.
+		expect(cycles(grammar('S → S S | a | ε'))).toEqual([['S']]);
+		expect(cycles(grammar('S → N S | a\nN → ε'))).toEqual([['S']]);
+		expect(cycles(grammar('S → A A\nA → S | ε | a'))).toEqual([['S', 'A']]);
+		expect(cycles(grammar('S → N S N M | a\nN → ε | n\nM → N N'))).toEqual([['S']]);
+		// Something is left besides the non-terminal: no cycle.
+		expect(cycles(grammar('S → A S b | c\nA → ε | a'))).toEqual([]);
+		expect(cycles(grammar('S → N S | a\nN → n'))).toEqual([]);
+	});
+
+	it('lists separate groups in grammar order, members too', () => {
+		expect(cycles(grammar('S → C A B\nA → A | a\nB → C | b\nC → B'))).toEqual([['A'], ['B', 'C']]);
+		expect(cycles(grammar('S → B | A\nB → B | b\nA → A | a'))).toEqual([['B'], ['A']]);
+	});
+
+	it('finds none in the lecture grammars: recursion is not a cycle', () => {
+		for (const text of [
+			ARITHMETIC,
+			AMBIGUOUS,
+			CASCADE,
+			LEFT_RECURSIVE,
+			COOL,
+			DANGLING_ELSE,
+			MATCHED_IF,
+			ENGLISH,
+			TOP_DOWN,
+			'S → ε | ( S )',
+			'S → 1 | S 0'
+		])
+			expect(cycles(grammar(text))).toEqual([]);
+		expect(cycles(predictive())).toEqual([]);
+	});
+
+	it('agrees with a search for A →+ A on random grammars', () => {
+		const next = random(11);
+		let cyclic = 0;
+		for (let round = 0; round < 1000; round++) {
+			const g = randomGrammar(next);
+			const isNonterminal = new Set(g.nonterminals);
+			const empty = nullable(g);
+			// Forms of non-terminals only, reached from A by rewriting: is the form "A" among them?
+			// At most one symbol of such a form stays, so the others are nullable; erasing them
+			// one at a time keeps a form well under eight symbols.
+			const derivesItself = (start: string): boolean => {
+				const seen = new Set<string>();
+				const todo = [[start]];
+				while (todo.length > 0) {
+					const form = todo.pop()!;
+					for (let i = 0; i < form.length; i++) {
+						for (const p of g.productions) {
+							if (p.lhs !== form[i] || !p.rhs.every((x) => isNonterminal.has(x))) continue;
+							const to = applyStep(form, i, p);
+							if (to.length === 1 && to[0] === start) return true;
+							if (to.length > 7 || to.filter((x) => !empty.has(x)).length > 1) continue;
+							const key = to.join(' ');
+							if (seen.has(key)) continue;
+							seen.add(key);
+							todo.push(to);
+						}
+					}
+				}
+				return false;
+			};
+			const expected = g.nonterminals.filter(derivesItself);
+			expect(
+				cycles(g).flat().sort(),
+				g.productions.map((p) => `${p.lhs}→${p.rhs}`).join(' ')
+			).toEqual([...expected].sort());
+			if (expected.length > 0) cyclic++;
+		}
+		expect(cyclic).toBeGreaterThan(150);
 	});
 });
 
@@ -363,6 +511,75 @@ describe('sentenceLengths, isEmptyLanguage, isFiniteLanguage', () => {
 		expect(isFiniteLanguage(grammar('S → 1 A\nA → 0 | 1'))).toBe(true);
 		expect(isFiniteLanguage(grammar('S → 1 A\nA → 0 | 1 A'))).toBe(false);
 		expect(isFiniteLanguage(grammar(COOL))).toBe(false);
+	});
+});
+
+describe('the analyses on a grammar of 20000 rules', () => {
+	const n = 20000;
+	const names = Array.from({ length: n + 1 }, (_, i) => `A${i}`);
+	// A0 → a A1 | b ; … ; A20000 → c
+	const growing = makeGrammar([
+		...names.slice(0, n).flatMap((lhs, i) => [
+			{ lhs, rhs: ['a', names[i + 1]] },
+			{ lhs, rhs: ['b'] }
+		]),
+		{ lhs: names[n], rhs: ['c'] }
+	]);
+	// A0 → A1 ; … ; A20000 → a: everything depends on the last rule.
+	const units = makeGrammar([
+		...names.slice(0, n).map((lhs, i) => ({ lhs, rhs: [names[i + 1]] })),
+		{ lhs: names[n], rhs: ['a'] }
+	]);
+	// A0 → A1 B ; … ; A20000 → ε ; B → ε
+	const empties = makeGrammar([
+		...names.slice(0, n).map((lhs, i) => ({ lhs, rhs: [names[i + 1], 'B'] })),
+		{ lhs: names[n], rhs: [] },
+		{ lhs: 'B', rhs: [] }
+	]);
+
+	it('finds the sentence lengths', () => {
+		expect(sentenceLengths(growing)).toEqual({ min: 1, max: n + 1 });
+		expect(sentenceLengths(units)).toEqual({ min: 1, max: 1 });
+		expect(sentenceLengths(empties)).toEqual({ min: 0, max: 0 });
+		expect(isFiniteLanguage(growing)).toBe(true);
+	});
+
+	it('finds reachability, productivity, nullability and left recursion', () => {
+		for (const g of [growing, units, empties]) {
+			expect(unreachable(g)).toEqual([]);
+			expect(unproductive(g)).toEqual([]);
+			expect(isEmptyLanguage(g)).toBe(false);
+			expect(leftRecursion(g)).toEqual([]);
+			expect(chomskyType(g).regular).toHaveLength(g.productions.length);
+		}
+		expect(nullable(growing).size).toBe(0);
+		expect(nullable(empties).size).toBe(n + 2);
+		expect(unreachable(makeGrammar([...units.productions, { lhs: 'Z', rhs: ['z'] }]))).toEqual([
+			'Z'
+		]);
+	});
+
+	it('finds a cycle of 300 non-terminals from each of them', () => {
+		const size = 300;
+		// A0 → A1 x ; … ; A299 → A0 x
+		const loop = makeGrammar(
+			names.slice(0, size).map((lhs, i) => ({ lhs, rhs: [names[(i + 1) % size], 'x'] }))
+		);
+		const found = leftRecursion(loop);
+		expect(found.map((r) => r.nonterminal)).toEqual(names.slice(0, size));
+		expect(found.every((r) => !r.immediate && r.chain.length === size)).toBe(true);
+		expect(found[7].chain.slice(0, 3)).toEqual([7, 8, 9]);
+		expect(found[7].chain[size - 1]).toBe(6);
+	});
+
+	it('finds FIRST and FOLLOW', () => {
+		expect([...firstSets(growing).get('A0')!]).toEqual(['a', 'b']);
+		expect([...firstSets(growing).get(names[n])!]).toEqual(['c']);
+		expect([...firstSets(units).get('A0')!]).toEqual(['a']);
+		expect([...firstSets(empties).get('A0')!]).toEqual([EPSILON]);
+		for (const g of [growing, units, empties])
+			expect([...followSets(g).get(names[n])!]).toEqual([END_MARKER]);
+		expect([...followSets(empties).get('B')!]).toEqual([END_MARKER]);
 	});
 });
 

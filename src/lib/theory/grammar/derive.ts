@@ -8,6 +8,8 @@
  *
  * Trees may be partial: a non-terminal node without `production` has not been
  * expanded yet and counts as a leaf.
+ *
+ * Nothing here recurses on the tree, so a tree of any depth is fine.
  */
 import {
 	EPSILON,
@@ -72,12 +74,24 @@ export function derivationFromTree(
 }
 
 /** Sets the token range of every node of a tree whose leaves are all terminals. */
-function numberLeaves(node: ParseNode, at: number): number {
-	node.start = at;
-	if (node.terminal) at += 1;
-	else for (const child of node.children) at = numberLeaves(child, at);
-	node.end = at;
-	return at;
+function numberLeaves(root: ParseNode): void {
+	let at = 0;
+	/** The nodes being numbered, root first, each with the number of its children that are done. */
+	const open: { node: ParseNode; done: number }[] = [];
+	const enter = (node: ParseNode): void => {
+		node.start = at;
+		if (node.terminal) node.end = ++at;
+		else open.push({ node, done: 0 });
+	};
+	enter(root);
+	while (open.length > 0) {
+		const top = open[open.length - 1];
+		if (top.done < top.node.children.length) enter(top.node.children[top.done++]);
+		else {
+			top.node.end = at;
+			open.pop();
+		}
+	}
 }
 
 /**
@@ -106,7 +120,7 @@ export function treeFromDerivation(g: Grammar, d: Derivation): ParseNode {
 		node.children = p.rhs.map(leaf);
 		frontier.splice(step.index, 1, ...node.children);
 	});
-	if (frontier.every((node) => node.terminal)) numberLeaves(root, 0);
+	if (frontier.every((node) => node.terminal)) numberLeaves(root);
 	return root;
 }
 
@@ -128,13 +142,19 @@ export function yieldOf(tree: ParseNode): string[] {
 
 /** Same shape, symbols and productions; token ranges are not compared. */
 export function treeEquals(a: ParseNode, b: ParseNode): boolean {
-	return (
-		a.symbol === b.symbol &&
-		a.terminal === b.terminal &&
-		a.production === b.production &&
-		a.children.length === b.children.length &&
-		a.children.every((child, i) => treeEquals(child, b.children[i]))
-	);
+	const pairs: [ParseNode, ParseNode][] = [[a, b]];
+	while (pairs.length > 0) {
+		const [x, y] = pairs.pop()!;
+		if (
+			x.symbol !== y.symbol ||
+			x.terminal !== y.terminal ||
+			x.production !== y.production ||
+			x.children.length !== y.children.length
+		)
+			return false;
+		x.children.forEach((child, i) => pairs.push([child, y.children[i]]));
+	}
+	return true;
 }
 
 /**
@@ -143,9 +163,32 @@ export function treeEquals(a: ParseNode, b: ParseNode): boolean {
  * `S(ε)`; an unexpanded non-terminal is just its name.
  */
 export function bracketForm(tree: ParseNode): string {
-	if (tree.terminal || !expanded(tree)) return tree.symbol;
-	if (tree.children.length === 0) return `${tree.symbol}(${EPSILON})`;
-	const parts = tree.children.map(bracketForm);
-	const flat = tree.children.every((child) => child.terminal || !expanded(child));
-	return flat ? `${tree.symbol}(${parts.join(' ')})` : `${tree.symbol}( ${parts.join(' ')} )`;
+	const isLeaf = (node: ParseNode): boolean => node.terminal || !expanded(node);
+	if (isLeaf(tree)) return tree.symbol;
+	/** The nodes being written, root first, each with the text of the children that are done. */
+	const open: { node: ParseNode; done: number; inner: string }[] = [
+		{ node: tree, done: 0, inner: '' }
+	];
+	for (;;) {
+		const top = open[open.length - 1];
+		const { node } = top;
+		let text: string;
+		if (top.done < node.children.length) {
+			const child = node.children[top.done];
+			if (!isLeaf(child)) {
+				open.push({ node: child, done: 0, inner: '' });
+				continue;
+			}
+			text = child.symbol;
+		} else {
+			if (node.children.length === 0) text = `${node.symbol}(${EPSILON})`;
+			else if (node.children.every(isLeaf)) text = `${node.symbol}(${top.inner})`;
+			else text = `${node.symbol}( ${top.inner} )`;
+			open.pop();
+			if (open.length === 0) return text;
+		}
+		const parent = open[open.length - 1];
+		parent.inner += parent.done === 0 ? text : ` ${text}`;
+		parent.done++;
+	}
 }

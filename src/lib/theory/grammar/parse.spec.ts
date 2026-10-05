@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Diagnostic } from '../diagnostics';
+import { firstSets, followSets } from './analyze';
 import { compareGrammars, enumerateLanguage } from './earley';
 import {
 	ebnfToGrammar,
@@ -8,6 +9,7 @@ import {
 	parseGrammar,
 	printEbnf,
 	printGrammar,
+	printSet,
 	printSymbols,
 	scanGrammar,
 	tokenizeInput
@@ -404,15 +406,30 @@ describe('parseGrammar: diagnostics', () => {
 		]);
 	});
 
-	it('notes left-hand sides that do not start with a capital letter, in one note', () => {
-		expect(problems('expr → term | expr + term\nterm → id')).toEqual([
-			['info', 'By convention, non-terminals start with a capital letter: expr, term', 'expr']
+	it('notes each left-hand side that does not start with a capital letter, where it is first defined', () => {
+		const note = 'By convention, non-terminals start with a capital letter: ';
+		const text = 'stmt → if-stmt | other\nif-stmt → if ( exp ) stmt\nstmt → exp\nexp → id';
+		expect(problems(text)).toEqual([
+			['info', `${note}stmt`, 'stmt'],
+			['info', `${note}if-stmt`, 'if-stmt'],
+			['info', `${note}exp`, 'exp']
 		]);
-		expect(problems('a → b\nb → c\nc → d\nd → e\ne → x')).toEqual([
-			['info', 'By convention, non-terminals start with a capital letter: a, b, c and 2 more', 'a']
+		// Each note has the span of that non-terminal's first left-hand side, not of a use.
+		expect(parseGrammar(text).diagnostics.map((d) => d.span!.start)).toEqual([0, 23, 60]);
+		expect(problems('a → b\nb → c\nc → d\nd → e\ne → x').map((p) => p[2])).toEqual([
+			'a',
+			'b',
+			'c',
+			'd',
+			'e'
 		]);
 		expect(problems('E → e T\nT → t | _u\nNounPhrase → x | E')).toEqual([
 			['warning', 'NounPhrase cannot be reached from the start symbol E.', 'NounPhrase']
+		]);
+		expect(problems('_x → a\n"the cat" → b | _x')).toEqual([
+			['info', `${note}_x`, '_x'],
+			['info', `${note}"the cat"`, '"the cat"'],
+			['warning', '"the cat" cannot be reached from the start symbol _x.', '"the cat"']
 		]);
 	});
 
@@ -425,17 +442,73 @@ describe('parseGrammar: diagnostics', () => {
 		expect(rules(grammar(text))).toEqual(['E → a', 'E → b']);
 	});
 
-	it('notes a hyphenated terminal made of non-terminals', () => {
-		expect(problems('E → E-T | T\nT → id')).toEqual([
-			['info', 'E-T is one symbol. Write E - T with spaces for 3 symbols.', 'E-T']
+	it('warns about a hyphenated name whose parts are all symbols of the grammar', () => {
+		// A tight subtraction is one terminal named E-T, so int - int would not be a sentence.
+		const tight = 'E → E-T | T\nT → int';
+		expect(problems(tight)).toEqual([
+			['warning', 'E-T is one symbol. Write E - T with spaces for 3 symbols.', 'E-T']
 		]);
-		expect(problems('S → If-stmt | a-b | "S-S"\nIf-stmt → x')).toEqual([]);
+		expect(grammar(tight).terminals).toEqual(['E-T', 'int']);
+		expect(grammar('E → E - T | T\nT → int').terminals).toEqual(['-', 'int']);
+		// The parts are terminals used on their own elsewhere.
+		expect(problems('E → int-int | int')).toEqual([
+			['warning', 'int-int is one symbol. Write int - int with spaces for 3 symbols.', 'int-int']
+		]);
+		expect(problems("E → E-T' | T'\nT' → int | a-b-a | a b")).toEqual([
+			['warning', 'E-T’ is one symbol. Write E - T’ with spaces for 3 symbols.', "E-T'"],
+			['warning', 'a-b-a is one symbol. Write a - b - a with spaces for 5 symbols.', 'a-b-a']
+		]);
+		// Once per name, at its first use.
+		expect(problems('E → E-E | E-E + E-E | int')).toHaveLength(1);
+	});
+
+	it('notes a hyphenated name with a non-terminal among its parts', () => {
+		expect(problems('Stmt → If-stmt | other')).toEqual([]);
+		expect(problems('Stmt → Stmt-list | other')).toEqual([
+			['info', 'Stmt-list is one symbol. Write Stmt - list with spaces for 3 symbols.', 'Stmt-list']
+		]);
+	});
+
+	it('leaves hyphenated names alone when they are defined, quoted or made of new words', () => {
+		expect(problems('S → If-stmt | a-b | "S-S" | "a-a" a\nIf-stmt → x - y | S')).toEqual([]);
+		expect(problems('E → T-list\nT-list → T | T , T-list\nT → E-T | x\nE-T → y')).toEqual([]);
+	});
+
+	it('warns about a symbol spelled like the end marker $ or like ε', () => {
+		const end =
+			'The terminal $ is spelled like the end-of-input marker. FOLLOW sets and predictive parsers cannot tell the two apart.';
+		const empty =
+			'The terminal "ε" is spelled like the empty string ε. FIRST sets cannot tell the two apart.';
+		// The augmented grammar of many textbooks.
+		const augmented = 'S’ → S $\nS → a S | ε';
+		expect(problems(augmented)).toEqual([['warning', end, '$']]);
+		expect(parseGrammar(augmented).diagnostics[0].span).toMatchObject({ start: 7, end: 8 });
+		expect(grammar(augmented).terminals).toEqual(['$', 'a']);
+		expect(problems('T → S b $ | $\nS → "ε" a | \'ε\'')).toEqual([
+			['warning', end, '$'],
+			['warning', empty, '"ε"']
+		]);
+		expect(problems('S → A "$"\n$ → a\nA → $ | "ε"\n"ε" → b').map((p) => [p[1], p[2]])).toEqual([
+			[end.replace('terminal', 'non-terminal'), '"$"'],
+			['By convention, non-terminals start with a capital letter: $', '$'],
+			[empty.replace('terminal', 'non-terminal'), '"ε"'],
+			['By convention, non-terminals start with a capital letter: "ε"', '"ε"']
+		]);
+		// ε itself, the word epsilon as a terminal, and other punctuation are fine.
+		expect(problems('S → ε | "epsilon" S | # S | ϵ')).toEqual([
+			['warning', 'Duplicate production S → ε', 'ϵ']
+		]);
+		expect(ebnfProblems('S → { a } $ | "ε"')).toEqual([
+			['warning', end, '$'],
+			['warning', empty, '"ε"']
+		]);
 	});
 
 	it('returns a grammar with warnings and notes, and null with any error', () => {
 		const withNotes = parseGrammar('s → a | a\nt → s');
 		expect(withNotes.grammar).not.toBeNull();
 		expect(withNotes.diagnostics.map((d) => d.severity).sort()).toEqual([
+			'info',
 			'info',
 			'warning',
 			'warning'
@@ -622,6 +695,28 @@ describe('printSymbols', () => {
 		expect(printSymbols(['{', 'a', '}', '[', ']', '('], { ebnf: true })).toBe(
 			'"{" a "}" "[" "]" ('
 		);
+	});
+});
+
+describe('printSet', () => {
+	it('writes N and T as the decks write sets (Introduction to Parsing, slides 14–15)', () => {
+		const g = grammar(ARITHMETIC);
+		expect(printSet(g.nonterminals)).toBe('{ E }');
+		expect(printSet(g.terminals)).toBe('{ int, +, *, (, ) }');
+		expect(printSet([])).toBe('{ }');
+		expect(printSet(new Set(['a', 'a']))).toBe('{ a }');
+	});
+
+	it('writes the ε of a FIRST set and the $ of a FOLLOW set bare', () => {
+		const g = grammar('E → T E’\nE’ → + T E’ | ε\nT → int | ( E )');
+		expect(printSet(firstSets(g).get('E’')!)).toBe('{ +, ε }');
+		expect(printSet(followSets(g).get('T')!)).toBe('{ +, ), $ }');
+		// printSymbols writes names of symbols, so it quotes a symbol named ε.
+		expect(printSymbols(['+', 'ε'])).toBe('+ "ε"');
+	});
+
+	it('quotes what would not read back, and a comma', () => {
+		expect(printSet(['the cat', ',', '|', 'id', 'S’'])).toBe('{ "the cat", ",", "|", id, S’ }');
 	});
 });
 
@@ -856,12 +951,77 @@ describe('tokenizeInput', () => {
 			tokens: ['the cat', 'on', 'the mat', 'sat'],
 			diagnostics: []
 		});
-		const unquoted = tokenizeInput('the cat sat', english.terminals);
-		expect(unquoted.tokens).toEqual(['the', 'cat', 'sat']);
-		expect(report('the cat sat', unquoted.diagnostics)).toEqual([
-			['error', 'the is not a terminal of the grammar.', 'the'],
-			['error', 'cat is not a terminal of the grammar.', 'cat']
+	});
+
+	it('says to quote a terminal of several words or characters that is written bare', () => {
+		const english = grammar(ENGLISH);
+		const text = 'the cat on "the mat" sat on  the\tfloor the dog';
+		const unquoted = tokenizeInput(text, english.terminals);
+		// The symbols are listed as they were read.
+		expect(unquoted.tokens).toEqual([
+			'the',
+			'cat',
+			'on',
+			'the mat',
+			'sat',
+			'on',
+			'the',
+			'floor',
+			'the',
+			'dog'
 		]);
+		expect(unquoted.spans).toHaveLength(10);
+		expect(report(text, unquoted.diagnostics)).toEqual([
+			['error', 'the cat is read as 2 symbols. Write "the cat" in quotes.', 'the cat'],
+			['error', 'the floor is read as 2 symbols. Write "the floor" in quotes.', 'the\tfloor'],
+			['error', 'the is not a terminal of the grammar.', 'the'],
+			['error', 'dog is not a terminal of the grammar.', 'dog']
+		]);
+
+		// '==' is an example terminal of docs/ARCHITECTURE.md §3.10.
+		const compare = ['a', 'b', '==', '<', '<='];
+		expect(report('a == b', tokenizeInput('a == b', compare).diagnostics)).toEqual([
+			['error', '== is read as 2 symbols. Write "==" in quotes.', '==']
+		]);
+		expect(tokenizeInput('a == b', compare).tokens).toEqual(['a', '=', '=', 'b']);
+		expect(tokenizeInput('a "==" b \'<=\' a', compare)).toMatchObject({
+			tokens: ['a', '==', 'b', '<=', 'a'],
+			diagnostics: []
+		});
+		expect(report('a<=b = = =', tokenizeInput('a<=b = = =', compare).diagnostics)).toEqual([
+			['error', '<= is read as 2 symbols. Write "<=" in quotes.', '<='],
+			['error', '= = is read as 2 symbols. Write "==" in quotes.', '= ='],
+			['error', '= is not a terminal of the grammar.', '=']
+		]);
+	});
+
+	it('prefers the longest quoted terminal and leaves symbols that are all terminals alone', () => {
+		const terminals = ['the', 'the cat', 'the cat sat', 'a', 'a b', 'b'];
+		const messages = (text: string) =>
+			report(text, tokenizeInput(text, terminals).diagnostics).map((d) => [d[1], d[2]]);
+		expect(messages('the cat sat')).toEqual([
+			['the cat sat is read as 3 symbols. Write "the cat sat" in quotes.', 'the cat sat']
+		]);
+		expect(messages('the cat the')).toEqual([
+			['the cat is read as 2 symbols. Write "the cat" in quotes.', 'the cat']
+		]);
+		// a b could be the terminal "a b", but a and b are terminals too: it stays two symbols.
+		expect(tokenizeInput('a b the', terminals)).toMatchObject({
+			tokens: ['a', 'b', 'the'],
+			diagnostics: []
+		});
+		// A quoted symbol is never part of such a reading.
+		expect(messages('the "cat"')).toEqual([['cat is not a terminal of the grammar.', '"cat"']]);
+	});
+
+	it('says to quote a terminal that is read as another symbol when written bare', () => {
+		expect(tokenizeInput('a ∗ a', ['a', '∗']).diagnostics.map((d) => d.message)).toEqual([
+			'∗ is read as *. Write "∗" in quotes.'
+		]);
+		expect(tokenizeInput("S'", ["S'"]).diagnostics.map((d) => d.message)).toEqual([
+			`S' is read as S’. Write "S'" in quotes.`
+		]);
+		expect(tokenizeInput('a "∗" a', ['a', '∗']).diagnostics).toEqual([]);
 	});
 
 	it('reports a symbol that is not a terminal, with its span', () => {

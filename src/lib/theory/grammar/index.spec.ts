@@ -6,25 +6,34 @@ describe('grammar engine exports', () => {
 		const names = [
 			'parseGrammar',
 			'parseEbnf',
+			'makeGrammar',
 			'printGrammar',
 			'printEbnf',
 			'printSymbols',
+			'printSet',
 			'tokenizeInput',
 			'ebnfToGrammar',
+			'scanGrammar',
 			'nullable',
 			'firstSets',
 			'followSets',
 			'firstOfSequence',
+			'reservedSymbols',
 			'unreachable',
 			'unproductive',
 			'leftRecursion',
+			'cycles',
 			'chomskyType',
+			'sentenceLengths',
+			'isEmptyLanguage',
+			'isFiniteLanguage',
 			'applyStep',
 			'nonterminalPositions',
 			'derivationFromTree',
 			'treeFromDerivation',
 			'yieldOf',
 			'treeEquals',
+			'bracketForm',
 			'recognizes',
 			'parseTrees',
 			'enumerateLanguage',
@@ -33,6 +42,7 @@ describe('grammar engine exports', () => {
 		for (const name of names) expect(typeof engine[name], name).toBe('function');
 		expect(engine.END_MARKER).toBe('$');
 		expect(engine.EPSILON).toBe('ε');
+		expect(engine.DEFAULT_MAX_STEPS).toBe(10_000_000);
 	});
 
 	it('works end to end: text to grammar to trees to derivation to text', () => {

@@ -11,18 +11,22 @@
  * by letters, digits, underscores and inner hyphens (`var-declaration`), then
  * any number of primes (`S'` is read as `S’`). Every other character is a
  * symbol of its own, so `E+E` is `E + E` and `(E)` is `( E )`; `∗` is read as
- * `*`. A quoted symbol ("the cat", '==', “x”) may hold spaces, and its quotes
- * are not part of its name. `→` and `->` are the arrow; `ε` and `epsilon` are
- * the empty right-hand side. Comments run from `//` to the end of the line or
- * sit between slash-star and star-slash.
+ * `*`. The hyphen is the one exception: between two name characters it
+ * belongs to the name, so a subtraction needs spaces (`E - T`; the parsers
+ * warn about an `E-T` whose parts are symbols of the grammar). A quoted
+ * symbol ("the cat", '==', “x”) may hold spaces, and its quotes are not part
+ * of its name. `→` and `->` are the arrow; `ε` and `epsilon` are the empty
+ * right-hand side. Comments run from `//` to the end of the line or sit
+ * between slash-star and star-slash.
  *
  * A symbol is a non-terminal exactly when it is a left-hand side, and the
  * start symbol is the first left-hand side.
  */
 import { hasErrors, type Diagnostic } from '../diagnostics';
 import type { Span } from '../regex/ast';
-import { unproductive, unreachable } from './analyze';
+import { reservedSymbols, unproductive, unreachable } from './analyze';
 import {
+	END_MARKER,
 	EPSILON,
 	type Ebnf,
 	type EbnfGrammar,
@@ -460,7 +464,11 @@ function leftSides(entries: readonly Entry[]): Map<string, Token> {
 
 const EMPTY_GRAMMAR = 'Enter a grammar, e.g. E → E + E | int';
 
-/** Notes and warnings about a grammar that parsed: naming convention, unused and empty non-terminals. */
+/**
+ * Notes and warnings about a grammar that parsed: the naming convention,
+ * unused and empty non-terminals, symbols spelled like `$` or `ε`, and
+ * hyphenated names that look like a subtraction.
+ */
 function review(
 	g: Grammar,
 	lhs: ReadonlyMap<string, Token>,
@@ -473,19 +481,16 @@ function review(
 		return [t.start, t.end];
 	};
 	const show = (name: string) => printSymbol(name, ebnf);
-	const own = [...lhs.keys()];
-	const lower = own.filter((name) => !/^\p{Lu}/u.test(name));
-	if (lower.length > 0) {
-		const shown = lower.slice(0, 3).map(show).join(', ');
-		const more = lower.length > 3 ? ` and ${lower.length - 3} more` : '';
-		diagnostics.push(
-			problem(
-				'info',
-				`By convention, non-terminals start with a capital letter: ${shown}${more}`,
-				...at(lower[0])
-			)
-		);
-	}
+	// One note per non-terminal, at its first left-hand side, so that each one can be marked in the text.
+	for (const name of lhs.keys())
+		if (!/^\p{Lu}/u.test(name))
+			diagnostics.push(
+				problem(
+					'info',
+					`By convention, non-terminals start with a capital letter: ${show(name)}`,
+					...at(name)
+				)
+			);
 	for (const name of unreachable(g))
 		if (lhs.has(name))
 			diagnostics.push(
@@ -506,17 +511,39 @@ function review(
 					...at(name)
 				)
 			);
+	const firstUse = new Map<string, Token>();
+	for (const t of tokens) if (t.kind === 'symbol' && !firstUse.has(t.name)) firstUse.set(t.name, t);
+	// FIRST and FOLLOW sets hold `$` and `ε` as plain strings: a symbol with one of those names looks the same there.
+	for (const name of reservedSymbols(g)) {
+		const t = firstUse.get(name);
+		if (!t) continue;
+		const kind = lhs.has(name) ? 'non-terminal' : 'terminal';
+		diagnostics.push(
+			problem(
+				'warning',
+				name === END_MARKER
+					? `The ${kind} ${show(name)} is spelled like the end-of-input marker. FOLLOW sets and predictive parsers cannot tell the two apart.`
+					: `The ${kind} ${show(name)} is spelled like the empty string ε. FIRST sets cannot tell the two apart.`,
+				t.start,
+				t.end
+			)
+		);
+	}
+	// A hyphen inside a name belongs to the name (if-stmt), so E-T is one symbol and not a subtraction.
+	const symbols = new Set([...g.nonterminals, ...g.terminals]);
 	const noted = new Set<string>();
 	for (const t of tokens) {
 		if (t.kind !== 'symbol' || t.quoted || !t.name.includes('-')) continue;
 		if (lhs.has(t.name) || noted.has(t.name)) continue;
-		const parts = t.name.replace(/’+$/u, '').split('-');
-		if (!parts.some((part) => lhs.has(part))) continue;
+		const parts = t.name.split('-');
+		// Every part is a symbol of the grammar (E-T, int-int): almost certainly meant as several symbols.
+		const allSymbols = parts.every((part) => symbols.has(part));
+		if (!allSymbols && !parts.some((part) => lhs.has(part))) continue;
 		noted.add(t.name);
 		diagnostics.push(
 			problem(
-				'info',
-				`${t.name} is one symbol. Write ${parts.join(' - ')} with spaces for ${parts.length * 2 - 1} symbols.`,
+				allSymbols ? 'warning' : 'info',
+				`${show(t.name)} is one symbol. Write ${parts.join(' - ')} with spaces for ${parts.length * 2 - 1} symbols.`,
 				t.start,
 				t.end
 			)
@@ -574,8 +601,12 @@ export function makeGrammar(
  * not one symbol, an empty alternative (it must be written ε), an unclosed
  * quote or comment. Warnings: a repeated production (listed once), a
  * non-terminal that cannot be reached from the start symbol, a non-terminal
- * that derives no terminal string. Info: left-hand sides that do not start
- * with a capital letter.
+ * that derives no terminal string, a symbol named `$` or `ε` (see
+ * reservedSymbols), a hyphenated name whose parts are all symbols of the
+ * grammar (`E-T` is one symbol; a subtraction is written `E - T`). Info, one
+ * per non-terminal at its first left-hand side: a left-hand side that does
+ * not start with a capital letter; and a hyphenated name with a non-terminal
+ * among its parts.
  */
 export function parseGrammar(text: string): { grammar: Grammar | null; diagnostics: Diagnostic[] } {
 	const { entries, tokens, diagnostics } = readRules(text, GRAMMAR_MODE);
@@ -814,6 +845,20 @@ export function printSymbols(symbols: readonly string[], opts?: { ebnf?: boolean
 }
 
 /**
+ * A set of symbols as the decks write sets: `{ int, +, *, (, ) }`, and `{ }`
+ * when it is empty. Made for N, T and for FIRST and FOLLOW sets: the members
+ * are written as printSymbols writes them, except that EPSILON is the bare
+ * `ε` it stands for in a FIRST set (printSymbols would quote it, as the name
+ * of a symbol) and a comma is quoted.
+ */
+export function printSet(symbols: Iterable<string>): string {
+	const members = Array.from(symbols, (s) =>
+		s === EPSILON ? EPSILON : s === ',' ? quote(s) : printSymbol(s)
+	);
+	return members.length === 0 ? '{ }' : `{ ${members.join(', ')} }`;
+}
+
+/**
  * Grammar text that parseGrammar reads back as the same grammar. Productions
  * keep their order: `nonterminal` (default) joins neighbouring productions of
  * one non-terminal with ` | `; `production` writes one production per line;
@@ -864,6 +909,34 @@ export function printEbnf(g: EbnfGrammar): string {
 
 // ───────────────────────────── token strings ─────────────────────────────
 
+/** A terminal that a token string has to quote, with the symbols it is read as when it is not quoted. */
+interface Reading {
+	terminal: string;
+	names: string[];
+}
+
+/**
+ * The terminals that are not read back as themselves when written bare in a
+ * token string (`==` is read as the two symbols `=` `=`, `the cat` as `the`
+ * and `cat`, `∗` as `*`), by the first symbol of that reading, longest
+ * reading first.
+ */
+function unquotedReadings(terminals: Iterable<string>): Map<string, Reading[]> {
+	const byFirst = new Map<string, Reading[]>();
+	for (const terminal of terminals) {
+		const { tokens, diagnostics } = lex(terminal, INPUT_MODE);
+		if (diagnostics.length > 0 || tokens.length === 0) continue;
+		if (tokens.some((t) => t.kind !== 'symbol' || t.quoted)) continue;
+		const names = tokens.map((t) => t.name);
+		if (names.length === 1 && names[0] === terminal) continue;
+		const list = byFirst.get(names[0]);
+		if (list) list.push({ terminal, names });
+		else byFirst.set(names[0], [{ terminal, names }]);
+	}
+	for (const list of byFirst.values()) list.sort((a, b) => b.names.length - a.names.length);
+	return byFirst;
+}
+
 /**
  * Splits a token string such as `( int + int ) * int` into symbols, with the
  * lexing of grammar symbols (names, primes, one-character symbols, quoted
@@ -872,6 +945,13 @@ export function printEbnf(g: EbnfGrammar): string {
  * a closing `$` is accepted only when `$` is one of the terminals passed.
  * `ε` (or `epsilon`) stands for the empty string unless it is a terminal.
  * `tokens` and `spans` list every symbol read, known or not.
+ *
+ * A terminal of several characters or words is quoted in a token string as
+ * it is in a grammar: `a "==" b`, `"the cat" sat`. Written bare it is read as
+ * several symbols; when those are not all terminals themselves, one error
+ * covers them and says to quote (`== is read as 2 symbols. Write "==" in
+ * quotes.`). `opts.nonterminals` only improves the message for the name of a
+ * non-terminal.
  */
 export function tokenizeInput(
 	text: string,
@@ -881,24 +961,58 @@ export function tokenizeInput(
 	const { tokens: lexed, diagnostics } = lex(text, INPUT_MODE);
 	const known = new Set(terminals);
 	const nonterminals = new Set(opts?.nonterminals);
-	const tokens: string[] = [];
-	const spans: Span[] = [];
-	for (const t of lexed) {
-		if (t.kind !== 'symbol' || t.broken) continue;
+	const read = lexed.filter((t) => {
+		if (t.kind !== 'symbol' || t.broken) return false;
 		const empty = !t.quoted && (t.name === 'epsilon' || EPSILONS.includes(t.name));
-		if (empty && !known.has(t.name)) continue;
-		tokens.push(t.name);
-		spans.push(span(t.start, t.end));
-		if (known.has(t.name)) continue;
-		const parts = t.name.split('-');
-		let message = `${printSymbol(t.name)} is not a terminal of the grammar.`;
-		if (nonterminals.has(t.name))
-			message = `${printSymbol(t.name)} is a non-terminal. The input is a string of terminals.`;
-		else if (!t.quoted && parts.length > 1 && parts.every((part) => known.has(part)))
-			message += ` Write ${parts.join(' - ')} with spaces.`;
-		diagnostics.push(problem('error', message, t.start, t.end));
+		return !empty || known.has(t.name);
+	});
+	const isUnknown = (t: Token): boolean => !known.has(t.name);
+	if (read.some(isUnknown)) {
+		const readings = unquotedReadings(known);
+		/** The longest quoted terminal that the symbols from `i` on spell out, some of them unknown. */
+		const spelled = (i: number): Reading | undefined =>
+			readings.get(read[i].name)?.find(({ names }) => {
+				const window = read.slice(i, i + names.length);
+				return (
+					window.length === names.length &&
+					window.every((t, k) => !t.quoted && t.name === names[k]) &&
+					window.some(isUnknown)
+				);
+			});
+		for (let i = 0; i < read.length; i++) {
+			const t = read[i];
+			const reading = spelled(i);
+			if (reading) {
+				const count = reading.names.length;
+				const last = read[i + count - 1];
+				const written = text.slice(t.start, last.end).replace(/\s+/gu, ' ');
+				const readAs = count === 1 ? printSymbol(t.name) : `${count} symbols`;
+				diagnostics.push(
+					problem(
+						'error',
+						`${written} is read as ${readAs}. Write ${quote(reading.terminal)} in quotes.`,
+						t.start,
+						last.end
+					)
+				);
+				i += count - 1;
+				continue;
+			}
+			if (!isUnknown(t)) continue;
+			const parts = t.name.split('-');
+			let message = `${printSymbol(t.name)} is not a terminal of the grammar.`;
+			if (nonterminals.has(t.name))
+				message = `${printSymbol(t.name)} is a non-terminal. The input is a string of terminals.`;
+			else if (!t.quoted && parts.length > 1 && parts.every((part) => known.has(part)))
+				message += ` Write ${parts.join(' - ')} with spaces.`;
+			diagnostics.push(problem('error', message, t.start, t.end));
+		}
 	}
-	return { tokens, spans, diagnostics: byPosition(diagnostics) };
+	return {
+		tokens: read.map((t) => t.name),
+		spans: read.map((t) => span(t.start, t.end)),
+		diagnostics: byPosition(diagnostics)
+	};
 }
 
 // ───────────────────────────── highlighting ─────────────────────────────

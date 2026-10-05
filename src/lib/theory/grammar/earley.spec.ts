@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { chomskyType, leftRecursion, sentenceLengths } from './analyze';
-import { bracketForm, derivationFromTree, treeFromDerivation, yieldOf } from './derive';
-import { compareGrammars, enumerateLanguage, parseTrees, recognizes } from './earley';
-import { printSymbols } from './parse';
+import { chomskyType, cycles, leftRecursion, sentenceLengths } from './analyze';
+import { bracketForm, derivationFromTree, treeEquals, treeFromDerivation, yieldOf } from './derive';
+import {
+	DEFAULT_MAX_STEPS,
+	compareGrammars,
+	enumerateLanguage,
+	parseTrees,
+	recognizes
+} from './earley';
+import { makeGrammar, printSymbols } from './parse';
 import {
 	AMBIGUOUS,
 	ARITHMETIC,
@@ -442,6 +448,30 @@ describe('parseTrees', () => {
 		for (const tree of three.trees) expectValidTree(mutual, ['a', 'a', 'a'], tree);
 	});
 
+	it('takes no pick that leads nowhere when every non-terminal is nullable and on a cycle', () => {
+		// Found by random testing: a search that only checks canSpan tries the
+		// trees of one child over and over while a sibling has none left.
+		const g = grammar(
+			'S → S B B | B B B\nA → ε | B | C\nB → A A A | ε | S S S\nC → B A a | ε | A S'
+		);
+		expect(cycles(g)).toEqual([['S', 'A', 'B', 'C']]);
+		const none = parseTrees(g, [], { limit: 1000 });
+		expect(none.trees).toHaveLength(729);
+		expect(none.truncated).toBe(false);
+		expect(new Set(none.trees.map(bracketForm)).size).toBe(729);
+		expect(bracketForm(none.trees[0])).toBe(
+			'S( B( A(ε) A(ε) A(ε) ) B( A(ε) A(ε) A(ε) ) B( A(ε) A(ε) A(ε) ) )'
+		);
+		for (const text of ['a', 'a a', 'a a a']) {
+			const tokens = input(g, text);
+			const { trees, truncated } = parseTrees(g, tokens, { limit: 300 });
+			expect(trees).toHaveLength(300);
+			expect(truncated).toBe(true);
+			for (const tree of trees) expectValidTree(g, tokens, tree);
+			expect(new Set(trees.map(bracketForm)).size).toBe(300);
+		}
+	});
+
 	it('parses long inputs with left and right recursion', () => {
 		const left = grammar(CASCADE);
 		const right = grammar(TOP_DOWN);
@@ -460,13 +490,68 @@ describe('parseTrees', () => {
 		});
 	});
 
-	it('throws a plain error for a tree too deep to build', () => {
+	it('builds a tree of any depth: 20000 nested parentheses', () => {
 		const g = grammar('S → ε | ( S )');
 		const depth = 20000;
 		const tokens = Array.from({ length: 2 * depth }, (_, i) => (i < depth ? '(' : ')'));
 		expect(recognizes(g, tokens)).toBe(true);
-		expect(() => parseTrees(g, tokens)).toThrow('The input is too long');
-		expect(parseTrees(g, tokens.slice(depth - 100, depth + 100)).trees).toHaveLength(1);
+		const { trees, truncated } = parseTrees(g, tokens);
+		expect(trees).toHaveLength(1);
+		expect(truncated).toBe(false);
+		expect(yieldOf(trees[0])).toEqual(tokens);
+		let levels = 0;
+		let innermost = trees[0];
+		for (let node: ParseNode | undefined = trees[0]; node; node = node.children[1]) {
+			innermost = node;
+			levels++;
+		}
+		expect(levels).toBe(depth + 1);
+		expect(innermost).toEqual({
+			symbol: 'S',
+			terminal: false,
+			children: [],
+			production: 0,
+			start: depth,
+			end: depth
+		});
+	});
+
+	it('does not throw where recognizes succeeds: 1001 tokens of an ambiguous grammar', () => {
+		const g = grammar(AMBIGUOUS);
+		const tokens = Array.from({ length: 1001 }, (_, i) => (i % 2 === 0 ? 'int' : '+'));
+		expect(recognizes(g, tokens)).toBe(true);
+		const { trees, truncated } = parseTrees(g, tokens, { limit: 2 });
+		expect(truncated).toBe(true);
+		expect(trees).toHaveLength(2);
+		for (const tree of trees) expect(yieldOf(tree)).toEqual(tokens);
+		// The first tree nests to the right all the way down, the second differs at the very bottom.
+		expect(trees[0].children.map((child) => [child.start, child.end])).toEqual([
+			[0, 1],
+			[1, 2],
+			[2, 1001]
+		]);
+		expect(treeEquals(trees[0], trees[1])).toBe(false);
+	});
+
+	it('follows a chain of 3000 unit productions and 2001 tokens of right recursion', () => {
+		const n = 3000;
+		const chain = makeGrammar([
+			...Array.from({ length: n }, (_, i) => ({ lhs: `A${i}`, rhs: [`A${i + 1}`] })),
+			{ lhs: `A${n}`, rhs: ['a'] }
+		]);
+		expect(recognizes(chain, ['a'])).toBe(true);
+		const [tree] = parseTrees(chain, ['a']).trees;
+		let levels = 0;
+		for (let node: ParseNode | undefined = tree; node; node = node.children[0]) levels++;
+		expect(levels).toBe(n + 2);
+		expect(derivationFromTree(chain, tree, 'leftmost').steps).toHaveLength(n + 1);
+
+		const right = grammar(TOP_DOWN_2);
+		const tokens = Array.from({ length: 2001 }, (_, i) => (i % 2 === 0 ? 'int' : '+'));
+		const sums = parseTrees(right, tokens);
+		expect(sums.trees).toHaveLength(1);
+		expect(sums.truncated).toBe(false);
+		expect(yieldOf(sums.trees[0])).toEqual(tokens);
 	});
 
 	it('returns valid trees whose derivations rebuild them', () => {
@@ -630,6 +715,50 @@ describe('enumerateLanguage', () => {
 		});
 	});
 
+	it('stops at the work limit and says the list was cut', () => {
+		const g = grammar('S → a S | ε');
+		const bounds = { maxLength: 30, limit: 1000 };
+		const all = enumerateLanguage(g, bounds);
+		expect(all.strings).toHaveLength(31);
+		expect(all).toMatchObject({ truncated: true, limited: false });
+		const cut = enumerateLanguage(g, { ...bounds, maxSteps: 2000 });
+		expect(cut).toMatchObject({ truncated: true, limited: true });
+		expect(cut.strings.length).toBeGreaterThan(2);
+		expect(cut.strings.length).toBeLessThan(31);
+		// What is listed is the start of the full list.
+		expect(cut.strings).toEqual(all.strings.slice(0, cut.strings.length));
+		const further = enumerateLanguage(g, { ...bounds, maxSteps: 20000 });
+		expect(further.strings.length).toBeGreaterThan(cut.strings.length);
+		expect(further.limited).toBe(true);
+
+		// A finite language: without the cut the list is whole and says so.
+		const finite = grammar('S → a | b | c c');
+		expect(enumerateLanguage(finite, { maxLength: 5, limit: 10, maxSteps: 1 })).toEqual({
+			strings: [],
+			truncated: true,
+			limited: true
+		});
+		expect(enumerateLanguage(finite, { maxLength: 5, limit: 10, maxSteps: 1e6 })).toEqual({
+			strings: [['a'], ['b'], ['c', 'c']],
+			truncated: false,
+			limited: false
+		});
+	});
+
+	it('applies the default work limit to bounds that are far too large', () => {
+		expect(DEFAULT_MAX_STEPS).toBeGreaterThan(1e6);
+		// Every sentence up to 400 tokens would take minutes; the call comes back with the first ones.
+		const { strings, truncated, limited } = enumerateLanguage(grammar('S → a S | ε'), {
+			maxLength: 400,
+			limit: 1000
+		});
+		expect(limited).toBe(true);
+		expect(truncated).toBe(true);
+		expect(strings.length).toBeGreaterThan(50);
+		expect(strings.length).toBeLessThan(401);
+		expect(strings.map((s) => s.length)).toEqual(strings.map((_, i) => i));
+	}, 60000);
+
 	it('takes a large maxLength in stride when the language is small or the limit is', () => {
 		expect(language(grammar('S → 0 | 1'), 1e9)).toEqual({ strings: ['0', '1'], truncated: false });
 		expect(language(grammar('S → a S | b S | c S | ε'), 40, 5)).toEqual({
@@ -752,6 +881,41 @@ describe('compareGrammars', () => {
 	});
 });
 
+describe('compareGrammars: work limit', () => {
+	const all = grammar('S → a S | ε');
+	const even = grammar('S → a a S | ε');
+
+	it('stops at the last length it could finish within opts.maxSteps', () => {
+		const whole = compareGrammars(all, even, { maxLength: 20 });
+		expect(whole.checkedUpTo).toBe(20);
+		expect(whole.onlyA.map((s) => s.length)).toEqual([1, 3, 5, 7, 9, 11, 13, 15, 17, 19]);
+		const cut = compareGrammars(all, even, { maxLength: 20, maxSteps: 1000 });
+		expect(cut.checkedUpTo).toBeGreaterThan(2);
+		expect(cut.checkedUpTo).toBeLessThan(20);
+		// The differences up to that length, and none from the length it gave up on.
+		expect(cut.onlyA).toEqual(whole.onlyA.filter((s) => s.length <= cut.checkedUpTo));
+		expect(cut.onlyB).toEqual([]);
+		const further = compareGrammars(all, even, { maxLength: 20, maxSteps: 10000 });
+		expect(further.checkedUpTo).toBeGreaterThan(cut.checkedUpTo);
+	});
+
+	it('counts the work of both grammars together and never reports a length it did not finish', () => {
+		const a = grammar(AMBIGUOUS);
+		const b = grammar(CASCADE);
+		let last = -1;
+		for (const maxSteps of [0, 100, 1000, 10000, 100000, 1000000]) {
+			const { onlyA, onlyB, checkedUpTo } = compareGrammars(a, b, { maxLength: 9, maxSteps });
+			expect(onlyA).toEqual([]);
+			expect(onlyB).toEqual([]);
+			expect(checkedUpTo).toBeGreaterThanOrEqual(last);
+			expect(checkedUpTo).toBeLessThanOrEqual(9);
+			last = checkedUpTo;
+		}
+		expect(last).toBe(9);
+		expect(compareGrammars(a, b, { maxLength: 9, maxSteps: 100 }).checkedUpTo).toBeLessThan(5);
+	});
+});
+
 /**
  * Counts parse trees the slow way, with the same rule about loops: a node may
  * not repeat the non-terminal and token range of an ancestor. Gives up (null)
@@ -850,6 +1014,45 @@ describe('the Earley parser against the definitions, on random grammars', () => 
 		}
 		expect(compared).toBeGreaterThan(2000);
 		expect(ambiguous).toBeGreaterThan(400);
+	});
+
+	it('finds the trees of grammars full of cycles and ε, as many as counting by hand', () => {
+		const next = random(4242);
+		const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)];
+		let compared = 0;
+		let cyclic = 0;
+		let parsed = 0;
+		for (let round = 0; round < 2500; round++) {
+			// Up to four non-terminals, picked twice as often as terminals; a third of the right-hand sides are ε.
+			const nonterminals = ['S', 'A', 'B', 'C'].slice(0, 2 + Math.floor(next() * 3));
+			const symbols = [...nonterminals, ...nonterminals, 'a', 'b'];
+			const g = makeGrammar(
+				nonterminals.flatMap((lhs) =>
+					Array.from({ length: 1 + Math.floor(next() * 3) }, () => ({
+						lhs,
+						rhs: Array.from({ length: Math.floor(next() * 3) }, () => pick(symbols))
+					}))
+				),
+				{ terminals: ['a', 'b'] }
+			);
+			const loops = cycles(g).length > 0;
+			for (const tokens of enumerateLanguage(g, { maxLength: 3, limit: 8 }).strings) {
+				const { trees, truncated } = parseTrees(g, tokens, { limit: 150 });
+				parsed++;
+				expect(trees.length).toBeGreaterThan(0);
+				for (const tree of trees) expectValidTree(g, tokens, tree);
+				expect(new Set(trees.map((t) => JSON.stringify(t))).size).toBe(trees.length);
+				if (truncated) continue;
+				const expected = countTrees(g, tokens, 100000);
+				if (expected === null) continue;
+				expect(trees.length).toBe(expected);
+				compared++;
+				if (loops) cyclic++;
+			}
+		}
+		expect(parsed).toBeGreaterThan(4000);
+		expect(compared).toBeGreaterThan(4000);
+		expect(cyclic).toBeGreaterThan(2500);
 	});
 
 	it('agrees with sentenceLengths about the shortest and longest sentence', () => {
