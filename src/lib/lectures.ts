@@ -44,7 +44,9 @@ export interface Citation {
  */
 export function citationParts(c: Citation): { deck: string; slides: string | null } {
 	const d = decks[c.deck];
-	const deck = d.title.startsWith('Intro') ? `${d.title}: ${d.topic}` : d.title;
+	// "Intro" and "Intro (cont’d)", not "Introduction to Parsing".
+	const intro = d.title === 'Intro' || d.title.startsWith('Intro (');
+	const deck = intro ? `${d.title}: ${d.topic}` : d.title;
 	if (c.slide === undefined) return { deck, slides: null };
 	if (typeof c.slide === 'number') return { deck, slides: `slide ${c.slide}` };
 	return { deck, slides: `slides ${c.slide[0]}–${c.slide[1]}` };
