@@ -201,11 +201,22 @@ Presets cite the deck and slide with `formatCitation({ deck: '06', slide: 8 })`
   `OTHER` in the dangling-else grammar is a terminal. The start symbol is the
   left-hand side of the first production.
 - Symbols are separated by spaces; each punctuation character is its own
-  symbol (`E+E` reads as `E + E`). Multi-character or multi-word terminals are
-  quoted: `"the cat"`, `'=='`. New non-terminals made by a rewrite are primed:
-  `S’` (input accepts `S'`).
+  symbol (`E+E` reads as `E + E`). The hyphen is the one exception: between
+  two name characters it belongs to the name (`if-stmt`, `var-declaration`),
+  so a subtraction is written with spaces (`E - T`), and the parsers warn
+  about an `E-T` whose parts are symbols of the grammar. Multi-character or
+  multi-word terminals are quoted, in grammars and in token strings:
+  `"the cat"`, `'=='`, `a "==" b`. New non-terminals made by a rewrite are
+  primed: `S’` (input accepts `S'`).
 - CFG four-tuple `(N, T, S, P)`; `L(G) = { a1a2 … an | S →* a1a2 … an and ai ∈ T }`;
-  the successive strings of a derivation are _sentential forms_.
+  the successive strings of a derivation are _sentential forms_. Sets of
+  symbols are written like every set (§3.1): `N = { E }`,
+  `T = { int, +, *, (, ) }`; print them, and FIRST and FOLLOW sets
+  (`{ +, ε }`, `{ ), $ }`), with `printSet`.
+- `$` and `ε` are reserved for the end of the input and the empty string. A
+  grammar that uses one of them as a symbol (`S’ → S $`, a quoted `"ε"`)
+  still parses, with a warning: in FIRST and FOLLOW sets the symbol and the
+  marker are the same string (`reservedSymbols` lists such symbols).
 - EBNF (Top-Down Parsing, slides 24, 36–39): `{ α }` is zero or more α and
   `[ α ]` is optional α, with spaces inside the brackets: `E → T { + T }`,
   `E → T [ + E ]`.
@@ -682,14 +693,31 @@ function parseEbnf(text: string): { grammar: EbnfGrammar | null; diagnostics: Di
 // Notation per §3.10. In parseGrammar, { } [ ] are ordinary terminals; in parseEbnf
 // they are metasymbols (quote them to use them as terminals). Lines starting
 // with // and /* … */ comments are ignored.
-function printGrammar(g: Grammar, opts?: { perLine?: 'nonterminal' | 'production' }): string;
+function makeGrammar(
+	productions: readonly { lhs: string; rhs: readonly string[]; span?: Span }[],
+	opts?: { terminals?: readonly string[] } // these terminals first, in this order
+): Grammar; // a grammar built in code: S = first lhs, N = the lhs, ids in order, repeats dropped
+function printGrammar(
+	g: Grammar,
+	opts?: { perLine?: 'nonterminal' | 'production' | 'alternative' }
+): string; // 'alternative': each further alternative on its own line, under the arrow, after |
 function printEbnf(g: EbnfGrammar): string;
-function printSymbols(symbols: readonly string[]): string; // "E + T", "ε" for []
+function printSymbols(symbols: readonly string[], opts?: { ebnf?: boolean }): string; // "E + T", "ε" for []
+function printSet(symbols: Iterable<string>): string; // "{ int, +, ε }", "{ }"; for N, T, FIRST, FOLLOW
 function tokenizeInput(
 	text: string,
-	terminals: readonly string[]
+	terminals: readonly string[],
+	opts?: { nonterminals?: readonly string[] } // only for the message "E is a non-terminal"
 ): { tokens: string[]; spans: Span[]; diagnostics: Diagnostic[] }; // same lexing as grammar symbols
 function ebnfToGrammar(e: EbnfGrammar): Grammar; // plain CFG for the same language
+type GrammarTokenKind =
+	'nonterminal' | 'terminal' | 'arrow' | 'bar' | 'epsilon' | 'bracket' | 'comment';
+interface GrammarToken {
+	kind: GrammarTokenKind;
+	span: Span;
+	name?: string; /* symbols only */
+}
+function scanGrammar(text: string, opts?: { ebnf?: boolean }): GrammarToken[]; // for highlighting
 
 // analyze.ts
 function nullable(g: Grammar): Set<string>;
@@ -700,6 +728,7 @@ function firstOfSequence(
 	symbols: readonly string[],
 	first?: Map<string, Set<string>>
 ): Set<string>;
+function reservedSymbols(g: Grammar): string[]; // symbols of g named like END_MARKER or EPSILON
 function unreachable(g: Grammar): string[];
 function unproductive(g: Grammar): string[];
 interface LeftRecursion {
@@ -708,11 +737,15 @@ interface LeftRecursion {
 	chain: number[]; /* production ids of V →+ V α */
 }
 function leftRecursion(g: Grammar): LeftRecursion[];
+function cycles(g: Grammar): string[][]; // groups of non-terminals with A →+ A, e.g. A → A | a
 interface ChomskyReport {
 	type: 2 | 3;
 	regular: boolean[]; /* per production: has the form V → w | wU */
 }
 function chomskyType(g: Grammar): ChomskyReport;
+function sentenceLengths(g: Grammar): { min: number; max: number } | null; // max Infinity; null: L(G) = { }
+function isEmptyLanguage(g: Grammar): boolean;
+function isFiniteLanguage(g: Grammar): boolean;
 
 // derive.ts
 function applyStep(form: SententialForm, index: number, p: Production): SententialForm;
@@ -725,24 +758,82 @@ function derivationFromTree(
 function treeFromDerivation(g: Grammar, d: Derivation): ParseNode; // partial trees allowed
 function yieldOf(tree: ParseNode): string[];
 function treeEquals(a: ParseNode, b: ParseNode): boolean;
+function bracketForm(tree: ParseNode): string; // "E( E(int) + E( E(int) + E(int) ) )", "S(ε)"
 
 // earley.ts
+const DEFAULT_MAX_STEPS = 10_000_000; // work limit in Earley items: about a second
 function recognizes(g: Grammar, tokens: readonly string[]): boolean;
 function parseTrees(
 	g: Grammar,
 	tokens: readonly string[],
-	opts?: { limit?: number }
+	opts?: { limit?: number } // default 50
 ): { trees: ParseNode[]; truncated: boolean }; // every parse tree, up to limit
 function enumerateLanguage(
 	g: Grammar,
-	opts: { maxLength: number; limit: number }
-): { strings: string[][]; truncated: boolean }; // by length, then terminal order
+	opts: { maxLength: number; limit: number; maxSteps?: number }
+): { strings: string[][]; truncated: boolean; limited: boolean }; // by length, then terminal order
 function compareGrammars(
 	a: Grammar,
 	b: Grammar,
-	opts: { maxLength: number }
+	opts: { maxLength: number; maxSentences?: number; maxSteps?: number } // defaults 20000, DEFAULT_MAX_STEPS
 ): { onlyA: string[][]; onlyB: string[][]; checkedUpTo: number };
 ```
+
+- **Diagnostics of the parsers.** Errors (no grammar is returned): empty text,
+  a line without `→`, a left-hand side that is not one symbol, an empty
+  alternative (write `ε`), an unclosed quote or comment, and for EBNF
+  unbalanced or empty `{ }` `[ ]`. Warnings: a repeated production (listed
+  once), `ε` next to other symbols, an unreachable non-terminal, a
+  non-terminal that derives no terminal string, a symbol named `$` or `ε`, a
+  hyphenated name whose parts are all symbols of the grammar (`E-T`,
+  `int-int`). Notes (`info`): one per non-terminal that does not start with a
+  capital letter, at its first left-hand side; a hyphenated name with a
+  non-terminal among its parts.
+- **Token strings.** `tokenizeInput` reports each symbol that is not in
+  `terminals`. A terminal that needs quotes and is written bare is read as
+  several symbols; when they are not all terminals, one error covers them
+  (`== is read as 2 symbols. Write "==" in quotes.`). Pass
+  `[...g.terminals, END_MARKER]` to allow the closing `$`.
+- **`$` and `ε` in sets.** FIRST and FOLLOW sets hold EPSILON and END_MARKER as
+  plain strings. A tool that shows these sets or builds a predictive parser
+  checks `reservedSymbols(g)` first; when it is not empty the sets are
+  ambiguous for that grammar. Print a set with `printSet` (`printSymbols`
+  quotes `ε`, because there it is the name of a symbol).
+- **Order.** Sets and lists follow the grammar: N and T in order of first
+  appearance, then `$`, then `ε`. `parseTrees` lists earlier productions
+  first and, within a production, shorter spans for the symbols on the left
+  first, so `int + int + int` under `E → E + E | int` gives the right-nested
+  tree `E( E(int) + E( E(int) + E(int) ) )` before the left-nested one (the
+  slides draw the left-nested tree first; a tool that follows a slide picks
+  the tree it needs with `bracketForm` or `treeEquals`). `enumerateLanguage`
+  lists shorter sentences first and orders one length by the order of T, so
+  `S → 1 A ; A → 0 | 1` gives `1 1` before `1 0`.
+- **Cyclic grammars.** `A → A | a` has infinitely many derivations of `a`
+  (`cycles(g)` is not empty). `parseTrees` leaves out trees in which a node
+  repeats the non-terminal and token range of one of its ancestors, which
+  keeps the list finite.
+- **`truncated` and `limited`.** `parseTrees(…).truncated` says there are more
+  trees than `limit`. `enumerateLanguage(…).truncated` says L(G) has sentences
+  that are not listed, which includes sentences longer than `maxLength` (as
+  for `enumerate` on automata: `S → 1 A ; A → 0 | 1 A` with `maxLength: 4` is
+  truncated); `limited` says the list itself was cut, by `limit` or by the
+  work limit. `compareGrammars(…).checkedUpTo` is `maxLength` unless a
+  language passes `maxSentences` or the work passes `maxSteps`; then it is the
+  last length that was compared completely.
+- **Cost.** No function throws or runs out of stack because its input is
+  long or deep: `parseTrees` builds a tree of 20000 nested parentheses, and
+  `yieldOf`, `treeEquals` and `bracketForm` take it (a `Derivation` holds
+  every sentential form, so its size grows with the square of the sentence
+  length). The analyses follow the productions with worklists and take a
+  fraction of a second on a grammar of 20000 rules. `recognizes` and
+  `parseTrees` take up to about the cube of the number of tokens for an
+  ambiguous grammar (`E → E + E | E * E | ( E ) | int` on 1000 tokens: a
+  fraction of a second), and `parseTrees` then a time per tree that grows
+  with the size of the tree, also for grammars with cycles. Listing a
+  language costs about the cube of the sentence length per sentence: call
+  `enumerateLanguage` and `compareGrammars` from a worker (§5.4) with a
+  `maxLength` of a few dozen at most; `maxSteps` bounds the time whatever the
+  bounds are.
 
 ## 5. UI contracts
 
