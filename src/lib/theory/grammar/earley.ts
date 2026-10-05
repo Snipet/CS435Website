@@ -400,9 +400,10 @@ export function parseTrees(
 
 /**
  * The sentences of exactly `length` tokens, as terminal codes, in the order
- * of the grammar's terminals. A prefix is extended only when some sentence of
- * that length starts with it, so the work is in proportion to the sentences
- * produced.
+ * of the grammar's terminals: a walk over token strings that keeps the Earley
+ * sets of the prefix read so far. A prefix is extended only when some sentence
+ * of that length starts with it (checked by reading on with a token that
+ * matches every terminal), so no branch of the walk is taken in vain.
  */
 function* sentencesOfLength(c: Compiled, length: number): Generator<number[]> {
 	const chart = new Chart(c, false);
@@ -441,6 +442,9 @@ function* sentencesOfLength(c: Compiled, length: number): Generator<number[]> {
  * `truncated` is true when L(G) has sentences that are not listed, over the
  * limit or longer than `maxLength` (as for `enumerate` on automata).
  * `limited` is true only for the first reason: the limit cut the list short.
+ *
+ * Meant for bounds of a few dozen tokens: finding one sentence costs about
+ * the cube of its length.
  */
 export function enumerateLanguage(
 	g: Grammar,
@@ -474,7 +478,8 @@ export function enumerateLanguage(
  *
  * `checkedUpTo` is `maxLength` unless a language has more than
  * `opts.maxSentences` sentences (default 20000) within the bound; the
- * comparison then stops at the last length it could finish.
+ * comparison then stops at the last length it could finish. Like
+ * enumerateLanguage, it is meant for bounds of a few dozen tokens.
  */
 export function compareGrammars(
 	a: Grammar,

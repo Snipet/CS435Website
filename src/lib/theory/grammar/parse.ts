@@ -35,11 +35,12 @@ const ARROW = '→';
 const PRIME = '’';
 /** Characters read as a prime after a name. */
 const PRIMES = "'’′";
-/** Opening quote → closing quote. */
+/** Opening quote → closing quote. ”x” is how some keyboards and languages write “x”. */
 const QUOTES = new Map([
 	['"', '"'],
 	["'", "'"],
 	['“', '”'],
+	['”', '”'],
 	['‘', '’']
 ]);
 /** Spellings of the empty string besides the word `epsilon`. */
@@ -229,12 +230,16 @@ const openerOf = (close: string): string => (close === '}' ? '{' : '[');
 class BodyParser {
 	private pos = 0;
 	private tooDeep = false;
+	/** The line ends in a | with nothing after it. */
+	trailingBar = false;
 
 	constructor(
 		private readonly tokens: readonly Token[],
 		private readonly diagnostics: Diagnostic[],
 		/** Message for an arrow inside the body. */
-		private readonly arrowMessage: string
+		private readonly arrowMessage: string,
+		/** The next line looks like the rest of this one: symbols, no arrow, no leading |. */
+		private readonly looseLineBelow: boolean
 	) {}
 
 	private error(message: string, start: number, end: number): void {
@@ -263,7 +268,14 @@ class BodyParser {
 			} else if (after) {
 				this.error('Nothing before |. Write ε for an empty alternative.', after.start, after.end);
 			} else if (before.kind === 'bar') {
-				this.error('Nothing after |. Write ε for an empty alternative.', before.start, before.end);
+				this.trailingBar = depth === 0;
+				this.error(
+					this.trailingBar && this.looseLineBelow
+						? 'Nothing after |. To continue on the next line, start that line with |.'
+						: 'Nothing after |. Write ε for an empty alternative.',
+					before.start,
+					before.end
+				);
 			} else if (before.kind === 'arrow') {
 				this.error(
 					'Nothing after →. Write ε for an empty right-hand side.',
@@ -369,14 +381,25 @@ function readRules(
 	let current: Token | null = null;
 	/** The rule line above had an error: its | lines are checked but not kept. */
 	let broken = false;
-	for (const line of linesOf(tokens)) {
+	/** The line above ended in |, and said so: this line needs no error of its own for lacking an arrow. */
+	let continued = false;
+	const lines = linesOf(tokens);
+	const isLoose = (line: Token[] | undefined): boolean =>
+		line !== undefined && line[0].kind !== 'bar' && !line.some((t) => t.kind === 'arrow');
+	for (const [index, line] of lines.entries()) {
 		const head = line[0];
+		const looseBelow = isLoose(lines[index + 1]);
+		const wasContinued = continued;
+		continued = false;
 		if (head.kind === 'bar') {
-			const alts = new BodyParser(
+			const body = new BodyParser(
 				line.slice(1),
 				diagnostics,
-				'A line that starts with | cannot contain →. Start the production on a new line.'
-			).alternatives(head, 0);
+				'A line that starts with | cannot contain →. Start the production on a new line.',
+				looseBelow
+			);
+			const alts = body.alternatives(head, 0);
+			continued = body.trailingBar && looseBelow;
 			if (current) for (const alt of alts) entries.push({ lhs: current, alt });
 			else if (!broken)
 				error(
@@ -388,21 +411,31 @@ function readRules(
 		}
 		const at = line.findIndex((t) => t.kind === 'arrow');
 		if (at < 0) {
-			error(
-				'Missing →. Write a production as A → α (-> also works).',
-				head.start,
-				line[line.length - 1].end
-			);
+			if (wasContinued) {
+				// Read as more alternatives of the line above, so that a | at its own end is reported too.
+				const body = new BodyParser(line, diagnostics, '', looseBelow);
+				body.alternatives(lines[index - 1][lines[index - 1].length - 1], 0);
+				continued = body.trailingBar && looseBelow;
+			} else {
+				error(
+					'Missing →. Write a production as A → α (-> also works).',
+					head.start,
+					line[line.length - 1].end
+				);
+			}
 			current = null;
 			broken = true;
 			continue;
 		}
 		const arrow = line[at];
-		const alts = new BodyParser(
+		const body = new BodyParser(
 			line.slice(at + 1),
 			diagnostics,
-			'A production has one →. Start the next production on a new line.'
-		).alternatives(arrow, 0);
+			'A production has one →. Start the next production on a new line.',
+			looseBelow
+		);
+		const alts = body.alternatives(arrow, 0);
+		continued = body.trailingBar && looseBelow;
 		if (at !== 1 || head.kind !== 'symbol') {
 			if (at === 0)
 				error('Nothing before →. The left-hand side is one non-terminal.', arrow.start, arrow.end);

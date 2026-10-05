@@ -206,6 +206,12 @@ describe('parseGrammar: notation', () => {
 		expect(bare(grammar('E → "E" "+" E | "int"'))).toEqual(bare(grammar('E → E + E | int')));
 	});
 
+	it('accepts ”x” for “x”', () => {
+		const g = grammar('S → “a” S | ”the b”');
+		expect(g.terminals).toEqual(['a', 'the b']);
+		expect(problems('S → a ”')).toEqual([['error', 'Quoted symbol is not closed. Add ”', '”']]);
+	});
+
 	it('takes quoted notation characters as terminals', () => {
 		const g = grammar('A → "|" "→" "ε" "epsilon" "->" "//" B\nB → "/*" | \'"\'');
 		expect(g.productions[0].rhs).toEqual(['|', '→', 'ε', 'epsilon', '->', '//', 'B']);
@@ -297,6 +303,24 @@ describe('parseGrammar: diagnostics', () => {
 		expect(middle).toHaveLength(1);
 		expect(middle[0]).toMatchObject({ message: before, span: { start: 8, end: 9 } });
 		expect(parseGrammar('E → a |').grammar).toBeNull();
+	});
+
+	it('says how to continue a line that ends in |, without a second error for the next line', () => {
+		const toContinue = 'Nothing after |. To continue on the next line, start that line with |.';
+		expect(problems('E → T |\n    T + E')).toEqual([['error', toContinue, '|']]);
+		expect(problems('E → T |\n    T + E |\n    F\nT → x')).toEqual([
+			['error', toContinue, '|'],
+			['error', toContinue, '|']
+		]);
+		expect(problems('E → a\n  | b |\n  c')).toEqual([['error', toContinue, '|']]);
+		// The next line is a production or a | line of its own: the alternative is simply missing.
+		const missing = 'Nothing after |. Write ε for an empty alternative.';
+		expect(problems('E → a |\nT → b')).toEqual([['error', missing, '|']]);
+		expect(problems('E → a |\n  | b')).toEqual([['error', missing, '|']]);
+		// A line without an arrow is still reported when nothing announced it.
+		expect(problems('E → T\n    T + E').map((p) => p[1])).toEqual([
+			'Missing →. Write a production as A → α (-> also works).'
+		]);
 	});
 
 	it('reports an arrow with nothing after it', () => {
