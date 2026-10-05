@@ -8,22 +8,63 @@
 	import StringSetView from '$lib/components/ui/StringSetView.svelte';
 	import TokenPairs from '$lib/components/ui/TokenPairs.svelte';
 	import type { HighlightRange, TokenPair } from '$lib/components/ui/types';
+	import { DerivationChain, ParseTreeView, TokenStream, pathKey } from '$lib/components/grammar';
+	import {
+		emptyParensTree,
+		instanceLabels,
+		instanceTree,
+		leftAssocTrees,
+		precedenceTrees,
+		sumTrees
+	} from '$lib/components/grammar/fixtures';
 	import LegendGlyph, { type GlyphKind } from './LegendGlyph.svelte';
+	import {
+		danglingElseGrammar,
+		ebnfRewrites,
+		expressionGrammar,
+		grammarSegments,
+		precedenceDeclarations,
+		productionFunctions,
+		rewriteChain,
+		statusMessages
+	} from './grammar-notation';
 
-	const sections = [
-		{ id: 'sets', title: 'Sets, strings, and languages' },
-		{ id: 'regex', title: 'Regular expressions' },
-		{ id: 'precedence', title: 'Operator precedence' },
-		{ id: 'definitions', title: 'Regular definitions' },
-		{ id: 'typing', title: 'Typing the symbols' },
-		{ id: 'flex', title: 'Flex patterns' },
-		{ id: 'automata', title: 'Finite automata' },
-		{ id: 'diagrams', title: 'Diagram legend' },
-		{ id: 'names', title: 'State names' },
-		{ id: 'tables', title: 'Transition tables' },
-		{ id: 'tokens', title: 'Tokens and lexemes' },
-		{ id: 'defaults', title: 'Conventions beyond the slides' }
+	const groups = [
+		{
+			id: 'lexical',
+			title: 'Lexical analysis',
+			sections: [
+				{ id: 'sets', title: 'Sets, strings, and languages' },
+				{ id: 'regex', title: 'Regular expressions' },
+				{ id: 'precedence', title: 'Operator precedence' },
+				{ id: 'definitions', title: 'Regular definitions' },
+				{ id: 'typing', title: 'Typing the symbols' },
+				{ id: 'flex', title: 'Flex patterns' },
+				{ id: 'automata', title: 'Finite automata' },
+				{ id: 'diagrams', title: 'Diagram legend' },
+				{ id: 'names', title: 'State names' },
+				{ id: 'tables', title: 'Transition tables' },
+				{ id: 'tokens', title: 'Tokens and lexemes' },
+				{ id: 'defaults', title: 'Conventions beyond the slides' }
+			]
+		},
+		{
+			id: 'parsing',
+			title: 'Grammars and parsing',
+			sections: [
+				{ id: 'productions', title: 'Productions and alternatives' },
+				{ id: 'derivations', title: 'Derivations' },
+				{ id: 'cfg', title: 'Context-free grammars' },
+				{ id: 'chomsky', title: 'Chomsky hierarchy' },
+				{ id: 'ebnf', title: 'EBNF' },
+				{ id: 'trees', title: 'Parse trees' },
+				{ id: 'descent', title: 'Recursive descent' },
+				{ id: 'declarations', title: 'Disambiguating declarations' }
+			]
+		}
 	] as const;
+
+	const sections = [...groups[0].sections, ...groups[1].sections] as const;
 
 	type SectionId = (typeof sections)[number]['id'];
 
@@ -62,7 +103,34 @@
 			{ deck: '01', slide: 4 },
 			{ deck: '05', slide: [10, 12] }
 		],
-		defaults: [{ deck: '08', slide: [3, 5] }]
+		defaults: [{ deck: '08', slide: [3, 5] }],
+		productions: [
+			{ deck: '09', slide: [12, 14] },
+			{ deck: '09', slide: 26 },
+			{ deck: '10', slide: 11 }
+		],
+		derivations: [
+			{ deck: '09', slide: 12 },
+			{ deck: '09', slide: [17, 20] },
+			{ deck: '09', slide: 22 }
+		],
+		cfg: [{ deck: '09', slide: [14, 15] }],
+		chomsky: [{ deck: '09', slide: 23 }],
+		ebnf: [
+			{ deck: '11', slide: [24, 25] },
+			{ deck: '11', slide: [36, 39] }
+		],
+		trees: [
+			{ deck: '10', slide: [4, 5] },
+			{ deck: '10', slide: 10 },
+			{ deck: '10', slide: 17 }
+		],
+		descent: [
+			{ deck: '11', slide: [5, 20] },
+			{ deck: '11', slide: [29, 34] },
+			{ deck: '11', slide: 37 }
+		],
+		declarations: [{ deck: '10', slide: [16, 18] }]
 	};
 
 	const legend: { kind: GlyphKind; name: string; text: string }[] = [
@@ -93,6 +161,20 @@
 			text: 'During a run: filled in amber, with the transition just taken.'
 		}
 	];
+
+	const treeRules = [
+		'The root is at the top; children are drawn left to right.',
+		'Plain straight lines fan out from a point under the parent. Labels have no boxes.',
+		'A single child sits directly below its parent.',
+		'Operators such as + are children, like any other symbol.',
+		'A leaf sits one level below its own parent; the leaves do not share a baseline.',
+		'Two trees for one string are drawn in two colors.',
+		'A tree that is ruled out is crossed out with an X.',
+		'An ε-production is drawn with an ε leaf.'
+	];
+
+	// Top-Down Parsing, slide 20 numbers the instances E0, T1, T2.
+	const instanceLabel = (_: unknown, path: number[]) => instanceLabels[pathKey(path)];
 
 	// Lexical Analysis II, slide 7 scans "f+3  +g" (two spaces). The slide lists
 	// (Whitespace, " "); maximal munch matches both spaces (docs/ARCHITECTURE.md §3.9).
@@ -146,18 +228,30 @@
 	<title>{pageTitle('Notation')}</title>
 	<meta
 		name="description"
-		content="The notation used by the CS435 tools: regular expressions, flex patterns, finite automata, state names, transition tables, and token formats."
+		content="The notation used by the CS435 tools: regular expressions, flex patterns, finite automata, state names, transition tables, token formats, grammars, derivations, and parse trees."
 	/>
 </svelte:head>
 
 {#snippet toc()}
-	<ol class="toc-list">
-		{#each sections as s (s.id)}
-			<li>
-				<a href="#{s.id}" aria-current={activeId === s.id ? 'location' : undefined}>{s.title}</a>
-			</li>
+	<div class="toc">
+		{#each groups as group (group.id)}
+			<p class="toc-group">{group.title}</p>
+			<ol class="toc-list" aria-label={group.title}>
+				{#each group.sections as s (s.id)}
+					<li>
+						<a href="#{s.id}" aria-current={activeId === s.id ? 'location' : undefined}>{s.title}</a
+						>
+					</li>
+				{/each}
+			</ol>
 		{/each}
-	</ol>
+	</div>
+{/snippet}
+
+{#snippet grammar(text: string, opts?: { ebnf?: boolean; nonterminals?: readonly string[] })}
+	<pre class="code">{#each grammarSegments(text, opts) as seg, i (i)}{#if seg.className}<span
+					class={seg.className}>{seg.text}</span
+				>{:else}{seg.text}{/if}{/each}</pre>
 {/snippet}
 
 {#snippet sectionHead(id: SectionId, title: string)}
@@ -194,6 +288,8 @@
 		</aside>
 
 		<div class="content">
+			<p class="group-label">{groups[0].title}</p>
+
 			<!-- Sets, strings, languages -->
 			<section aria-labelledby="sets">
 				{@render sectionHead('sets', 'Sets, strings, and languages')}
@@ -875,6 +971,532 @@
 					</dd>
 				</dl>
 			</section>
+
+			<p class="group-label">{groups[1].title}</p>
+
+			<!-- Productions -->
+			<section aria-labelledby="productions">
+				{@render sectionHead('productions', 'Productions and alternatives')}
+				<p>
+					A grammar is written as a list of <dfn>productions</dfn>. A production has one
+					non-terminal on the left of <span class="f">→</span> and, on the right, the symbols that may
+					replace it.
+				</p>
+				<div class="table-wrap">
+					<table class="ref">
+						<thead>
+							<tr
+								><th scope="col">Written</th><th scope="col">Meaning</th><th scope="col">Example</th
+								></tr
+							>
+						</thead>
+						<tbody>
+							<tr>
+								<td class="f sym">→</td>
+								<td>Production: the left-hand side may be replaced by the right-hand side</td>
+								<td class="f">E → E + E</td>
+							</tr>
+							<tr>
+								<td class="f sym">|</td>
+								<td>
+									Separates the alternatives of one non-terminal:
+									<span class="f">S → 0 | 1</span> stands for <span class="f">S → 0</span> and
+									<span class="f">S → 1</span>
+								</td>
+								<td class="f">E → T | T + E</td>
+							</tr>
+							<tr>
+								<td class="f sym">ε</td>
+								<td>The empty right-hand side</td>
+								<td class="f">S → ε | ( S )</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+				<div class="code-pair">
+					<figure>
+						{@render grammar(expressionGrammar)}
+						<figcaption>
+							<span>One line per non-terminal</span>
+							<CitationTag cite={{ deck: '11', slide: 4 }} />
+						</figcaption>
+					</figure>
+					<figure>
+						{@render grammar(danglingElseGrammar)}
+						<figcaption>
+							<span>Continuation lines start with <span class="f">|</span></span>
+							<CitationTag cite={{ deck: '10', slide: 11 }} />
+						</figcaption>
+					</figure>
+				</div>
+				<dl class="rules">
+					<dt>Non-terminals</dt>
+					<dd>
+						A symbol is a non-terminal exactly when it has a production, that is, when it appears on
+						a left-hand side. By convention non-terminals are written with a capital letter:
+						<span class="f">E</span>, <span class="f">EXPR</span>,
+						<span class="f">NounPhrase</span>.
+					</dd>
+					<dt>Terminals</dt>
+					<dd>
+						Every other symbol. By convention terminals are lower-case names or punctuation:
+						<span class="f">int</span>, <span class="f">id</span>, <span class="f">+</span>,
+						<span class="f">(</span>. The spelling does not decide: <span class="f">OTHER</span> in the
+						grammar above has no production, so it is a terminal.
+					</dd>
+					<dt>Start symbol</dt>
+					<dd>The left-hand side of the first production.</dd>
+					<dt>Spacing</dt>
+					<dd>
+						Symbols are separated by spaces. Each punctuation character is a symbol by itself, so
+						<span class="f">E+E</span> is read as <span class="f">E + E</span>.
+					</dd>
+					<dt>Quoted terminals</dt>
+					<dd>
+						A terminal of several characters or several words is quoted:
+						<span class="f">"the cat"</span>, <span class="f">'=='</span>.
+					</dd>
+					<dt>Primes</dt>
+					<dd>
+						A non-terminal added by a rewrite is named with a prime: <span class="f">S’</span> next
+						to <span class="f">S</span>.
+					</dd>
+					<dt>Comments</dt>
+					<dd>
+						Lines starting with <span class="f">//</span> and text between <span class="f">/*</span>
+						and <span class="f">*/</span> are ignored.
+					</dd>
+				</dl>
+
+				<h3>Typing the symbols</h3>
+				<p>
+					Grammar fields turn <span class="f">-&gt;</span> into <span class="f">→</span> as you type,
+					and the buttons above a field insert a symbol at the cursor.
+				</p>
+				<div class="table-wrap">
+					<table class="ref compact">
+						<thead>
+							<tr
+								><th scope="col">Symbol</th><th scope="col">Meaning</th><th scope="col">Type</th
+								></tr
+							>
+						</thead>
+						<tbody>
+							<tr><td class="f sym">→</td><td>Production arrow</td><td class="f">-&gt;</td></tr>
+							<tr
+								><td class="f sym">ε</td><td>Empty right-hand side</td><td class="f">epsilon</td
+								></tr
+							>
+							<tr><td class="f sym">S’</td><td>Primed name</td><td class="f">S'</td></tr>
+						</tbody>
+					</table>
+				</div>
+			</section>
+
+			<!-- Derivations -->
+			<section aria-labelledby="derivations">
+				{@render sectionHead('derivations', 'Derivations')}
+				<p>
+					A <dfn>derivation</dfn> begins with the start symbol and replaces one non-terminal at a
+					time by a right-hand side of one of its productions, until only terminals remain. The
+					strings along the way are <dfn>sentential forms</dfn>.
+				</p>
+				<p>
+					A step is written with the same arrow as a production. In this chain the underlined
+					non-terminal is the one the next step replaces, and the tinted symbols are what the step
+					before put in.
+				</p>
+				<figure>
+					<div class="example">
+						<DerivationChain
+							forms={rewriteChain.forms}
+							steps={rewriteChain.steps}
+							nonterminals={rewriteChain.nonterminals}
+							size="lg"
+							ariaLabel="Derivation of ( int + int ) * int"
+						/>
+					</div>
+					<figcaption>
+						<span>The slide writes the last three steps as <span class="f">…</span></span>
+						<CitationTag cite={{ deck: '09', slide: 12 }} />
+					</figcaption>
+				</figure>
+				<div class="table-wrap">
+					<table class="ref compact">
+						<thead><tr><th scope="col">Written</th><th scope="col">Meaning</th></tr></thead>
+						<tbody>
+							<tr><td class="f sym">→</td><td>One step: one non-terminal is replaced</td></tr>
+							<tr><td class="f sym">→<sup>*</sup></td><td>0 or more steps</td></tr>
+							<tr><td class="f sym">→<sup>+</sup></td><td>1 or more steps</td></tr>
+						</tbody>
+					</table>
+				</div>
+				<p>
+					One step replaces a single non-terminal <span class="f">X<sub>i</sub></span> and leaves the
+					rest of the string as it is:
+				</p>
+				<p class="display f">
+					X<sub>1</sub> … X<sub>i-1</sub> <b>X<sub>i</sub></b> X<sub>i+1</sub> … X<sub>n</sub> → X<sub
+						>1</sub
+					>
+					… X<sub>i-1</sub> <b>Y<sub>1</sub> … Y<sub>m</sub></b> X<sub>i+1</sub> … X<sub>n</sub>
+				</p>
+				<p>
+					if there is a production <span class="f"
+						>X<sub>i</sub> → Y<sub>1</sub> … Y<sub>m</sub></span
+					>. The language of a grammar <span class="f">G</span> with start symbol
+					<span class="f">S</span> is the set of strings of terminals that
+					<span class="f">S</span> derives:
+				</p>
+				<p class="display f">
+					L(G) = &#123; a<sub>1</sub>a<sub>2</sub> … a<sub>n</sub> | S →<sup>*</sup>
+					a<sub>1</sub>a<sub>2</sub> … a<sub>n</sub> and a<sub>i</sub> ∈ T &#125;
+				</p>
+				<p>
+					A leftmost derivation replaces the leftmost non-terminal in every step, and a rightmost
+					derivation the rightmost one. Both are named in words; the arrow stays the same.
+				</p>
+			</section>
+
+			<!-- CFG -->
+			<section aria-labelledby="cfg">
+				{@render sectionHead('cfg', 'Context-free grammars')}
+				<p>A context-free grammar (CFG) <span class="f">G</span> is a four-tuple. It consists of</p>
+				<ol class="tuple">
+					<li>a set of non-terminals <span class="f">N</span>,</li>
+					<li>a set of terminals <span class="f">T</span>,</li>
+					<li>a start symbol <span class="f">S</span>, which is a non-terminal, and</li>
+					<li>a set of productions <span class="f">P</span>.</li>
+				</ol>
+				<p class="display f">G = (N, T, S, P)</p>
+				<p>
+					For a non-terminal <span class="f">E ∈ N</span>, a production is either
+					<span class="f">E → ε</span> or
+					<span class="f">E → Y<sub>1</sub> Y<sub>2</sub> … Y<sub>n</sub></span> where each
+					<span class="f">Y<sub>i</sub> ∈ N ∪ T</span>.
+				</p>
+				<div class="table-wrap">
+					<table class="ref compact">
+						<thead>
+							<tr>
+								<th scope="col">Grammar</th>
+								<th scope="col">N</th>
+								<th scope="col">T</th>
+								<th scope="col">S</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td class="f">E → int<br />E → E + E<br />E → E * E<br />E → ( E )</td>
+								<td class="f">&#123; E &#125;</td>
+								<td class="f">&#123; int, +, *, (, ) &#125;</td>
+								<td class="f">E</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+			</section>
+
+			<!-- Chomsky hierarchy -->
+			<section aria-labelledby="chomsky">
+				{@render sectionHead('chomsky', 'Chomsky hierarchy')}
+				<div class="table-wrap">
+					<table class="ref chomsky">
+						<thead>
+							<tr>
+								<th scope="col">Type</th>
+								<th scope="col">Language</th>
+								<th scope="col">Form</th>
+								<th scope="col">Recognizer</th>
+							</tr>
+						</thead>
+						<tbody>
+							<tr>
+								<td>0</td>
+								<td>Unrestricted or recursively enumerable</td>
+								<td class="f">αXβ → αδβ<br />X ∈ N ∪ T<br />α, β, δ ∈ (N ∪ T)*</td>
+								<td>Turing machine</td>
+							</tr>
+							<tr>
+								<td>1</td>
+								<td>Context Sensitive</td>
+								<td class="f">αVβ → αδβ<br />V ∈ N<br />δ ≠ ε</td>
+								<td>Linear Bounded Automaton (ND)</td>
+							</tr>
+							<tr>
+								<td>2</td>
+								<td>Context Free</td>
+								<td class="f">V → α<br />V ∈ N<br />α ∈ (N ∪ T)*</td>
+								<td>Push-down Automaton (ND)</td>
+							</tr>
+							<tr>
+								<td>3</td>
+								<td>Regular</td>
+								<td class="f">V → w | wU<br />w ∈ T*; U, V ∈ N</td>
+								<td>NFA or DFA</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+				<p>
+					(ND) marks a nondeterministic recognizer. The four classes are nested: each one contains
+					the classes below it in the table.
+					<CitationTag cite={{ deck: '09', slide: 24 }} />
+				</p>
+			</section>
+
+			<!-- EBNF -->
+			<section aria-labelledby="ebnf">
+				{@render sectionHead('ebnf', 'EBNF')}
+				<p>
+					Extended BNF adds two pairs of brackets to right-hand sides. They are written with spaces
+					inside.
+				</p>
+				<div class="table-wrap">
+					<table class="ref">
+						<thead>
+							<tr
+								><th scope="col">Written</th><th scope="col">Meaning</th><th scope="col">Example</th
+								></tr
+							>
+						</thead>
+						<tbody>
+							<tr>
+								<td class="f">&#123; α &#125;</td>
+								<td>Zero or more α</td>
+								<td class="f">E → T &#123; + T &#125;</td>
+							</tr>
+							<tr>
+								<td class="f">[ α ]</td>
+								<td>Optional α</td>
+								<td class="f">E → T [ + E ]</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+				<p>Grammars from the slides, without and with the brackets:</p>
+				<ul class="rewrites">
+					{#each ebnfRewrites as r (r.slide)}
+						<li>
+							{@render grammar(r.before, { nonterminals: r.nonterminals })}
+							<span class="becomes">becomes</span>
+							{@render grammar(r.after, { ebnf: true, nonterminals: r.nonterminals })}
+							<span class="from"><CitationTag cite={{ deck: '11', slide: r.slide }} /></span>
+						</li>
+					{/each}
+				</ul>
+				<p>
+					Left recursion turns into a repetition and a shared beginning into an option. In an EBNF
+					grammar <span class="f">&#123; &#125; [ ]</span> are metasymbols, and a bracket that is a
+					terminal is quoted: <span class="f">'['</span>. In a plain grammar they are ordinary
+					terminals.
+				</p>
+			</section>
+
+			<!-- Parse trees -->
+			<section aria-labelledby="trees">
+				{@render sectionHead('trees', 'Parse trees')}
+				<p>
+					A parse tree has the start symbol at its root. The children of a non-terminal are the
+					symbols of the right-hand side that replaced it, and the leaves, read from left to right,
+					spell the string.
+				</p>
+				<ul class="tree-rules">
+					{#each treeRules as rule (rule)}<li>{rule}</li>{/each}
+				</ul>
+				<div class="tree-figs">
+					<figure class="wide">
+						<div class="example trees">
+							<ParseTreeView
+								tree={sumTrees.left}
+								tone={2}
+								ariaLabel="Parse tree of int + int + int that groups to the left"
+							/>
+							<ParseTreeView
+								tree={sumTrees.right}
+								tone={3}
+								ariaLabel="Parse tree of int + int + int that groups to the right"
+							/>
+						</div>
+						<figcaption>
+							<span
+								>The two parse trees of <span class="f">int + int + int</span> under
+								<span class="f">E → E + E | E * E | ( E ) | int</span></span
+							>
+							<CitationTag cite={{ deck: '10', slide: 4 }} />
+						</figcaption>
+					</figure>
+					<figure>
+						<div class="example trees">
+							<ParseTreeView
+								tree={leftAssocTrees.right}
+								tone={3}
+								rejected
+								ariaLabel="Parse tree of int + int + int that groups to the right"
+							/>
+						</div>
+						<figcaption>
+							<span
+								>Ruled out by <span class="f">%left +</span> under
+								<span class="f">E → E + E | int</span></span
+							>
+							<CitationTag cite={{ deck: '10', slide: 17 }} />
+						</figcaption>
+					</figure>
+					<figure>
+						<div class="example trees">
+							<ParseTreeView tree={emptyParensTree} ariaLabel="Parse tree of ( )" />
+						</div>
+						<figcaption>
+							<span
+								><span class="f">( )</span> under <span class="f">S → ε | ( S )</span>: the inner
+								<span class="f">S</span> derives ε</span
+							>
+							<CitationTag cite={{ deck: '09', slide: 27 }} />
+						</figcaption>
+					</figure>
+				</div>
+			</section>
+
+			<!-- Recursive descent -->
+			<section aria-labelledby="descent">
+				{@render sectionHead('descent', 'Recursive descent')}
+				<p>
+					A recursive-descent parser builds the parse tree from the top and from left to right. It
+					tries the productions of a non-terminal in the order they are written.
+				</p>
+
+				<h3>Input pointer</h3>
+				<p>
+					An <span class="f">↑</span> stands under the next token, and after the last token at the end
+					of the input. Tokens that are already matched are muted.
+				</p>
+				<div class="example streams">
+					<TokenStream tokens={['(', 'int', ')']} pointer={1} size="lg" />
+					<TokenStream tokens={['(', 'int', ')']} pointer={3} size="lg" />
+				</div>
+				<p>
+					A predictive parser ends its input with <span class="f">$</span>, which is then the last
+					token the pointer reaches.
+				</p>
+				<figure>
+					<div class="example streams">
+						<TokenStream tokens={['int', '*', 'int']} endMarker pointer={3} size="lg" />
+					</div>
+					<figcaption><CitationTag cite={{ deck: '11', slide: 37 }} /></figcaption>
+				</figure>
+
+				<h3>Status messages</h3>
+				<dl class="rules messages">
+					{#each statusMessages as m (m.text)}
+						<dt>{m.text}</dt>
+						<dd>{m.when}</dd>
+					{/each}
+				</dl>
+
+				<h3>Instances and functions</h3>
+				<p>
+					Occurrences of a non-terminal in a tree are numbered to tell them apart, starting from 0
+					at the root:
+					<span class="f">E<sub>0</sub> → T<sub>1</sub> + E<sub>2</sub></span>.
+				</p>
+				<figure>
+					<div class="example trees">
+						<ParseTreeView
+							tree={instanceTree}
+							labels={instanceLabel}
+							ariaLabel="Parse tree of int * int with numbered instances"
+						/>
+					</div>
+					<figcaption>
+						<span
+							><span class="f">int * int</span> under
+							<span class="f">E → T + E | T</span>,
+							<span class="f">T → ( E ) | int | int * T</span></span
+						>
+						<CitationTag cite={{ deck: '11', slide: 20 }} />
+					</figcaption>
+				</figure>
+				<p>
+					The function that checks the <i>i</i>-th production of a non-terminal carries that number,
+					counted from 1 in the order the productions are written. The function without a number
+					tries them in that order.
+				</p>
+				<div class="table-wrap">
+					<table class="ref compact">
+						<thead><tr><th scope="col">Function</th><th scope="col">Checks</th></tr></thead>
+						<tbody>
+							{#each productionFunctions as fn (fn.name + fn.number)}
+								<tr>
+									<td class="f">{fn.name}<sub>{fn.number}</sub> ()</td>
+									<td class="f">{fn.production}</td>
+								</tr>
+							{/each}
+							<tr>
+								<td><span class="f">E ()</span>, <span class="f">T ()</span></td>
+								<td>any production of the non-terminal</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+				<p>
+					Parser code is C, written as on the slides with a space before the parentheses of a call:
+				</p>
+				<figure>
+					<pre class="code">bool E<sub>2</sub
+						> () &#123; return T () &amp;&amp; match (PLUS) &amp;&amp; E (); &#125;</pre>
+					<figcaption><CitationTag cite={{ deck: '11', slide: 34 }} /></figcaption>
+				</figure>
+			</section>
+
+			<!-- Disambiguating declarations -->
+			<section aria-labelledby="declarations">
+				{@render sectionHead('declarations', 'Disambiguating declarations')}
+				<p>
+					An ambiguous grammar can be kept as it is and given declarations that pick one tree for
+					each string. They are written in bison syntax, one per line.
+				</p>
+				<figure>
+					{@render grammar(precedenceDeclarations)}
+					<figcaption><CitationTag cite={{ deck: '10', slide: 18 }} /></figcaption>
+				</figure>
+				<dl class="rules">
+					<dt><span class="f">%left</span></dt>
+					<dd>
+						Makes the operator left-associative: <span class="f">int + int + int</span> groups as
+						<span class="f">( int + int ) + int</span>.
+					</dd>
+					<dt>Order of the lines</dt>
+					<dd>
+						Lowest precedence first: an operator declared on a later line binds tighter. Here
+						<span class="f">*</span> binds tighter than <span class="f">+</span>, so
+						<span class="f">int + int * int</span> groups as
+						<span class="f">int + ( int * int )</span>.
+					</dd>
+				</dl>
+				<figure>
+					<div class="example trees">
+						<ParseTreeView
+							tree={precedenceTrees.left}
+							tone={3}
+							rejected
+							ariaLabel="Parse tree of int + int * int with * at the root"
+						/>
+						<ParseTreeView
+							tree={precedenceTrees.right}
+							tone={3}
+							ariaLabel="Parse tree of int + int * int with + at the root"
+						/>
+					</div>
+					<figcaption>
+						<span
+							><span class="f">int + int * int</span> under
+							<span class="f">E → E + E | E * E | int</span> with the two declarations</span
+						>
+						<CitationTag cite={{ deck: '10', slide: 18 }} />
+					</figcaption>
+				</figure>
+			</section>
 		</div>
 	</div>
 </div>
@@ -916,11 +1538,24 @@
 	.toc-mobile nav {
 		padding: 0 var(--space-3) var(--space-3);
 	}
+	/* One numbering across the groups. */
+	.toc {
+		counter-reset: toc;
+	}
+	.toc-group {
+		margin: var(--space-3) 0 var(--space-1);
+		padding-left: 10px;
+		color: var(--text-2);
+		font-size: var(--text-xs);
+		font-weight: 600;
+	}
+	.toc-group:first-child {
+		margin-top: 0;
+	}
 	.toc-list {
 		margin: 0;
 		padding: 0;
 		list-style: none;
-		counter-reset: toc;
 	}
 	.toc-list li {
 		counter-increment: toc;
@@ -989,6 +1624,15 @@
 	}
 	.content section > :global(*) {
 		margin: 0;
+	}
+	/* A group title sits close to its first section. */
+	.group-label {
+		margin: 0 0 calc(var(--space-5) - var(--space-8));
+		color: var(--accent);
+		font-size: var(--text-sm);
+		font-weight: 600;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
 	}
 	.section-head {
 		display: flex;
@@ -1328,5 +1972,84 @@
 		display: inline-block;
 		width: 1.4em;
 		color: var(--accent);
+	}
+
+	.display b {
+		color: var(--accent);
+		font-weight: 600;
+	}
+	.chomsky td:nth-child(3) {
+		min-width: 11rem;
+		line-height: 1.7;
+	}
+	.rewrites {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-4);
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+	.rewrites li {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		align-items: center;
+		gap: var(--space-2);
+	}
+	.becomes {
+		color: var(--text-3);
+		font-size: var(--text-sm);
+	}
+	@media (min-width: 720px) {
+		.rewrites li {
+			grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+			gap: var(--space-2) var(--space-3);
+		}
+		.rewrites .from {
+			grid-column: 1 / -1;
+		}
+	}
+
+	.tree-rules {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-1);
+		margin: 0;
+		padding-left: 1.3em;
+		color: var(--text-2);
+	}
+	.tree-figs {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--space-4);
+	}
+	@media (min-width: 640px) {
+		.tree-figs {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+		.tree-figs .wide {
+			grid-column: 1 / -1;
+		}
+	}
+	.trees {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-start;
+		justify-content: space-evenly;
+		gap: var(--space-5) var(--space-7);
+	}
+	.streams {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-start;
+		gap: var(--space-4) var(--space-8);
+	}
+	.messages dt {
+		font-style: italic;
+	}
+	@media (min-width: 720px) {
+		.messages {
+			grid-template-columns: max-content minmax(0, 1fr);
+		}
 	}
 </style>
