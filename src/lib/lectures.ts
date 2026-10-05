@@ -2,7 +2,8 @@
  * Lecture decks the site's presets cite. Citations use the deck title plus a
  * slide number, e.g. "Lexical Analysis III · slide 8".
  */
-export type DeckId = '00' | '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08';
+export type DeckId =
+	'00' | '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '10' | '11';
 
 export interface Deck {
 	id: DeckId;
@@ -20,7 +21,14 @@ export const decks: Record<DeckId, Deck> = {
 	'05': { id: '05', title: 'Lexical Analysis II', topic: 'Using regular expressions' },
 	'06': { id: '06', title: 'Lexical Analysis III', topic: 'Finite automata' },
 	'07': { id: '07', title: 'Lexical Analysis III (cont’d)', topic: 'Scanning with flex' },
-	'08': { id: '08', title: 'Lexical Analysis IV', topic: 'Regular expressions to finite automata' }
+	'08': { id: '08', title: 'Lexical Analysis IV', topic: 'Regular expressions to finite automata' },
+	'09': { id: '09', title: 'Introduction to Parsing', topic: 'Context-free grammars' },
+	'10': {
+		id: '10',
+		title: 'Ambiguity, Precedence, Associativity & Top-Down Parsing',
+		topic: 'Ambiguity and how to resolve it'
+	},
+	'11': { id: '11', title: 'Top-Down Parsing', topic: 'Recursive descent' }
 };
 
 export interface Citation {

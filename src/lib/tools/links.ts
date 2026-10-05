@@ -34,6 +34,11 @@ export interface LinkStates {
 	lexer: { defs?: string; rules: RuleState[]; input: string; errorRule?: boolean };
 	'scanner-dfa': { defs?: string; rules: RuleState[]; input: string };
 	flex: { spec: string; input: string };
+	/** `grammar` is grammar text in lecture notation; `input` is a space-separated token string. */
+	grammar: { grammar: string; input?: string };
+	ambiguity: { grammar: string; input?: string };
+	'rd-backtracking': { grammar: string; input?: string };
+	'rd-predictive': { grammar: string; input?: string };
 }
 
 export type LinkSlug = keyof LinkStates;

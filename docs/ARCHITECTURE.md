@@ -37,6 +37,7 @@ src/
       chars.ts                showChar, formatString, formatStringSet, formatLabel, formatClass
       regex/                  AST, lecture + flex parsers, printer, analysis
       automata/               automaton model and algorithms
+      grammar/                CFG model, parser, derivations, Earley parser, analysis
     components/
       layout/                 header, footer, theme toggle
       ui/                     generic UI kit (buttons, panels, tabs, inputs, stepper…)
@@ -185,6 +186,48 @@ Presets cite the deck and slide with `formatCitation({ deck: '06', slide: 8 })`
   maximal-munch lexeme `"  "`.
 - flex: longest match, ties to the earliest rule, unmatched characters are
   ECHOed.
+
+### 3.10 Grammars and parsing
+
+- Productions use `→` (input also accepts `->`): `E → T | T + E`. Alternatives
+  are separated by `|`, on one line or on continuation lines that start with
+  `|`. `ε` (also `epsilon`) is the empty right-hand side.
+- **Derivation steps use the same arrow `→`** (Introduction to Parsing, slides
+  12, 19–20), with `→*` for zero or more steps and `→+` for one or more. The
+  decks never use `⇒` or lm/rm subscripts; say "leftmost derivation" in words.
+- A symbol is a non-terminal exactly when it appears on a left-hand side.
+  By convention non-terminals are capitalized (`E`, `EXPR`, `NounPhrase`) and
+  terminals are lower-case names or punctuation (`int`, `id`, `+`, `(`), but
+  `OTHER` in the dangling-else grammar is a terminal. The start symbol is the
+  left-hand side of the first production.
+- Symbols are separated by spaces; each punctuation character is its own
+  symbol (`E+E` reads as `E + E`). Multi-character or multi-word terminals are
+  quoted: `"the cat"`, `'=='`. New non-terminals made by a rewrite are primed:
+  `S’` (input accepts `S'`).
+- CFG four-tuple `(N, T, S, P)`; `L(G) = { a1a2 … an | S →* a1a2 … an and ai ∈ T }`;
+  the successive strings of a derivation are _sentential forms_.
+- EBNF (Top-Down Parsing, slides 24, 36–39): `{ α }` is zero or more α and
+  `[ α ]` is optional α, with spaces inside the brackets: `E → T { + T }`,
+  `E → T [ + E ]`.
+- Token strings are space-separated: `int * int`. Predictive parsers end the
+  input with `$`.
+- Parse trees: root at the top, children left to right joined by plain
+  straight lines, no boxes around labels, operator terminals drawn as children,
+  leaves one level below their own parent (not on a common baseline). When two
+  trees for one string are shown side by side they get two different colors;
+  a rejected tree is crossed out with a large X in `--reject`.
+- Recursive descent (Top-Down Parsing): instances of non-terminals in a tree
+  may be numbered from 0 at the root (`E0 → T1 + E2`); functions for the i-th
+  production are numbered from 1 (`E1`, `E2`, `T1` …). Status messages are
+  exactly "Mismatch: int is not (", "Backtrack …", "Match! Advance input." and
+  "End of input, accept". Code is C with a space before call parentheses
+  (`match (PLUS)`), as on the slides.
+- Disambiguating declarations use bison syntax, one per line, lowest
+  precedence first: `%left +` then `%left *`.
+- Chomsky hierarchy (Introduction to Parsing, slide 23): type 0 unrestricted /
+  Turing machine; type 1 context sensitive / linear bounded automaton (ND);
+  type 2 context free `V → α` / push-down automaton (ND); type 3 regular
+  `V → w | wU` / NFA or DFA.
 
 ## 4. Engine API (src/lib/theory)
 
@@ -627,6 +670,80 @@ function subsetResultToPlain(r): PlainSubsetResult; // step symbols as class ind
 function subsetResultFromPlain(p): SubsetResult; // step symbols and DFA labels are the `classes` objects again
 ```
 
+### 4.4 Grammars (`theory/grammar/`)
+
+```ts
+// types.ts — Grammar, Production, Ebnf, EbnfRule, EbnfGrammar, ParseNode,
+// SententialForm, DerivationStep, Derivation, END_MARKER, EPSILON (see file)
+
+// parse.ts
+function parseGrammar(text: string): { grammar: Grammar | null; diagnostics: Diagnostic[] };
+function parseEbnf(text: string): { grammar: EbnfGrammar | null; diagnostics: Diagnostic[] };
+// Notation per §3.10. In parseGrammar, { } [ ] are ordinary terminals; in parseEbnf
+// they are metasymbols (quote them to use them as terminals). Lines starting
+// with // and /* … */ comments are ignored.
+function printGrammar(g: Grammar, opts?: { perLine?: 'nonterminal' | 'production' }): string;
+function printEbnf(g: EbnfGrammar): string;
+function printSymbols(symbols: readonly string[]): string; // "E + T", "ε" for []
+function tokenizeInput(
+	text: string,
+	terminals: readonly string[]
+): { tokens: string[]; spans: Span[]; diagnostics: Diagnostic[] }; // same lexing as grammar symbols
+function ebnfToGrammar(e: EbnfGrammar): Grammar; // plain CFG for the same language
+
+// analyze.ts
+function nullable(g: Grammar): Set<string>;
+function firstSets(g: Grammar): Map<string, Set<string>>; // ε is listed as EPSILON
+function followSets(g: Grammar): Map<string, Set<string>>; // END_MARKER in FOLLOW(S)
+function firstOfSequence(
+	g: Grammar,
+	symbols: readonly string[],
+	first?: Map<string, Set<string>>
+): Set<string>;
+function unreachable(g: Grammar): string[];
+function unproductive(g: Grammar): string[];
+interface LeftRecursion {
+	nonterminal: string;
+	immediate: boolean;
+	chain: number[]; /* production ids of V →+ V α */
+}
+function leftRecursion(g: Grammar): LeftRecursion[];
+interface ChomskyReport {
+	type: 2 | 3;
+	regular: boolean[]; /* per production: has the form V → w | wU */
+}
+function chomskyType(g: Grammar): ChomskyReport;
+
+// derive.ts
+function applyStep(form: SententialForm, index: number, p: Production): SententialForm;
+function nonterminalPositions(g: Grammar, form: SententialForm): number[];
+function derivationFromTree(
+	g: Grammar,
+	tree: ParseNode,
+	order: 'leftmost' | 'rightmost'
+): Derivation;
+function treeFromDerivation(g: Grammar, d: Derivation): ParseNode; // partial trees allowed
+function yieldOf(tree: ParseNode): string[];
+function treeEquals(a: ParseNode, b: ParseNode): boolean;
+
+// earley.ts
+function recognizes(g: Grammar, tokens: readonly string[]): boolean;
+function parseTrees(
+	g: Grammar,
+	tokens: readonly string[],
+	opts?: { limit?: number }
+): { trees: ParseNode[]; truncated: boolean }; // every parse tree, up to limit
+function enumerateLanguage(
+	g: Grammar,
+	opts: { maxLength: number; limit: number }
+): { strings: string[][]; truncated: boolean }; // by length, then terminal order
+function compareGrammars(
+	a: Grammar,
+	b: Grammar,
+	opts: { maxLength: number }
+): { onlyA: string[][]; onlyB: string[][]; checkedUpTo: number };
+```
+
 ## 5. UI contracts
 
 ### 5.1 Tool pages
@@ -714,6 +831,21 @@ startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
 - `edit.ts` — immutable editing operations used by the editor (add or remove
   states with renumbering, set edge labels, …). New symbols on an edge never
   merge into a transition with a `display` override.
+
+### 5.2a Grammar components (`$lib/components/grammar/`)
+
+- `ParseTreeView.svelte` — draws a `ParseNode` per §3.10 (root on top, plain
+  lines, unboxed labels). Props: `tree`, `tone?` (color of the whole tree),
+  `highlight?` (paths of nodes to mark as current / new / matched),
+  `rejected?` (draw the X), `labels?` (per-node label override, e.g. instance
+  subscripts `E0`, `T1`), `onnodeclick?`, `ariaLabel`. Scales to its container
+  and scrolls inside its own box when very wide.
+- `GrammarEditor.svelte` — `CodeEditor` for grammar text with a `→ | ε` palette,
+  highlighting of non-terminals / terminals / metasymbols, and diagnostics.
+- `TokenStream.svelte` — a token string with an input pointer (`↑` under the
+  next token), consumed tokens muted, and optional highlight ranges.
+- `DerivationChain.svelte` — sentential forms joined by `→`, with the replaced
+  non-terminal and its replacement marked, wrapping across lines.
 
 ### 5.3 UI kit (`$lib/components/ui/`)
 
