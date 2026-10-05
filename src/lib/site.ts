@@ -9,13 +9,14 @@ export const site = {
 } as const;
 
 export interface NavLink {
-	href: '/' | '/notation';
+	href: '/' | '/notation' | '/midterm';
 	label: string;
 }
 
 export const navLinks: NavLink[] = [
 	{ href: '/', label: 'Tools' },
-	{ href: '/notation', label: 'Notation' }
+	{ href: '/notation', label: 'Notation' },
+	{ href: '/midterm', label: 'Midterm' }
 ];
 
 /** Document title for a page: "Thompson's construction · CS435", or the site name. */

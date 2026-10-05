@@ -118,4 +118,21 @@
 			gap: var(--space-3);
 		}
 	}
+	/* Phones: the three links fit beside the brand without scrolling. */
+	@media (max-width: 420px) {
+		.inner {
+			gap: var(--space-2);
+		}
+		nav {
+			gap: 2px;
+		}
+		nav a {
+			padding: 6px 7px;
+		}
+	}
+	@media (max-width: 374px) {
+		.mark {
+			display: none;
+		}
+	}
 </style>
