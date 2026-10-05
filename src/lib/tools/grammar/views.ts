@@ -12,8 +12,10 @@
  */
 import type { ChainStep } from '$lib/components/grammar';
 import {
+	cycles,
 	derivationFromTree,
 	enumerateLanguage,
+	makeGrammar,
 	parseGrammar,
 	parseTrees,
 	recognizes,
@@ -24,6 +26,7 @@ import {
 } from '$lib/theory/grammar';
 import { hasErrors } from '$lib/theory/diagnostics';
 import { chainOf, pairsOf } from './builder';
+import { PLAIN, spellingOf, type Spelling } from './spelling';
 import type { StepPair } from './state';
 
 /** Longest token string whose membership is decided. */
@@ -63,7 +66,7 @@ export type Verdict = 'member' | 'not-member' | 'invalid' | 'too-long';
 
 export interface MemberDerivation {
 	/**
-	 * Sentential forms with symbols written as in a grammar (see `chainOf`);
+	 * Sentential forms with symbols written as in the grammar (see `chainOf`);
 	 * empty, like `steps`, for a derivation of more than MAX_CHAIN_STEPS steps.
 	 */
 	forms: string[][];
@@ -77,10 +80,20 @@ export interface MembershipView {
 	verdict: Verdict;
 	/** The tokens read. */
 	tokens: string[];
-	/** Parse trees found, up to TREE_LIMIT; 0 when none were built. */
+	/**
+	 * Parse trees found, up to TREE_LIMIT; 0 when none were built. Trees in
+	 * which a node repeats above itself are not among them (see `cycle`).
+	 */
 	trees: number;
-	/** There are more than `trees` parse trees. */
+	/** There are more than `trees` such parse trees. */
 	moreTrees: boolean;
+	/**
+	 * A non-terminal V with V →+ V that stands in a parse tree of the string;
+	 * null when there is none. With one, the steps from V back to V can be put
+	 * into the tree any number of times: the string has infinitely many parse
+	 * trees, whatever `trees` says.
+	 */
+	cycle: string | null;
 	/** The first parse tree; null for a non-member and for a member longer than MAX_TREE_TOKENS. */
 	tree: ParseNode | null;
 	/** The leftmost derivation of `tree`. */
@@ -104,13 +117,82 @@ function verdictOf(g: Grammar, text: string): { verdict: Verdict; tokens: string
 	return { verdict: recognizes(g, tokens) ? 'member' : 'not-member', tokens };
 }
 
-export function membership(g: Grammar, text: string): MembershipView {
+/**
+ * Whether some parse tree of `tokens` has a node labeled with a non-terminal
+ * of `marked`.
+ *
+ * Decided by a second grammar: next to every non-terminal X it has X′, which
+ * derives the strings X derives with a tree that holds a marked node. For a
+ * marked X that is every tree of X (X′ takes the productions of X as they
+ * are); for another X one non-terminal of the right-hand side has to supply
+ * the node (X → Y Z gives X′ → Y′ Z | Y Z′). The answer is whether S′ derives
+ * the tokens.
+ */
+export function parsesThrough(
+	g: Grammar,
+	tokens: readonly string[],
+	marked: ReadonlySet<string>
+): boolean {
+	const symbols = new Set([...g.nonterminals, ...g.terminals]);
+	// A suffix that makes no X′ the name of a symbol of the grammar.
+	let suffix = '′';
+	while (g.nonterminals.some((x) => symbols.has(x + suffix))) suffix += '′';
+	const isNonterminal = new Set(g.nonterminals);
+	const primed: { lhs: string; rhs: string[] }[] = [];
+	for (const p of g.productions) {
+		const lhs = p.lhs + suffix;
+		if (marked.has(p.lhs)) primed.push({ lhs, rhs: p.rhs });
+		else
+			p.rhs.forEach((y, i) => {
+				if (isNonterminal.has(y))
+					primed.push({ lhs, rhs: [...p.rhs.slice(0, i), y + suffix, ...p.rhs.slice(i + 1)] });
+			});
+	}
+	const start = g.start + suffix;
+	// makeGrammar takes the first left-hand side as the start symbol.
+	const first = primed.filter((p) => p.lhs === start);
+	if (first.length === 0) return false;
+	const rest = primed.filter((p) => p.lhs !== start);
+	return recognizes(makeGrammar([...first, ...rest, ...g.productions]), tokens);
+}
+
+/**
+ * A non-terminal V with V →+ V (`cycles`) that stands in some parse tree of
+ * `tokens`, or null. Such a tree can be made larger without changing its
+ * string, by going from V back to V once more, so the string has infinitely
+ * many parse trees exactly when there is such a V. `parseTrees` lists none of
+ * the larger trees, and with more trees than its limit it need not list one
+ * that holds V at all, which is why this is decided apart from its list.
+ *
+ * Of the groups of `cycles`, the first one in grammar order that some tree
+ * goes through names the answer (its first member: every member of a group
+ * derives every other).
+ */
+export function cycleIn(g: Grammar, tokens: readonly string[]): string | null {
+	const groups = cycles(g);
+	const through = (count: number) =>
+		parsesThrough(g, tokens, new Set(groups.slice(0, count).flat()));
+	if (groups.length === 0 || !through(groups.length)) return null;
+	// The fewest leading groups that a tree goes through: the last of them is the one.
+	let low = 1;
+	let high = groups.length;
+	while (low < high) {
+		const middle = (low + high) >> 1;
+		if (through(middle)) high = middle;
+		else low = middle + 1;
+	}
+	return groups[low - 1][0];
+}
+
+/** `write`: how the symbols of the derivation are written (the tokens and the tree hold plain names). */
+export function membership(g: Grammar, text: string, write: Spelling = PLAIN): MembershipView {
 	const { verdict, tokens } = verdictOf(g, text);
 	const view: MembershipView = {
 		verdict,
 		tokens,
 		trees: 0,
 		moreTrees: false,
+		cycle: null,
 		tree: null,
 		derivation: null
 	};
@@ -119,11 +201,12 @@ export function membership(g: Grammar, text: string): MembershipView {
 	if (trees.length === 0) return view;
 	const leftmost = derivationFromTree(g, trees[0], 'leftmost');
 	const pairs = pairsOf(leftmost);
-	const chain = chainOf(g, leftmost);
+	const chain = chainOf(g, leftmost, write);
 	return {
 		...view,
 		trees: trees.length,
 		moreTrees: truncated,
+		cycle: cycleIn(g, tokens),
 		tree: trees[0],
 		derivation:
 			pairs.length > MAX_CHAIN_STEPS
@@ -137,6 +220,7 @@ const NO_MEMBERSHIP: MembershipView = {
 	tokens: [],
 	trees: 0,
 	moreTrees: false,
+	cycle: null,
 	tree: null,
 	derivation: null
 };
@@ -145,7 +229,7 @@ export function computeCheck(request: CheckRequest): CheckView {
 	const { grammar: g } = parseGrammar(request.grammar);
 	if (!g) return { input: NO_MEMBERSHIP, tests: request.tests.map(() => 'invalid') };
 	return {
-		input: membership(g, request.input),
+		input: membership(g, request.input, spellingOf(request.grammar)),
 		tests: request.tests.map((text) => verdictOf(g, text).verdict)
 	};
 }

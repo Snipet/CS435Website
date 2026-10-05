@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseGrammar, type Grammar } from '$lib/theory/grammar';
 import { ARITHMETIC, CASCADE, ENGLISH } from './presets';
+import { spellingOf } from './spelling';
 import { CHOMSKY_TABLE, chomskyOf, productionNumbers, tupleOf } from './tuple';
 
 function grammar(text: string): Grammar {
@@ -35,6 +36,31 @@ describe('the four-tuple (Introduction to Parsing, slide 14)', () => {
 		expect(t.terminals).toBe('{ "the cat", "the mat", "the floor", sat, saw, on, under }');
 		expect(t.start).toBe('Sentence');
 		expect(t.productions[6]).toMatchObject({ number: 7, lhs: 'Noun', rhs: '"the cat"' });
+	});
+
+	it('keeps the quotes of the grammar text: every terminal of slide 25 is quoted', () => {
+		const t = tupleOf(grammar(ENGLISH), spellingOf(ENGLISH));
+		expect(t.nonterminals).toBe(
+			'{ Sentence, NounPhrase, VerbPhrase, PrepositionalPhrase, Noun, Verb, Preposition }'
+		);
+		expect(t.terminals).toBe('{ "the cat", "the mat", "the floor", "sat", "saw", "on", "under" }');
+		expect(t.start).toBe('Sentence');
+		expect(t.productions.slice(6).map((p) => `${p.lhs} → ${p.rhs}`)).toEqual([
+			'Noun → "the cat"',
+			'Noun → "the mat"',
+			'Noun → "the floor"',
+			'Verb → "sat"',
+			'Verb → "saw"',
+			'Preposition → "on"',
+			'Preposition → "under"'
+		]);
+	});
+
+	it('names symbols in its warnings as the grammar writes them', () => {
+		const text = 'S → "a"\n"Rest" → "b"';
+		expect(tupleOf(grammar(text), spellingOf(text)).warnings).toEqual([
+			'"Rest" is not reachable from the start symbol S.'
+		]);
 	});
 
 	it('warns about non-terminals that are never reached or derive no terminal string', () => {

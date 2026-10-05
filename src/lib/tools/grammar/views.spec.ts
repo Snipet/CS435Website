@@ -1,8 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { answer, serveTask, READY } from '$lib/components/ui/worker-protocol';
-import { bracketForm, parseGrammar, type Grammar } from '$lib/theory/grammar';
+import {
+	bracketForm,
+	cycles,
+	enumerateLanguage,
+	parseGrammar,
+	parseTrees,
+	type Grammar
+} from '$lib/theory/grammar';
+import { random, randomGrammar } from '$lib/theory/grammar/test-helpers';
 import { replay } from './builder';
 import { ARITHMETIC, CASCADE, COOL, ENGLISH } from './presets';
+import { spellingOf } from './spelling';
 import {
 	COUNT_LIMIT,
 	LIST_LIMIT,
@@ -14,8 +23,10 @@ import {
 	computeCheck,
 	computeLanguage,
 	computeViews,
+	cycleIn,
 	failureText,
 	membership,
+	parsesThrough,
 	testRows,
 	type CheckRequest,
 	type CheckView,
@@ -105,6 +116,23 @@ describe('membership', () => {
 		expect(m.derivation!.forms.at(-1)).toEqual(['"the cat"', 'sat']);
 	});
 
+	it('writes them as the grammar text does when it is given its spelling (slide 25)', () => {
+		const m = membership(grammar(ENGLISH), '"the cat" sat', spellingOf(ENGLISH));
+		// Tokens and tree hold the names; the chain is text.
+		expect(m.tokens).toEqual(['the cat', 'sat']);
+		expect(m.tree!.children[1].children[0].children[0].symbol).toBe('sat');
+		expect(m.derivation!.forms.at(-1)).toEqual(['"the cat"', '"sat"']);
+		expect(m.derivation!.nonterminals).toContain('VerbPhrase');
+		// The worker reads the spelling off the grammar text of the request.
+		const view = check(ENGLISH, '"the cat" "on" "the mat" "sat"');
+		expect(view.input.derivation!.forms.at(-1)).toEqual([
+			'"the cat"',
+			'"on"',
+			'"the mat"',
+			'"sat"'
+		]);
+	});
+
 	it('does not write out a derivation of very many steps', () => {
 		// Four unit productions above every a: 5 steps per token, and one for each S → S a.
 		const g = grammar('S → S A | A\nA → B\nB → C\nC → D\nD → a');
@@ -146,6 +174,215 @@ describe('membership', () => {
 		);
 		expect(tooLong.verdict).toBe('too-long');
 		expect(tooLong.tokens).toHaveLength(MAX_CHECK_TOKENS + 1);
+	});
+});
+
+/**
+ * What the definition of a parse tree says about `tokens`, without a parser: a
+ * tree for X over a stretch of the tokens is a production of X with a tree
+ * for each non-terminal of its right-hand side over consecutive parts of the
+ * stretch. Trees are built level by level up to `height` non-terminals on a
+ * path. `count`: how many there are (up to a cap; they can be very many).
+ * `heights[h]`: one of them has exactly h non-terminals on its longest path.
+ */
+function treesByHeight(
+	g: Grammar,
+	tokens: readonly string[],
+	height: number
+): { count: number; heights: boolean[] } {
+	const CAP = 1e12;
+	const isNonterminal = new Set(g.nonterminals);
+	const n = tokens.length;
+	const key = (x: string, i: number, j: number) => `${i} ${j} ${x}`;
+	/** Of at most h − 1 levels: how many trees each root and stretch has, and which have one of exactly h − 1. */
+	let lower = new Map<string, number>();
+	let lowerExact = new Set<string>();
+	/**
+	 * rhs[k…] over tokens[i…j) with trees of at most h − 1 levels: how many
+	 * ways, and whether one of them uses a tree of exactly h − 1 levels.
+	 */
+	const ways = (
+		rhs: readonly string[],
+		k: number,
+		i: number,
+		j: number
+	): { all: number; tall: boolean } => {
+		if (k === rhs.length) return { all: i === j ? 1 : 0, tall: false };
+		const y = rhs[k];
+		if (!isNonterminal.has(y))
+			return i < j && tokens[i] === y ? ways(rhs, k + 1, i + 1, j) : { all: 0, tall: false };
+		let all = 0;
+		let tall = false;
+		for (let m = i; m <= j; m++) {
+			const trees = lower.get(key(y, i, m)) ?? 0;
+			if (trees === 0) continue;
+			const rest = ways(rhs, k + 1, m, j);
+			all = Math.min(CAP, all + trees * rest.all);
+			if (rest.tall || (rest.all > 0 && lowerExact.has(key(y, i, m)))) tall = true;
+		}
+		return { all, tall };
+	};
+	const heights = [false];
+	for (let h = 1; h <= height; h++) {
+		const level = new Map<string, number>();
+		const exact = new Set<string>();
+		for (const p of g.productions)
+			for (let i = 0; i <= n; i++)
+				for (let j = i; j <= n; j++) {
+					const at = key(p.lhs, i, j);
+					const { all, tall } = ways(p.rhs, 0, i, j);
+					level.set(at, Math.min(CAP, (level.get(at) ?? 0) + all));
+					// On the first level every tree is one production without non-terminals.
+					if (h === 1 ? all > 0 : tall) exact.add(at);
+				}
+		lower = level;
+		lowerExact = exact;
+		heights.push(exact.has(key(g.start, 0, n)));
+	}
+	return { count: lower.get(key(g.start, 0, n)) ?? 0, heights };
+}
+
+describe('a string with infinitely many parse trees', () => {
+	it('names a non-terminal that derives itself and stands in a parse tree', () => {
+		// S → S → … → S → a, with as many steps S → S as one likes.
+		expect(membership(grammar('S → S | a'), 'a')).toMatchObject({
+			verdict: 'member',
+			trees: 1,
+			moreTrees: false,
+			cycle: 'S'
+		});
+		// S → S S → S → …: the other S derives ε.
+		expect(membership(grammar('S → S S | ε'), '')).toMatchObject({ trees: 1, cycle: 'S' });
+		// A cycle through two non-terminals.
+		expect(membership(grammar('S → A\nA → S | ε'), '')).toMatchObject({ trees: 1, cycle: 'S' });
+		// Next to a non-terminal that derives ε: A → N A with N →* ε.
+		expect(membership(grammar('S → A\nA → N A | a\nN → ε'), 'a').cycle).toBe('A');
+	});
+
+	it('finds the non-terminal in a tree that is not the one drawn', () => {
+		const m = membership(grammar('S → a | A\nA → A | a'), 'a');
+		expect(bracketForm(m.tree!)).toBe('S(a)');
+		expect(m).toMatchObject({ trees: 2, moreTrees: false, cycle: 'A' });
+	});
+
+	it('finds it beyond the trees that are counted', () => {
+		// The first TREE_LIMIT trees all start with S → E; C → C is in later ones only.
+		const g = grammar('S → E | C\nE → E + E | int\nC → C | E');
+		const tokens = Array(7).fill('int');
+		const listed = parseTrees(g, tokens.join(' + ').split(' '), { limit: TREE_LIMIT });
+		expect(listed.trees.every((t) => t.children[0].symbol === 'E')).toBe(true);
+		expect(membership(g, tokens.join(' + '))).toMatchObject({
+			trees: TREE_LIMIT,
+			moreTrees: true,
+			cycle: 'C'
+		});
+	});
+
+	it('is null when no parse tree of the string goes through a cycle', () => {
+		// A → A is in the grammar, but a is derived without A.
+		const g = grammar('S → a | b A\nA → A | c');
+		expect(cycles(g)).toEqual([['A']]);
+		expect(membership(g, 'a')).toMatchObject({ trees: 1, cycle: null });
+		expect(membership(g, 'b c')).toMatchObject({ trees: 1, cycle: 'A' });
+		expect(membership(g, 'b')).toMatchObject({ verdict: 'not-member', cycle: null });
+		// Left recursion and ambiguity are not cycles.
+		expect(membership(grammar(CASCADE), 'int + int * int').cycle).toBeNull();
+		expect(membership(grammar(ARITHMETIC), 'int + int * int')).toMatchObject({
+			trees: 2,
+			cycle: null
+		});
+	});
+
+	it('names the first group in grammar order that a tree goes through', () => {
+		const g = grammar('S → A | B | C | D\nA → A | a\nB → B | b\nC → C | b\nD → D | d');
+		expect(cycles(g)).toEqual([['A'], ['B'], ['C'], ['D']]);
+		expect(cycleIn(g, ['a'])).toBe('A');
+		expect(cycleIn(g, ['b'])).toBe('B');
+		expect(cycleIn(g, ['d'])).toBe('D');
+		expect(cycleIn(g, ['a', 'a'])).toBeNull();
+		// The first member of a group of several.
+		const pair = grammar('S → x T\nT → U | y\nU → T');
+		expect(cycles(pair)).toEqual([['T', 'U']]);
+		expect(cycleIn(pair, ['x', 'y'])).toBe('T');
+	});
+
+	it('finds the one group among many that the string goes through', () => {
+		// A0 … A39, each with its own terminal and its own cycle.
+		const count = 40;
+		const names = Array.from({ length: count }, (_, i) => `A${i}`);
+		const many = grammar(
+			[`S → ${names.join(' | ')}`, ...names.map((a, i) => `${a} → ${a} | t${i}`)].join('\n')
+		);
+		expect(cycles(many)).toHaveLength(count);
+		for (let i = 0; i < count; i++) expect(cycleIn(many, [`t${i}`])).toBe(`A${i}`);
+		expect(cycleIn(many, ['t0', 't1'])).toBeNull();
+	});
+
+	it('decides whether a tree goes through given non-terminals', () => {
+		const g = grammar('S → a | b A\nA → c');
+		expect(parsesThrough(g, ['a'], new Set(['A']))).toBe(false);
+		expect(parsesThrough(g, ['b', 'c'], new Set(['A']))).toBe(true);
+		expect(parsesThrough(g, ['a'], new Set(['S']))).toBe(true);
+		expect(parsesThrough(g, ['a'], new Set())).toBe(false);
+		// Not a sentence: no tree at all.
+		expect(parsesThrough(g, ['c'], new Set(['S', 'A']))).toBe(false);
+		// Every tree of the cascade goes through all three non-terminals.
+		const cascade = grammar(CASCADE);
+		for (const x of cascade.nonterminals)
+			expect(parsesThrough(cascade, ['int'], new Set([x]))).toBe(true);
+	});
+
+	it('is not misled by symbols named like its own', () => {
+		// S′ and S′′ are symbols of the grammar already.
+		const g = grammar('S → "S′" | S | "S′′" a\n"S′" → b');
+		expect(g.nonterminals).toEqual(['S', 'S′']);
+		expect(cycleIn(g, ['b'])).toBe('S');
+		expect(cycleIn(g, ['S′′', 'a'])).toBe('S');
+		expect(parsesThrough(g, ['S′′', 'a'], new Set(['S′']))).toBe(false);
+		expect(parsesThrough(g, ['b'], new Set(['S′']))).toBe(true);
+	});
+
+	it('agrees with the definition of a parse tree on random grammars', () => {
+		// The definition, on the three trees of S → S | a for a with up to three levels.
+		const loop = treesByHeight(grammar('S → S | a'), ['a'], 3);
+		expect(loop).toEqual({ count: 3, heights: [false, true, true, true] });
+		expect(treesByHeight(grammar(ARITHMETIC), ['int', '+', 'int', '*', 'int'], 9)).toEqual({
+			count: 2,
+			heights: [false, false, false, true, false, false, false, false, false, false]
+		});
+
+		let infinite = 0;
+		let finite = 0;
+		for (let seed = 1; seed <= 400; seed++) {
+			const g = randomGrammar(random(seed));
+			const { strings } = enumerateLanguage(g, { maxLength: 3, limit: 5 });
+			for (const tokens of strings) {
+				const n = tokens.length;
+				// A path without a repeated node has at most this many non-terminals: one per
+				// non-terminal and stretch of the tokens.
+				const distinct = (g.nonterminals.length * (n + 1) * (n + 2)) / 2;
+				// A taller tree repeats a node, and then there are infinitely many. Going round a
+				// cycle once more adds less than two rounds of the non-terminals to a path, so
+				// if any tree is taller, one is within that range.
+				const top = distinct + 2 * g.nonterminals.length;
+				const expected = treesByHeight(g, tokens, top)
+					.heights.slice(distinct + 1)
+					.some((tall) => tall);
+				const rules = g.productions.map((p) => `${p.lhs} → ${p.rhs.join(' ') || 'ε'}`);
+				const label = `seed ${seed}: ${rules.join('; ')} on "${tokens.join(' ')}"`;
+				expect(cycleIn(g, tokens) !== null, label).toBe(expected);
+				if (expected) infinite++;
+				else {
+					finite++;
+					// No tree repeats a node: the trees that are listed are all there are.
+					const listed = parseTrees(g, tokens, { limit: 500 });
+					if (!listed.truncated)
+						expect(listed.trees.length, label).toBe(treesByHeight(g, tokens, distinct).count);
+				}
+			}
+		}
+		expect(infinite).toBeGreaterThan(50);
+		expect(finite).toBeGreaterThan(50);
 	});
 });
 

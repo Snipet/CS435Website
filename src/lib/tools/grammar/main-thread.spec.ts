@@ -11,6 +11,7 @@ import {
 	treeFromDerivation
 } from '$lib/theory/grammar';
 import {
+	abridgeChain,
 	allowedPositions,
 	bothDerivations,
 	chainOf,
@@ -19,11 +20,13 @@ import {
 	freshPaths,
 	frontier,
 	kindLabel,
-	replay
+	replay,
+	selectedPosition
 } from './builder';
 import { applyPreset, presets } from './presets';
 import { randomSentence } from './random';
 import { regularNfa } from './regular';
+import { spellingOf } from './spelling';
 import { blankState, type GrammarToolState } from './state';
 import { chomskyOf, tupleOf } from './tuple';
 import { computeCheck, computeLanguage } from './views';
@@ -45,22 +48,27 @@ vi.mock('$lib/theory/grammar/earley', () => {
 function pageWork(state: GrammarToolState) {
 	const { grammar: g } = parseGrammar(state.grammar);
 	if (!g) throw new Error('grammar has errors');
+	const write = spellingOf(state.grammar);
 	const built = replay(g, state.steps);
 	const tree = treeFromDerivation(g, built.derivation);
 	const form = currentForm(built.derivation);
-	const complete = allowedPositions(g, form, state.order).length === 0;
+	const allowed = allowedPositions(g, form, state.order);
+	const complete = allowed.length === 0;
+	const chain = chainOf(g, built.derivation, write);
 	return {
-		tuple: tupleOf(g),
+		tuple: tupleOf(g, write),
 		chomsky: chomskyOf(g),
 		nfa: regularNfa(g),
 		size: sentenceLengths(g),
 		example: randomSentence(g, 0, { maxDepth: 0 }),
 		random: state.seed === null ? null : randomSentence(g, state.seed),
-		chain: chainOf(g, built.derivation),
+		chain,
+		shown: abridgeChain(chain),
+		selected: selectedPosition(null, form, allowed),
 		kind: kindLabel(g, built.derivation),
 		leaves: frontier(tree),
 		fresh: freshPaths(g, built.derivation),
-		spoken: describeLastStep(g, built.derivation),
+		spoken: describeLastStep(g, built.derivation, write),
 		both: complete && built.pairs.length > 0 ? bothDerivations(g, built.derivation) : null,
 		input: tokenizeInput(state.input, g.terminals, { nonterminals: g.nonterminals }),
 		tests: state.tests.map((t) => tokenizeInput(t, g.terminals))

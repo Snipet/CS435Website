@@ -43,6 +43,7 @@ import {
 } from './presets';
 import { randomSentence } from './random';
 import { regularNfa } from './regular';
+import { spellingOf } from './spelling';
 import { blankState, isGrammarHash, stateFromHash, type GrammarToolState } from './state';
 import { chomskyOf, tupleOf } from './tuple';
 import { computeCheck, computeLanguage } from './views';
@@ -425,6 +426,29 @@ describe('Introduction to Parsing: larger grammars', () => {
 		expect(r.derivation.steps.map((s) => s.production)).toContain(2);
 		expect(check('english').input.verdict).toBe('member');
 		expect(check('english').tests).toEqual(['member', 'member', 'not-member']);
+	});
+
+	it('writes every terminal of the English grammar in quotes, as the slide does', () => {
+		const p = preset('english');
+		const g = grammarOf(p);
+		// The grammar text, the strings of the preset and what the page prints agree.
+		for (const terminal of g.terminals) expect(p.value.grammar).toContain(`"${terminal}"`);
+		expect(p.value.input).toBe('"the cat" "on" "the mat" "sat"');
+		expect(p.value.tests).toEqual([
+			'"the cat" "sat"',
+			'"the cat" "on" "the mat" "saw" "the floor"',
+			'"the cat" "sat" "on" "the mat"'
+		]);
+		const write = spellingOf(p.value.grammar);
+		expect(tupleOf(g, write).terminals).toBe(
+			'{ "the cat", "the mat", "the floor", "sat", "saw", "on", "under" }'
+		);
+		const view = check('english').input;
+		expect(view.tokens).toEqual(['the cat', 'on', 'the mat', 'sat']);
+		expect(view.derivation!.forms.at(-1)!.join(' ')).toBe(p.value.input);
+		const r = randomSentence(g, load('english').seed!);
+		if (!r.ok) throw new Error('no sentence');
+		expect(write.symbols(r.sentence)).toBe('"the cat" "saw" "the mat" "under" "the floor"');
 	});
 });
 

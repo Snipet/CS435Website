@@ -11,13 +11,9 @@
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import Panel from '$lib/components/ui/Panel.svelte';
 	import SegmentedControl from '$lib/components/ui/SegmentedControl.svelte';
+	import { treeFromDerivation, type Grammar, type Production } from '$lib/theory/grammar';
 	import {
-		printSymbols,
-		treeFromDerivation,
-		type Grammar,
-		type Production
-	} from '$lib/theory/grammar';
-	import {
+		abridgeChain,
 		allowedPositions,
 		bothDerivations,
 		chainOf,
@@ -29,13 +25,19 @@
 		lastStepText,
 		productionsOf,
 		replay,
+		selectedPosition,
 		stepCount,
-		symbolText
+		type AbridgedChain,
+		type ChainView,
+		type PickedPosition
 	} from './builder';
+	import { PLAIN, type Spelling } from './spelling';
 	import { MAX_STEPS, type ReplaceOrder, type StepPair } from './state';
 
 	interface Props {
 		grammar: Grammar;
+		/** How the symbols are written: as the grammar text writes them. */
+		write?: Spelling;
 		/** The derivation, as saved steps. */
 		steps: StepPair[];
 		order: ReplaceOrder;
@@ -46,6 +48,7 @@
 
 	let {
 		grammar,
+		write = PLAIN,
 		steps = $bindable(),
 		order = $bindable(),
 		lm = $bindable(),
@@ -75,28 +78,50 @@
 	const complete = $derived(!form.some((symbol) => isNonterminal.has(symbol)));
 	const full = $derived(count >= MAX_STEPS);
 
-	/** The position the user chose; it lasts until the next step. */
-	let picked = $state<number | null>(null);
+	/**
+	 * The position the user chose, with the form it was chosen in: the choice
+	 * holds for that form only, so a step, an undo and a derivation or grammar
+	 * that comes from outside (a preset, a link, the Membership panel, an edit)
+	 * all end it. Raw, because the form is compared by identity.
+	 */
+	let picked = $state.raw<PickedPosition | null>(null);
 	/** The position whose productions are listed: the chosen one, or the only one allowed. */
-	const selected = $derived(
-		picked !== null && allowed.includes(picked) ? picked : allowed.length === 1 ? allowed[0] : null
-	);
+	const selected = $derived(selectedPosition(picked, form, allowed));
 	const options = $derived(selected === null ? [] : productionsOf(grammar, form[selected]));
 
-	const chain = $derived(chainOf(grammar, derivation));
+	/** A long chain is written without its first steps unless all steps are asked for. */
+	let allSteps = $state(false);
+	const shownChain = (short: AbridgedChain, whole: ChainView): ChainView =>
+		allSteps && short.omitted > 0 ? whole : short;
+
+	const fullChain = $derived(chainOf(grammar, derivation, write));
+	const shortChain = $derived(abridgeChain(fullChain));
+	const chain = $derived(shownChain(shortChain, fullChain));
 	const kind = $derived(kindLabel(grammar, derivation));
 	const tree = $derived(treeFromDerivation(grammar, derivation));
-	const highlight = $derived({
-		fresh: freshPaths(grammar, derivation),
-		current: selected === null ? [] : [frontier(tree)[selected]]
-	});
-	const lastStep = $derived(lastStepText(grammar, derivation));
+	// Kept apart from `highlight`: choosing a non-terminal does not walk the tree again.
+	const fresh = $derived(freshPaths(grammar, derivation));
+	const leaves = $derived(frontier(tree));
+	const highlight = $derived({ fresh, current: selected === null ? [] : [leaves[selected]] });
+	const lastStep = $derived(lastStepText(grammar, derivation, write));
 	/** Read out after each step. */
-	const spoken = $derived(describeLastStep(grammar, derivation));
+	const spoken = $derived(describeLastStep(grammar, derivation, write));
 
 	const both = $derived(complete && count > 0 ? bothDerivations(grammar, derivation) : null);
-	const leftmost = $derived(both && lm ? chainOf(grammar, both.leftmost) : null);
-	const rightmost = $derived(both && rm ? chainOf(grammar, both.rightmost) : null);
+	const fullLeftmost = $derived(both && lm ? chainOf(grammar, both.leftmost, write) : null);
+	const fullRightmost = $derived(both && rm ? chainOf(grammar, both.rightmost, write) : null);
+	const shortLeftmost = $derived(fullLeftmost && abridgeChain(fullLeftmost));
+	const shortRightmost = $derived(fullRightmost && abridgeChain(fullRightmost));
+	const leftmost = $derived(
+		fullLeftmost && shortLeftmost ? shownChain(shortLeftmost, fullLeftmost) : null
+	);
+	const rightmost = $derived(
+		fullRightmost && shortRightmost ? shownChain(shortRightmost, fullRightmost) : null
+	);
+	/** One of the two derivations of the finished tree is too long to write out. */
+	const bothLong = $derived(
+		(shortLeftmost?.omitted ?? 0) > 0 || (shortRightmost?.omitted ?? 0) > 0
+	);
 
 	let root: HTMLDivElement | undefined = $state();
 
@@ -111,7 +136,7 @@
 	}
 
 	function choose(position: number) {
-		picked = position;
+		picked = { at: position, form };
 		void refocus();
 	}
 
@@ -139,6 +164,12 @@
 	}
 </script>
 
+{#snippet allStepsButton()}
+	<Button size="sm" aria-pressed={allSteps} onclick={() => (allSteps = !allSteps)}>
+		Write out all steps
+	</Button>
+{/snippet}
+
 <div class="builder" bind:this={root}>
 	<Panel title="Derivation" subtitle={stepCount(derivation)}>
 		{#snippet actions()}
@@ -164,19 +195,19 @@
 
 			<section class="block" aria-label="Sentential form">
 				<h3 class="cap">Sentential form</h3>
-				<div class="form" role="group" aria-label="Sentential form: {printSymbols(form)}">
+				<div class="form" role="group" aria-label="Sentential form: {write.symbols(form)}">
 					{#each form as symbol, i (i)}
 						{#if isNonterminal.has(symbol)}
 							<button
 								type="button"
 								class={['symbol', 'nt', { chosen: selected === i }]}
 								aria-pressed={selected === i}
-								aria-label="{symbolText(symbol)}, symbol {i + 1} of {form.length}: replace"
+								aria-label="{write.symbol(symbol)}, symbol {i + 1} of {form.length}: replace"
 								disabled={!allowed.includes(i)}
-								onclick={() => choose(i)}>{symbolText(symbol)}</button
+								onclick={() => choose(i)}>{write.symbol(symbol)}</button
 							>
 						{:else}
-							<span class="symbol t">{symbolText(symbol)}</span>
+							<span class="symbol t">{write.symbol(symbol)}</span>
 						{/if}
 					{:else}
 						<span class="symbol eps">ε</span>
@@ -189,7 +220,7 @@
 			<section class="block" aria-label="Productions">
 				{#if complete}
 					<Callout tone="success">
-						<span class="formal">{printSymbols(form)}</span> is a sentence: the form has only terminals,
+						<span class="formal">{write.symbols(form)}</span> is a sentence: the form has only terminals,
 						so it is in L(G).
 					</Callout>
 				{:else if full}
@@ -199,7 +230,7 @@
 					<p class="hint">Choose a non-terminal of the sentential form to list its productions.</p>
 				{:else}
 					<h3 class="cap">
-						Replace <span class="formal nt-name">{symbolText(form[selected])}</span>
+						Replace <span class="formal nt-name">{write.symbol(form[selected])}</span>
 						{#if form.length > 1}<span class="where">(symbol {selected + 1})</span>{/if} by
 					</h3>
 					<ul class="productions">
@@ -208,9 +239,9 @@
 								<button type="button" class="production" onclick={() => apply(p)}>
 									<span class="number">{p.id + 1}</span>
 									<span class="rule"
-										><span class="nt-name">{symbolText(p.lhs)}</span>
+										><span class="nt-name">{write.symbol(p.lhs)}</span>
 										<span class="arrow">→</span>
-										{printSymbols(p.rhs)}</span
+										{write.symbols(p.rhs)}</span
 									>
 								</button>
 							</li>
@@ -238,6 +269,14 @@
 					current={chain.forms.length - 1}
 					ariaLabel="Derivation so far"
 				/>
+				{#if shortChain.omitted > 0}
+					<p class="abridged">
+						{#if !allSteps}
+							<span>The last {count - shortChain.omitted} of {count} steps are written out.</span>
+						{/if}
+						{@render allStepsButton()}
+					</p>
+				{/if}
 			</section>
 		</div>
 
@@ -283,6 +322,14 @@
 					</div>
 					{#if leftmost && rightmost}
 						<p class="same">Both derivations define the same parse tree.</p>
+					{/if}
+					{#if bothLong}
+						<p class="abridged">
+							{#if !allSteps}
+								<span>A derivation this long is written without its first steps.</span>
+							{/if}
+							{@render allStepsButton()}
+						</p>
 					{/if}
 				{/if}
 			</div>
@@ -425,6 +472,15 @@
 	.hint {
 		margin: 0;
 		color: var(--text-3);
+		font-size: var(--text-sm);
+	}
+	.abridged {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-2) var(--space-3);
+		margin: var(--space-1) 0 0;
+		color: var(--text-2);
 		font-size: var(--text-sm);
 	}
 

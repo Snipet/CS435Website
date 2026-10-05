@@ -12,7 +12,7 @@
 	import TextField from '$lib/components/ui/TextField.svelte';
 	import Updating from '$lib/components/ui/Updating.svelte';
 	import type { Diagnostic } from '$lib/theory/diagnostics';
-	import { symbolText } from './builder';
+	import { PLAIN, type Spelling } from './spelling';
 	import { MAX_STEPS, type StepPair } from './state';
 	import { MAX_CHAIN_STEPS, MAX_CHECK_TOKENS, MAX_TREE_TOKENS, type MembershipView } from './views';
 
@@ -28,6 +28,8 @@
 		failure?: string | null;
 		/** The start symbol, for the wording. */
 		start: string;
+		/** How the symbols are written: as the grammar text writes them. */
+		write?: Spelling;
 		/** Link to the Ambiguity tool for this grammar and string; null hides it. */
 		ambiguityHref?: string | null;
 		placeholder?: string;
@@ -42,6 +44,7 @@
 		stale,
 		failure = null,
 		start,
+		write = PLAIN,
 		ambiguityHref = null,
 		placeholder,
 		onload
@@ -59,14 +62,24 @@
 	/** The string as typed has problems: no result belongs to it. */
 	const invalid = $derived(errors.length > 0);
 	const shown = $derived(!invalid && !failure && result && result.verdict !== 'invalid');
-	const tokens = $derived(result ? result.tokens.map(symbolText) : []);
+	const tokens = $derived(result ? result.tokens.map(write.symbol) : []);
 	const member = $derived(result?.verdict === 'member');
+	/**
+	 * A non-terminal that derives itself and stands in a parse tree of the
+	 * string: the trees are then infinitely many, and the ones counted are those
+	 * without a node repeated above itself.
+	 */
+	const cycle = $derived(result && result.cycle !== null ? write.symbol(result.cycle) : null);
 	const treeCount = $derived.by(() => {
 		if (!result || result.trees === 0) return null;
 		if (result.trees === 1 && !result.moreTrees) return 'It has one parse tree.';
 		const n = result.moreTrees ? `more than ${result.trees}` : String(result.trees);
 		return `It has ${n} parse trees; the first is drawn.`;
 	});
+	/** More than one parse tree: the Ambiguity tool has something to show. */
+	const severalTrees = $derived(
+		!!result && (result.trees > 1 || result.moreTrees || result.cycle !== null)
+	);
 	const derivation = $derived(result?.derivation ?? null);
 	const tooManySteps = $derived(!!derivation && derivation.pairs.length > MAX_STEPS);
 
@@ -127,8 +140,15 @@
 			{:else if result.tree && derivation}
 				{#if treeCount}
 					<p class="note">
-						{treeCount}
-						{#if ambiguityHref && (result.trees > 1 || result.moreTrees)}
+						{#if cycle !== null}
+							It has infinitely many parse trees:
+							<span class="formal">{cycle}&nbsp;→+&nbsp;{cycle}</span>, so
+							<span class="formal">{cycle}</span> can stand above itself in a tree any number of times.
+							The tree drawn has no such repetition.
+						{:else}
+							{treeCount}
+						{/if}
+						{#if ambiguityHref && severalTrees}
 							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path and adds the hash -->
 							<a class="tool-link" href={stale ? undefined : ambiguityHref}>
 								Open in Ambiguity <Icon name="arrow-right" size={14} />
@@ -219,6 +239,7 @@
 		color: var(--text);
 		font-family: var(--font-mono);
 		font-variant-ligatures: none;
+		overflow-wrap: anywhere;
 	}
 	.tool-link {
 		display: inline-flex;

@@ -10,9 +10,9 @@
 	import Callout from '$lib/components/ui/Callout.svelte';
 	import Updating from '$lib/components/ui/Updating.svelte';
 	import { formatStringSet } from '$lib/theory/chars';
-	import { printSymbols } from '$lib/theory/grammar';
-	import { symbolText, type ChainView } from './builder';
+	import type { ChainView } from './builder';
 	import { RANDOM_DEFAULTS, type RandomSentence } from './random';
+	import { PLAIN, type Spelling } from './spelling';
 	import { MAX_LENGTH_LIMIT } from './state';
 	import { LIST_LIMIT, byLength, type LanguageView } from './views';
 
@@ -27,6 +27,8 @@
 		maxLength: number;
 		/** Every terminal is one character: L(G) is also written as a set of strings. */
 		characters: boolean;
+		/** How the symbols are written: as the grammar text writes them. */
+		write?: Spelling;
 		/** The random sentence for the current seed; null before the button is used. */
 		random: RandomSentence | null;
 		/** Its leftmost derivation, as a chain. */
@@ -43,6 +45,7 @@
 		failure = null,
 		maxLength = $bindable(),
 		characters,
+		write = PLAIN,
 		random,
 		randomChain,
 		onrandom,
@@ -190,7 +193,7 @@
 														data-index={index}
 														onclick={() => onparse(sentence)}
 														onkeydown={(event) => onSentenceKey(event, index)}
-														onfocus={() => (focusAt = index)}>{printSymbols(sentence)}</button
+														onfocus={() => (focusAt = index)}>{write.symbols(sentence)}</button
 													>
 												</li>
 											{/each}
@@ -220,7 +223,7 @@
 		{#if random?.ok && randomChain}
 			<div class="random-line">
 				{#if random.sentence.length > 0}
-					<TokenStream tokens={random.sentence.map(symbolText)} ariaLabel="Random sentence" />
+					<TokenStream tokens={random.sentence.map(write.symbol)} ariaLabel="Random sentence" />
 				{:else}
 					<span class="eps-big" role="img" aria-label="The empty string">ε</span>
 				{/if}

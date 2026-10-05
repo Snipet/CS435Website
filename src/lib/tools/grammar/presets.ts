@@ -264,11 +264,12 @@ export const presets: GrammarPreset[] = [
 		cite: { deck: '09', slide: 25 },
 		value: {
 			grammar: ENGLISH,
-			input: '"the cat" on "the mat" sat',
+			// Every terminal in quotes, as the slide writes them.
+			input: '"the cat" "on" "the mat" "sat"',
 			tests: [
-				'"the cat" sat',
-				'"the cat" on "the mat" saw "the floor"',
-				'"the cat" sat on "the mat"'
+				'"the cat" "sat"',
+				'"the cat" "on" "the mat" "saw" "the floor"',
+				'"the cat" "sat" "on" "the mat"'
 			],
 			seed: 2
 		}

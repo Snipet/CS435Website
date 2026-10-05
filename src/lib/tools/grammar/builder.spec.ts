@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nodeAtPath } from '$lib/components/grammar';
+import { chainForms, nodeAtPath } from '$lib/components/grammar';
 import {
 	bracketForm,
 	parseGrammar,
@@ -9,6 +9,9 @@ import {
 	type Grammar
 } from '$lib/theory/grammar';
 import {
+	CHAIN_SYMBOLS,
+	ELLIPSIS,
+	abridgeChain,
 	allowedPositions,
 	bothDerivations,
 	chainOf,
@@ -26,11 +29,13 @@ import {
 	productionText,
 	productionsOf,
 	replay,
+	selectedPosition,
 	stepCount,
-	symbolText
+	type ChainView
 } from './builder';
 import { ARITHMETIC, CASCADE, ENGLISH } from './presets';
-import type { StepPair } from './state';
+import { spellingOf } from './spelling';
+import { MAX_STEPS, type StepPair } from './state';
 
 function grammar(text: string): Grammar {
 	const { grammar } = parseGrammar(text);
@@ -125,7 +130,7 @@ describe('positions a step may replace', () => {
 	});
 
 	it('lists the productions of a non-terminal in grammar order', () => {
-		expect(productionsOf(arithmetic, 'E').map(productionText)).toEqual([
+		expect(productionsOf(arithmetic, 'E').map((p) => productionText(p))).toEqual([
 			'E → int',
 			'E → E + E',
 			'E → E * E',
@@ -137,9 +142,62 @@ describe('positions a step may replace', () => {
 		expect(productionText(grammar('S → ε | ( S )').productions[0])).toBe('S → ε');
 	});
 
-	it('quotes a symbol only when a grammar would', () => {
-		expect(symbolText('E')).toBe('E');
-		expect(symbolText('the cat')).toBe('"the cat"');
+	it('writes a production as the grammar text writes its symbols', () => {
+		const english = grammar(ENGLISH);
+		const verb = productionsOf(english, 'Verb');
+		expect(verb.map((p) => productionText(p))).toEqual(['Verb → sat', 'Verb → saw']);
+		expect(verb.map((p) => productionText(p, spellingOf(ENGLISH)))).toEqual([
+			'Verb → "sat"',
+			'Verb → "saw"'
+		]);
+	});
+});
+
+describe('the chosen position', () => {
+	// E + E + E
+	const { derivation } = replay(arithmetic, [
+		[0, 1],
+		[0, 1]
+	]);
+	const form = currentForm(derivation);
+	const allowed = allowedPositions(arithmetic, form, 'any');
+
+	it('is the position chosen in the current form', () => {
+		expect(allowed).toEqual([0, 2, 4]);
+		expect(selectedPosition({ at: 2, form }, form, allowed)).toBe(2);
+		expect(selectedPosition(null, form, allowed)).toBeNull();
+	});
+
+	it('is not a position that no step may replace', () => {
+		expect(selectedPosition({ at: 1, form }, form, allowed)).toBeNull();
+		expect(selectedPosition({ at: 9, form }, form, allowed)).toBeNull();
+		// Leftmost only: the choice of another position gives way to the one allowed.
+		expect(selectedPosition({ at: 2, form }, form, [0])).toBe(0);
+	});
+
+	it('is the only position allowed when nothing is chosen', () => {
+		expect(selectedPosition(null, form, [4])).toBe(4);
+		expect(selectedPosition(null, form, [])).toBeNull();
+	});
+
+	it('does not carry over to another derivation with a non-terminal at the same position', () => {
+		// A B C: position 2 holds C, as position 2 of E + E + E holds an E.
+		const other = grammar('S → A B C\nA → a\nB → b\nC → c');
+		const loaded = currentForm(replay(other, [[0, 0]]).derivation);
+		const positions = allowedPositions(other, loaded, 'any');
+		expect(positions).toEqual([0, 1, 2]);
+		expect(selectedPosition({ at: 2, form }, loaded, positions)).toBeNull();
+	});
+
+	it('does not carry over to the same derivation when it is loaded again', () => {
+		const again = currentForm(
+			replay(arithmetic, [
+				[0, 1],
+				[0, 1]
+			]).derivation
+		);
+		expect(again).toEqual(form);
+		expect(selectedPosition({ at: 2, form }, again, allowed)).toBeNull();
 	});
 });
 
@@ -218,12 +276,130 @@ describe('chains', () => {
 			[0, 6]
 		]);
 		expect(chainOf(english, derivation).forms[3]).toEqual(['"the cat"', 'VerbPhrase']);
+		// Slide 25 quotes every terminal; the chain follows the grammar text.
+		const sat = replay(english, [
+			[0, 0],
+			[1, 3],
+			[1, 9]
+		]).derivation;
+		expect(chainOf(english, sat).forms[3]).toEqual(['NounPhrase', 'sat']);
+		const written = chainOf(english, sat, spellingOf(ENGLISH));
+		expect(written.forms[3]).toEqual(['NounPhrase', '"sat"']);
+		expect(written.nonterminals).toContain('NounPhrase');
 
 		const balanced = grammar('S → ε | ( S )');
 		const empty = replay(balanced, [[0, 0]]).derivation;
 		expect(chainOf(balanced, empty)).toMatchObject({
 			forms: [['S'], []],
 			steps: [{ index: 0, length: 0 }]
+		});
+	});
+});
+
+describe('a long chain', () => {
+	const doubling = grammar('S → S S | a');
+	/** S → S S → S S S → …: step k leaves k + 1 symbols. */
+	const grow = (steps: number): ChainView =>
+		chainOf(
+			doubling,
+			replay(
+				doubling,
+				Array.from({ length: steps }, (): StepPair => [0, 0])
+			).derivation
+		);
+	const symbols = (chain: ChainView) => chain.forms.reduce((n, form) => n + form.length, 0);
+
+	it('is whole while it has no more symbols than the limit', () => {
+		const slide = chainOf(arithmetic, replay(arithmetic, CHAIN).derivation);
+		expect(abridgeChain(slide)).toEqual({ ...slide, omitted: 0 });
+		// 1 + 2 + … + 48 = 1176 symbols.
+		const short = grow(47);
+		expect(symbols(short)).toBe(1176);
+		expect(symbols(short)).toBeLessThanOrEqual(CHAIN_SYMBOLS);
+		expect(abridgeChain(short).omitted).toBe(0);
+		expect(abridgeChain(short).forms).toEqual(short.forms);
+	});
+
+	it('leaves out its first steps: the start, …, and the last forms', () => {
+		const full = grow(MAX_STEPS);
+		expect(symbols(full)).toBe(20301);
+		const short = abridgeChain(full);
+		expect(symbols(short)).toBeLessThanOrEqual(CHAIN_SYMBOLS);
+		expect(short.forms[0]).toEqual(['S']);
+		expect(short.forms[1]).toEqual([ELLIPSIS]);
+		expect(short.forms.at(-1)).toEqual(full.forms.at(-1));
+		expect(short.nonterminals).toEqual(['S']);
+		// The forms shown are the last ones, in order, and the rest is counted.
+		const tail = short.forms.slice(2);
+		expect(tail).toEqual(full.forms.slice(-tail.length));
+		expect(short.omitted).toBe(full.forms.length - 1 - tail.length);
+		expect(tail.length).toBeGreaterThanOrEqual(2);
+		// One more form would pass the limit.
+		expect(symbols(short) + full.forms.at(-tail.length - 1)!.length).toBeGreaterThan(CHAIN_SYMBOLS);
+	});
+
+	it('keeps each step with the forms it joins, and marks nothing next to …', () => {
+		const full = grow(MAX_STEPS);
+		const short = abridgeChain(full);
+		expect(short.steps).toHaveLength(short.forms.length - 1);
+		const first = full.forms.length - (short.forms.length - 2);
+		expect(short.steps.slice(2)).toEqual(full.steps.slice(first));
+		const marked = chainForms(short.forms, short.steps, short.nonterminals);
+		// S and … carry no mark; the first form of the tail has the symbol its step replaces.
+		for (const form of marked.slice(0, 2))
+			expect(form.segments.flatMap((s) => s.symbols).some((s) => s.replaced)).toBe(false);
+		expect(marked.slice(0, 3).some((form) => form.segments.some((s) => s.made))).toBe(false);
+		expect(marked[2].segments[0].symbols[0]).toMatchObject({ text: 'S', replaced: true });
+		// The last step shows whole: the two symbols it put in.
+		expect(marked.at(-1)!.segments[0]).toMatchObject({ made: true });
+		expect(marked.at(-1)!.segments[0].symbols).toHaveLength(2);
+	});
+
+	it('always shows the last two forms, however long they are', () => {
+		const short = abridgeChain(grow(40), 10);
+		expect(short.forms.map((f) => f.length)).toEqual([1, 1, 40, 41]);
+		expect(short.omitted).toBe(38);
+		// Three steps or fewer leave nothing worth an ellipsis.
+		expect(abridgeChain(grow(2), 1).omitted).toBe(0);
+	});
+
+	it('counts the start and … with the forms it shows', () => {
+		const balanced = grammar('S → ε | ( S )');
+		const chain = chainOf(
+			balanced,
+			replay(balanced, [
+				[0, 1],
+				[1, 1],
+				[2, 1],
+				[3, 0]
+			]).derivation
+		);
+		// S, ( S ), ( ( S ) ), ( ( ( S ) ) ), ( ( ( ) ) ): the last two take 13 symbols.
+		expect(abridgeChain(chain, 15).forms.map((f) => f.join(' '))).toEqual([
+			'S',
+			ELLIPSIS,
+			'( ( ( S ) ) )',
+			'( ( ( ) ) )'
+		]);
+		expect(abridgeChain(chain, 14).forms).toHaveLength(4);
+	});
+
+	it('counts an empty form as the ε that is written for it', () => {
+		// S, A A, A, ε: five symbols with the ε.
+		const erasing = grammar('S → A A\nA → ε');
+		const chain = chainOf(
+			erasing,
+			replay(erasing, [
+				[0, 0],
+				[0, 1],
+				[0, 1]
+			]).derivation
+		);
+		expect(chain.forms).toEqual([['S'], ['A', 'A'], ['A'], []]);
+		expect(abridgeChain(chain, 5).omitted).toBe(0);
+		expect(abridgeChain(chain, 4)).toMatchObject({
+			forms: [['S'], [ELLIPSIS], ['A'], []],
+			omitted: 1
 		});
 	});
 });

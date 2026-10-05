@@ -3,14 +3,8 @@
  * 14, and its place in the Chomsky hierarchy by the form of its productions
  * (slide 23).
  */
-import {
-	chomskyType,
-	printSet,
-	printSymbols,
-	unproductive,
-	unreachable,
-	type Grammar
-} from '$lib/theory/grammar';
+import { chomskyType, unproductive, unreachable, type Grammar } from '$lib/theory/grammar';
+import { PLAIN, type Spelling } from './spelling';
 
 export interface TupleProduction {
 	/** Number in P, from 1. */
@@ -32,11 +26,11 @@ export interface TupleView {
 	warnings: string[];
 }
 
-const list = (symbols: readonly string[]) => symbols.map((s) => printSymbols([s])).join(', ');
-
-export function tupleOf(g: Grammar): TupleView {
+/** `write`: how the symbols are written; by default quoted only where they have to be. */
+export function tupleOf(g: Grammar, write: Spelling = PLAIN): TupleView {
 	const { regular } = chomskyType(g);
-	const start = printSymbols([g.start]);
+	const list = (symbols: readonly string[]) => symbols.map(write.symbol).join(', ');
+	const start = write.symbol(g.start);
 	const warnings: string[] = [];
 	const lost = unreachable(g);
 	if (lost.length > 0)
@@ -49,13 +43,13 @@ export function tupleOf(g: Grammar): TupleView {
 			`${list(barren)} ${barren.length === 1 ? 'derives' : 'derive'} no string of terminals.`
 		);
 	return {
-		nonterminals: printSet(g.nonterminals),
-		terminals: printSet(g.terminals),
+		nonterminals: write.set(g.nonterminals),
+		terminals: write.set(g.terminals),
 		start,
 		productions: g.productions.map((p) => ({
 			number: p.id + 1,
-			lhs: printSymbols([p.lhs]),
-			rhs: printSymbols(p.rhs),
+			lhs: write.symbol(p.lhs),
+			rhs: write.symbols(p.rhs),
 			regular: regular[p.id]
 		})),
 		warnings

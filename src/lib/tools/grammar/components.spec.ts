@@ -5,7 +5,7 @@
 import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import { parseGrammar, sentenceLengths, tokenizeInput, type Grammar } from '$lib/theory/grammar';
-import { chainOf, symbolText } from './builder';
+import { CHAIN_SYMBOLS, chainOf } from './builder';
 import ChomskyStrip from './ChomskyStrip.svelte';
 import DerivationBuilder from './DerivationBuilder.svelte';
 import FourTuple from './FourTuple.svelte';
@@ -14,7 +14,8 @@ import MembershipPanel from './MembershipPanel.svelte';
 import { applyPreset, presetById, presets, type GrammarPreset } from './presets';
 import { randomSentence } from './random';
 import SlideNotes from './SlideNotes.svelte';
-import { blankState, type GrammarToolState } from './state';
+import { spellingOf } from './spelling';
+import { MAX_STEPS, blankState, type GrammarToolState, type StepPair } from './state';
 import TestStrings from './TestStrings.svelte';
 import { chomskyOf, tupleOf } from './tuple';
 import { computeCheck, computeLanguage, membership, testRows, type CheckRequest } from './views';
@@ -49,20 +50,28 @@ const load = (id: string): GrammarToolState => applyPreset(preset(id), blankStat
 function builder(state: GrammarToolState, show = { lm: false, rm: false }) {
 	return text(
 		render(DerivationBuilder, {
-			props: { grammar: grammar(state.grammar), steps: state.steps, order: state.order, ...show }
+			props: {
+				grammar: grammar(state.grammar),
+				write: spellingOf(state.grammar),
+				steps: state.steps,
+				order: state.order,
+				...show
+			}
 		}).body
 	);
 }
 
 function membershipPanel(source: string, input: string, extra: Record<string, unknown> = {}) {
 	const g = grammar(source);
+	const write = spellingOf(source);
 	return render(MembershipPanel, {
 		props: {
 			input,
 			diagnostics: tokenizeInput(input, g.terminals, { nonterminals: g.nonterminals }).diagnostics,
-			result: membership(g, input),
+			result: membership(g, input, write),
 			stale: false,
-			start: symbolText(g.start),
+			start: write.symbol(g.start),
+			write,
 			onload: () => {},
 			...extra
 		}
@@ -71,6 +80,7 @@ function membershipPanel(source: string, input: string, extra: Record<string, un
 
 function languagePanel(source: string, maxLength: number, seed: number | null = null) {
 	const g = grammar(source);
+	const write = spellingOf(source);
 	const range = sentenceLengths(g);
 	const random = seed === null ? null : randomSentence(g, seed);
 	return text(
@@ -81,8 +91,9 @@ function languagePanel(source: string, maxLength: number, seed: number | null = 
 				stale: false,
 				maxLength,
 				characters: g.terminals.every((t) => [...t].length === 1),
+				write,
 				random,
-				randomChain: random?.ok ? chainOf(g, random.derivation) : null,
+				randomChain: random?.ok ? chainOf(g, random.derivation, write) : null,
 				onrandom: () => {},
 				onparse: () => {}
 			}
@@ -138,6 +149,19 @@ describe('four-tuple and Chomsky strip', () => {
 		// Productions 2, 3 and 4, plus the legend.
 		expect(html.match(/class="dot/g)).toHaveLength(4);
 		expect(render(FourTuple, { props: { tuple: tupleOf(g) } }).body).not.toContain('class="dot');
+	});
+
+	it('writes the terminals of the English grammar in quotes, as slide 25 does', () => {
+		const state = load('english');
+		const tuple = tupleOf(grammar(state.grammar), spellingOf(state.grammar));
+		const shown = text(render(FourTuple, { props: { tuple } }).body);
+		expect(shown).toContain(
+			'T terminals = { "the cat", "the mat", "the floor", "sat", "saw", "on", "under" }'
+		);
+		expect(shown).toContain('7. Noun → "the cat"');
+		expect(shown).toContain('10. Verb → "sat"');
+		expect(shown).toContain('13. Preposition → "under"');
+		expect(shown).not.toMatch(/→ (sat|saw|on|under)\b/);
 	});
 
 	it('warns about symbols that are not reached', () => {
@@ -229,6 +253,47 @@ describe('derivation builder', () => {
 		expect(buttons('rightmost')).toEqual([true, false]);
 	});
 
+	it('writes symbols as the grammar text does: every terminal of slide 25 in quotes', () => {
+		// Sentence → NounPhrase VerbPhrase → NounPhrase Verb, and Verb is the one to replace.
+		const state: GrammarToolState = {
+			...load('english'),
+			steps: [
+				[0, 0],
+				[1, 3]
+			],
+			order: 'rightmost'
+		};
+		const offered = builder(state);
+		expect(offered).toContain('10 Verb → "sat"');
+		expect(offered).toContain('11 Verb → "saw"');
+		const done = builder({ ...state, steps: [...state.steps, [1, 9], [0, 1], [0, 6]] });
+		expect(done).toContain('→ NounPhrase "sat" → Noun "sat" → "the cat" "sat"');
+		expect(done).toContain('"the cat" "sat" is a sentence');
+		expect(done).toContain(
+			'Step 5: production 7, Noun → "the cat", replaces symbol 1 of Noun "sat".'
+		);
+	});
+
+	it('writes a derivation of many steps without its first ones', () => {
+		const steps = Array.from({ length: MAX_STEPS }, (): StepPair => [0, 0]);
+		const html = render(DerivationBuilder, {
+			props: { grammar: grammar('S → S S | a'), steps, order: 'any', lm: false, rm: false }
+		}).body;
+		const shown = text(html);
+		expect(shown).toContain(`${MAX_STEPS} steps`);
+		expect(shown).toContain('S → … → S S S');
+		expect(shown).toMatch(new RegExp(`The last \\d+ of ${MAX_STEPS} steps are written out\\.`));
+		expect(shown).toContain('Write out all steps');
+		// The whole chain has 20 301 symbols; the form itself has 201 more.
+		const drawn = html.match(/<span class="sym[ "]/g) ?? [];
+		expect(drawn.length).toBeGreaterThan(CHAIN_SYMBOLS / 2);
+		expect(drawn.length).toBeLessThanOrEqual(CHAIN_SYMBOLS);
+
+		const short = builder(load('rewrite-rules'));
+		expect(short).not.toContain('Write out all steps');
+		expect(short).not.toContain('…');
+	});
+
 	it('says how many saved steps no longer apply', () => {
 		const shown = builder({ ...load('rewrite-rules'), grammar: 'E → int\nE → E + E\nE → ( E )' });
 		expect(shown).toContain('5 saved steps do not apply to this grammar and are left out.');
@@ -255,6 +320,34 @@ describe('membership panel', () => {
 		expect(membershipPanel(source, 'int', { ambiguityHref: '/ambiguity#v1.x' })).not.toContain(
 			'<a '
 		);
+	});
+
+	it('says that a string has infinitely many parse trees when a non-terminal derives itself', () => {
+		for (const [source, input] of [
+			['S → S | a', 'a'],
+			['S → S S | ε', '']
+		]) {
+			const html = membershipPanel(source, input, { ambiguityHref: '/ambiguity#v1.x' });
+			const shown = text(html);
+			expect(shown).toContain('It has infinitely many parse trees: S →+ S');
+			expect(shown).toContain('S can stand above itself in a tree any number of times.');
+			expect(shown).toContain('The tree drawn has no such repetition.');
+			expect(shown).not.toContain('It has one parse tree.');
+			// The string is ambiguous: the link to the Ambiguity tool is there.
+			expect(html).toContain('href="/ambiguity#v1.x"');
+		}
+		// A cycle the string does not go through changes nothing.
+		const apart = membershipPanel('S → a | b A\nA → A | c', 'a', {
+			ambiguityHref: '/ambiguity#v1.x'
+		});
+		expect(text(apart)).toContain('It has one parse tree.');
+		expect(apart).not.toContain('<a ');
+	});
+
+	it('shows the tokens as the grammar writes them', () => {
+		const shown = text(membershipPanel(load('english').grammar, '"the cat" sat'));
+		expect(shown).toContain('"the cat" "sat" ∈ L(G)');
+		expect(shown).toContain('→ "the cat" VerbPhrase → "the cat" Verb → "the cat" "sat"');
 	});
 
 	it('shows ∉ L(G) for ( int ) )', () => {
@@ -356,7 +449,7 @@ describe('language panel', () => {
 		expect(shown).toContain(
 			'Sentence → NounPhrase VerbPhrase → Noun VerbPhrase → "the cat" VerbPhrase'
 		);
-		expect(shown).toContain('"the cat" saw "the mat" under "the floor"');
+		expect(shown).toContain('"the cat" "saw" "the mat" "under" "the floor"');
 		expect(languagePanel(state.grammar, 2)).toContain('No sentence drawn yet.');
 	});
 });

@@ -13,7 +13,6 @@ import {
 	applyStep,
 	derivationFromTree,
 	nonterminalPositions,
-	printSymbols,
 	treeFromDerivation,
 	type Derivation,
 	type DerivationStep,
@@ -22,6 +21,7 @@ import {
 	type Production,
 	type SententialForm
 } from '$lib/theory/grammar';
+import { PLAIN, type Spelling } from './spelling';
 import { MAX_STEPS, type ReplaceOrder, type StepPair } from './state';
 
 export interface BuiltDerivation {
@@ -83,6 +83,29 @@ export function allowedPositions(g: Grammar, form: SententialForm, order: Replac
 	return [order === 'leftmost' ? all[0] : all[all.length - 1]];
 }
 
+/** A position the user chose, with the sentential form it was chosen in. */
+export interface PickedPosition {
+	at: number;
+	form: SententialForm;
+}
+
+/**
+ * The position whose productions are listed: the one chosen in this very form
+ * (the same array, not an equal one) when a step may replace it, otherwise
+ * the only position allowed, or none. A choice made in another form does not
+ * count, even if the new form has a non-terminal at the same position: after
+ * a step or an undo, and after a preset, a link or an edit of the grammar put
+ * another derivation in the builder.
+ */
+export function selectedPosition(
+	picked: PickedPosition | null,
+	form: SententialForm,
+	allowed: readonly number[]
+): number | null {
+	if (picked && picked.form === form && allowed.includes(picked.at)) return picked.at;
+	return allowed.length === 1 ? allowed[0] : null;
+}
+
 /** A sentence: a sentential form with only terminals (the empty form included). */
 export function isSentence(g: Grammar, form: SententialForm): boolean {
 	return nonterminalPositions(g, form).length === 0;
@@ -94,13 +117,8 @@ export function productionsOf(g: Grammar, nonterminal: string): Production[] {
 }
 
 /** A production as the decks write it: `E → E + E`, `S → ε`. */
-export function productionText(p: Production): string {
-	return `${printSymbols([p.lhs])} → ${printSymbols(p.rhs)}`;
-}
-
-/** One symbol as it is written in a grammar: quoted when it has to be (`"the cat"`). */
-export function symbolText(symbol: string): string {
-	return printSymbols([symbol]);
+export function productionText(p: Production, write: Spelling = PLAIN): string {
+	return `${write.symbol(p.lhs)} → ${write.symbols(p.rhs)}`;
 }
 
 const expanded = (node: ParseNode): boolean => !node.terminal && node.production !== undefined;
@@ -145,7 +163,7 @@ export function chainSteps(g: Grammar, d: Derivation): ChainStep[] {
 }
 
 export interface ChainView {
-	/** The forms with every symbol written as in a grammar (`"the cat"` in quotes). */
+	/** The forms with every symbol written as in the grammar (`"the cat"` in quotes). */
 	forms: string[][];
 	steps: ChainStep[];
 	/** The non-terminals, written the same way. */
@@ -153,11 +171,56 @@ export interface ChainView {
 }
 
 /** A derivation as the props of `DerivationChain`. */
-export function chainOf(g: Grammar, d: Derivation): ChainView {
+export function chainOf(g: Grammar, d: Derivation, write: Spelling = PLAIN): ChainView {
 	return {
-		forms: formsOf(d).map((form) => form.map(symbolText)),
+		forms: formsOf(d).map((form) => form.map(write.symbol)),
 		steps: chainSteps(g, d),
-		nonterminals: g.nonterminals.map(symbolText)
+		nonterminals: g.nonterminals.map(write.symbol)
+	};
+}
+
+/** Symbols a chain writes out in full; a longer one leaves out its first steps. */
+export const CHAIN_SYMBOLS = 1200;
+/** Stands for the forms left out, as the decks write E → E * E → … → ( int + int ) * int. */
+export const ELLIPSIS = '…';
+/** A step next to the ellipsis: `DerivationChain` marks nothing for it. */
+const NO_STEP: ChainStep = { index: -1, length: 0 };
+
+export interface AbridgedChain extends ChainView {
+	/** Forms left out after the start; 0 when the chain is whole. */
+	omitted: number;
+}
+
+/**
+ * A chain of more than `budget` symbols without its first steps: the start,
+ * `…`, and the last forms, as many as fit (the last two always, so the last
+ * step is there with the symbol it replaced). Writing every form of a long
+ * derivation takes a number of symbols that grows with the square of its
+ * length, 20 000 for 200 steps of S → S S, and all of them are laid out again
+ * with every step.
+ */
+export function abridgeChain(chain: ChainView, budget: number = CHAIN_SYMBOLS): AbridgedChain {
+	const { forms, steps } = chain;
+	const whole: AbridgedChain = { ...chain, omitted: 0 };
+	// An empty form is written as ε.
+	const size = (form: readonly string[]) => Math.max(1, form.length);
+	const last = forms.length - 1;
+	let total = 0;
+	for (const form of forms) total += size(form);
+	if (total <= budget || last < 3) return whole;
+	// The tail starts at `first`; the start and the ellipsis come before it.
+	let first = last;
+	let used = size(forms[0]) + 1 + size(forms[last]);
+	while (first > 1 && (first === last || used + size(forms[first - 1]) <= budget)) {
+		first--;
+		used += size(forms[first]);
+	}
+	if (first <= 1) return whole;
+	return {
+		forms: [forms[0], [ELLIPSIS], ...forms.slice(first)],
+		steps: [NO_STEP, NO_STEP, ...steps.slice(first)],
+		nonterminals: chain.nonterminals,
+		omitted: first - 1
 	};
 }
 
@@ -216,24 +279,26 @@ export function stepCount(d: Derivation): string {
  * What the last step did, for the line under the sentential form: the
  * production and the symbol it replaced.
  */
-export function lastStepText(g: Grammar, d: Derivation): string {
+export function lastStepText(g: Grammar, d: Derivation, write: Spelling = PLAIN): string {
 	const n = d.steps.length;
-	if (n === 0) return `Start: the start symbol ${symbolText(g.start)}.`;
+	if (n === 0) return `Start: the start symbol ${write.symbol(g.start)}.`;
 	const step = d.steps[n - 1];
 	const before = n === 1 ? d.start : d.steps[n - 2].form;
 	const p = g.productions[step.production];
 	const where =
-		before.length === 1 ? symbolText(p.lhs) : `symbol ${step.index + 1} of ${printSymbols(before)}`;
-	return `Step ${n}: production ${p.id + 1}, ${productionText(p)}, replaces ${where}.`;
+		before.length === 1
+			? write.symbol(p.lhs)
+			: `symbol ${step.index + 1} of ${write.symbols(before)}`;
+	return `Step ${n}: production ${p.id + 1}, ${productionText(p, write)}, replaces ${where}.`;
 }
 
 /**
  * The same with the form the step gave, as it is read out after each step
  * (a screen reader does not see the form change).
  */
-export function describeLastStep(g: Grammar, d: Derivation): string {
+export function describeLastStep(g: Grammar, d: Derivation, write: Spelling = PLAIN): string {
 	const form = currentForm(d);
-	if (d.steps.length === 0) return lastStepText(g, d);
+	if (d.steps.length === 0) return lastStepText(g, d, write);
 	const sentence = isSentence(g, form) ? ' Only terminals remain.' : '';
-	return `${lastStepText(g, d)} Sentential form: ${printSymbols(form)}.${sentence}`;
+	return `${lastStepText(g, d, write)} Sentential form: ${write.symbols(form)}.${sentence}`;
 }

@@ -3,15 +3,9 @@
 	import { GrammarEditor } from '$lib/components/grammar';
 	import { CitationTag, Icon, Panel, PresetMenu, ToolPage, WorkerTask } from '$lib/components/ui';
 	import { hasErrors } from '$lib/theory/diagnostics';
-	import {
-		parseGrammar,
-		printSymbols,
-		sentenceLengths,
-		tokenizeInput,
-		type Grammar
-	} from '$lib/theory/grammar';
+	import { parseGrammar, sentenceLengths, tokenizeInput, type Grammar } from '$lib/theory/grammar';
 	import { tool } from '$lib/tools/catalog/grammar';
-	import { chainOf, symbolText } from '$lib/tools/grammar/builder';
+	import { chainOf } from '$lib/tools/grammar/builder';
 	import ChomskyStrip from '$lib/tools/grammar/ChomskyStrip.svelte';
 	import DerivationBuilder from '$lib/tools/grammar/DerivationBuilder.svelte';
 	import FourTuple from '$lib/tools/grammar/FourTuple.svelte';
@@ -29,6 +23,7 @@
 	import { freshSeed, randomSentence } from '$lib/tools/grammar/random';
 	import { regularNfa } from '$lib/tools/grammar/regular';
 	import SlideNotes from '$lib/tools/grammar/SlideNotes.svelte';
+	import { PLAIN, spellingOf } from '$lib/tools/grammar/spelling';
 	import {
 		blankState,
 		isGrammarHash,
@@ -87,7 +82,10 @@
 	/** The text has errors and the views show an earlier grammar. */
 	const stale = $derived(shown !== null && parsed.grammar === null);
 
-	const tuple = $derived(grammar ? tupleOf(grammar) : null);
+	/** Symbols are written as the grammar text writes them: quoted where it quotes them. */
+	const write = $derived(shown ? spellingOf(shown.text) : PLAIN);
+
+	const tuple = $derived(grammar ? tupleOf(grammar, write) : null);
 	const chomsky = $derived(grammar ? chomskyOf(grammar) : null);
 	const nfa = $derived(grammar ? regularNfa(grammar) : null);
 	const size = $derived.by(() => {
@@ -99,7 +97,7 @@
 	const example = $derived.by(() => {
 		const shortest = grammar ? randomSentence(grammar, 0, { maxDepth: 0 }) : null;
 		return shortest?.ok && shortest.sentence.length > 0
-			? `e.g. ${printSymbols(shortest.sentence)}`
+			? `e.g. ${write.symbols(shortest.sentence)}`
 			: undefined;
 	});
 
@@ -165,7 +163,9 @@
 	const random = $derived(
 		grammar && model.seed !== null ? randomSentence(grammar, model.seed) : null
 	);
-	const randomChain = $derived(grammar && random?.ok ? chainOf(grammar, random.derivation) : null);
+	const randomChain = $derived(
+		grammar && random?.ok ? chainOf(grammar, random.derivation, write) : null
+	);
 
 	// ---- Links -----------------------------------------------------------------
 
@@ -183,7 +183,7 @@
 	});
 	const nfaNote = $derived.by(() => {
 		if (!nfa || nfa.ok || nfa.reason !== 'long-terminals') return null;
-		const names = nfa.terminals.slice(0, 4).map(symbolText).join(', ');
+		const names = nfa.terminals.slice(0, 4).map(write.symbol).join(', ');
 		const more = nfa.terminals.length > 4 ? ', …' : '';
 		return `An NFA reads one character at a time, so the link to Finite Automata needs terminals of one character (here: ${names}${more}).`;
 	});
@@ -214,7 +214,7 @@
 	}
 
 	const parseSentence = (sentence: string[]) =>
-		parseText(sentence.length > 0 ? printSymbols(sentence) : '');
+		parseText(sentence.length > 0 ? write.symbols(sentence) : '');
 </script>
 
 <ToolPage {tool}>
@@ -273,6 +273,7 @@
 			<div class="anchor" bind:this={builderEl}>
 				<DerivationBuilder
 					{grammar}
+					{write}
 					bind:steps={model.steps}
 					bind:order={model.order}
 					bind:lm={model.lm}
@@ -289,7 +290,8 @@
 							result={checked?.output.input ?? null}
 							stale={membershipStale}
 							failure={checkFailure}
-							start={symbolText(grammar.start)}
+							start={write.symbol(grammar.start)}
+							{write}
 							{ambiguityHref}
 							placeholder={example}
 							onload={loadDerivation}
@@ -318,6 +320,7 @@
 					failure={languageFailure}
 					bind:maxLength={model.maxLength}
 					{characters}
+					{write}
 					{random}
 					{randomChain}
 					onrandom={() => (model.seed = freshSeed())}
