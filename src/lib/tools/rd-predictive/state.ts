@@ -24,7 +24,10 @@ export interface PredictiveState {
 	ebnf: string | null;
 	/** Step of the run that is shown (0-based); null shows the last step. */
 	step: number | null;
-	/** Form of the operator rules in the AST panel; null: as the grammar is written. */
+	/**
+	 * Form the AST panel writes every operator rule in. Null: each rule as the
+	 * grammar of the parser writes it, so the AST is the one that grammar gives.
+	 */
 	ast: AstForm | null;
 	/** Step of the AST construction that is shown; null shows the last step. */
 	astStep: number | null;

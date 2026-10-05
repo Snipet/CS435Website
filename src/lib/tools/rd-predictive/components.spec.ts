@@ -20,7 +20,7 @@ import RewritePanel from './RewritePanel.svelte';
 import RunPanel from './RunPanel.svelte';
 import SameStrings, { type Comparison } from './SameStrings.svelte';
 import StepLine from './StepLine.svelte';
-import { describeStep, stackRows } from './view';
+import { describeStep, listingMarks, stackRows } from './view';
 
 /** The text of rendered markup, with one space where tags and line breaks were. */
 const text = (html: string) =>
@@ -225,6 +225,31 @@ describe('CodeListing', () => {
 		expect(body.match(/class="[^"]*waiting/g)).toHaveLength(2);
 		expect(body.match(/class="[^"]*comment/g)).toHaveLength(3);
 	});
+
+	it('marks no line of a new grammar’s code for the run kept from the grammar before', () => {
+		// The page keeps the last run while the token string has errors for the new grammar.
+		const kept = load('recipe').run;
+		const after = readParser('S → b { a }');
+		expect(runParser(after, readInput('int + int * int', after.ebnf!))).toBeNull();
+		for (let i = 0; i < kept.steps.length; i++) {
+			const { body } = render(CodeListing, {
+				props: { program: after.program!, ...listingMarks(after.program!, kept, i) }
+			});
+			expect(body).not.toContain('aria-current');
+			expect(body).not.toMatch(/class="[^"]*(current|waiting)/);
+		}
+		// Its own run marks its lines.
+		const own = runParser(after, readInput('b a', after.ebnf!))!;
+		const at = own.steps.findIndex((s) => s.kind === 'test' && s.loop);
+		const { body } = render(CodeListing, {
+			props: { program: after.program!, ...listingMarks(after.program!, own, at) }
+		});
+		expect(body.match(/aria-current="step"/g)).toHaveLength(1);
+		expect(body).toMatch(
+			/<li[^>]*aria-current="step"[^>]*>.*?while \(token == (&#39;|')a(&#39;|')\) \{/s
+		);
+		expect(body.match(/class="[^"]*waiting/g)).toHaveLength(1);
+	});
 });
 
 describe('RunPanel', () => {
@@ -331,6 +356,92 @@ describe('AstPanel', () => {
 		expect(html).toContain('No function for S');
 		expect(html).not.toContain('left-associative');
 		expect(html).not.toContain('Trees');
+	});
+
+	/** The panel for a grammar typed into the Parser panel, at its last step. */
+	const typed = (grammar: string, tokens: string, form: 'loop' | 'recursion' | null = null) => {
+		const parser = readParser(grammar);
+		const model = readAst(parser, readInput(tokens, parser.ebnf!), form)!;
+		const total = model.run?.steps.length ?? 0;
+		const { body } = render(AstPanel, {
+			props: { model, stepper: stepperAt(total, total - 1), onform: () => {} }
+		});
+		/** The label of the option that is chosen. */
+		const chosen = body
+			.split('<label')
+			.slice(1)
+			.map((option) => option.split('</label>')[0])
+			.filter((option) => /<input[^>]*\schecked\b/.test(option))
+			.map((option) => text(`<label${option}`).trim());
+		expect(chosen).toHaveLength(1);
+		return { html: text(body), chosen: chosen[0] };
+	};
+
+	describe('a grammar with a { } rule and a [ ] rule', () => {
+		const MIXED = 'E → T { + T }\nT → F [ ^ T ]\nF → int';
+
+		it('opens on the grammar of the parser, with the AST that grammar gives', () => {
+			const { html, chosen } = typed(MIXED, 'int ^ int ^ int');
+			expect(chosen).toBe('As in the parser');
+			expect(html).toContain('All { }');
+			expect(html).toContain('All [ ]');
+			expect(html).toContain('Grammar the functions are for E → T { + T } T → F [ ^ T ] F → int');
+			expect(html).toContain('The AST is ^( int, ^( int, int ) ).');
+			expect(html).toContain('Each rule keeps the form the parser has it in');
+			expect(html).not.toContain('here. The same strings are generated');
+		});
+
+		it('rewrites a rule only for a form that is chosen, and says which', () => {
+			const loop = typed(MIXED, 'int ^ int ^ int', 'loop');
+			expect(loop.chosen).toBe('All { }');
+			expect(loop.html).toContain('T → F { ^ F }');
+			expect(loop.html).toContain('The rule of T is written with { } here.');
+			expect(loop.html).toContain('The AST is ^( ^( int, int ), int ).');
+			const recursion = typed(MIXED, 'int + int + int', 'recursion');
+			expect(recursion.chosen).toBe('All [ ]');
+			expect(recursion.html).toContain('The rule of E is written with [ ] here.');
+			expect(recursion.html).toContain('The AST is +( int, +( int, int ) ).');
+		});
+	});
+
+	it('offers the two forms, and no third choice, for a grammar in one form', () => {
+		const { html, chosen } = typed(SLIDE_38_EBNF, 'int + int');
+		expect(chosen).toBe('{ } left-associative');
+		expect(html).not.toContain('As in the parser');
+		expect(html).not.toContain('All { }');
+		expect(typed(SLIDE_37, 'int + int').chosen).toBe('[ ] right-associative');
+	});
+
+	it('names the tokens that get no node', () => {
+		expect(typed(SLIDE_38_EBNF, '( int )').html).toContain(
+			'No node is made for ( and ) : the tokens are matched, and the tree of what they enclose is returned.'
+		);
+		expect(typed('E → T { + T }\nT → int', 'int').html).not.toContain('No node is made');
+	});
+
+	it('has no function for a rule with a prefix operator', () => {
+		const { html } = typed('E → T { + T }\nT → int | - T', '- int');
+		expect(html).toContain('No function for T');
+		expect(html).toContain('An operand is one symbol, or a non-terminal between two terminals');
+		expect(html).toContain('The functions below are not run.');
+		expect(html).not.toContain("match ('-')");
+		expect(html).not.toContain('Trees');
+	});
+
+	it('lists the operator variable only inside the block that declares it', () => {
+		const { ast } = load('recipe');
+		const run = ast.run!;
+		const last = run.steps.length - 1;
+		const variables = (index: number) =>
+			text(render(CallStack, { props: { rows: stackRows(run, index) } }).body);
+		expect(run.program.lines[run.steps[last].line].text).toBe('  return tree;');
+		expect(variables(last)).toContain('tree +( int, *( int, int ) )');
+		expect(variables(last)).not.toContain('plus');
+		expect(variables(last - 2)).toContain('plus +( int, *( int, int ) )');
+		// Under the drawing of the finished AST, too.
+		const html = panel('recipe', null);
+		expect(html).toContain('The AST is +( int, *( int, int ) ).');
+		expect(html).not.toMatch(/tree\s*,\s*plus/);
 	});
 
 	it.each(presets.map((p) => [p.id] as const))('renders every step of the preset %s', (id) => {

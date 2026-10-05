@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { hasErrors } from '$lib/theory/diagnostics';
+import { bracketOf, nodesAt } from './ast';
 import {
+	formFor,
 	readAst,
 	readInput,
 	readParser,
@@ -164,10 +166,9 @@ describe('readAst', () => {
 	const parser = readParser(SLIDE_38_EBNF);
 	const input = readInput('int + int + int', parser.ebnf!);
 
-	it('builds the functions in the form the grammar is written in', () => {
+	it('builds the functions for the grammar as it is written', () => {
 		const ast = readAst(parser, input, null)!;
-		expect(ast.form).toBe('loop');
-		expect(ast.written).toBe('loop');
+		expect(ast).toMatchObject({ form: null, written: 'loop', choice: 'loop' });
 		expect(ast.reformed).toMatchObject({ text: SLIDE_38_EBNF, changed: [] });
 		expect(ast.code.missing).toEqual([]);
 		expect(ast.run?.outcome).toBe('done');
@@ -176,17 +177,84 @@ describe('readAst', () => {
 
 	it('or in the other form', () => {
 		const ast = readAst(parser, input, 'recursion')!;
-		expect(ast.form).toBe('recursion');
-		expect(ast.written).toBe('loop');
+		expect(ast).toMatchObject({ form: 'recursion', written: 'loop', choice: 'recursion' });
 		expect(ast.reformed.text).toBe('E → T [ + E ]\nT → F [ * T ]\nF → ( E ) | int');
 		expect(ast.run?.outcome).toBe('done');
 	});
 
-	it('shows the loop form when no rule has either', () => {
+	it('has no form to choose when no rule has either', () => {
 		const plain = readParser('S → 1 { 0 }');
 		const ast = readAst(plain, readInput('1 0', plain.ebnf!), null)!;
-		expect(ast).toMatchObject({ form: 'loop', written: null, run: null });
+		expect(ast).toMatchObject({ form: null, written: null, choice: 'written', run: null });
 		expect(ast.code.missing).toEqual(['S']);
+	});
+
+	describe('a grammar with a left-associative and a right-associative operator', () => {
+		// E → E + T | T ; T → F ^ T | F ; F → int, rewritten.
+		const MIXED = 'E → T { + T }\nT → F [ ^ T ]\nF → int';
+		const mixed = readParser(MIXED);
+		const built = (text: string, form: 'loop' | 'recursion' | null) => {
+			const ast = readAst(mixed, readInput(text, mixed.ebnf!), form)!;
+			const run = ast.run!;
+			return bracketOf(nodesAt(run, run.steps.length - 1), run.result);
+		};
+
+		it('is what the rewrite of E → E + T | T ; T → F ^ T | F gives', () => {
+			expect(readSource('E → E + T | T\nT → F ^ T | F\nF → int').rewrite?.text).toBe(MIXED);
+		});
+
+		it('keeps every rule as written until a form is chosen', () => {
+			const ast = readAst(mixed, readInput('int ^ int ^ int', mixed.ebnf!), null)!;
+			expect(ast).toMatchObject({ form: null, written: 'mixed', choice: 'written' });
+			expect(ast.reformed).toMatchObject({ text: MIXED, changed: [] });
+			expect(ast.code.rules.map((rule) => rule.shape)).toEqual(['loop', 'recursion', 'operand']);
+		});
+
+		it('builds the AST the grammar of the parser gives', () => {
+			expect(built('int ^ int ^ int', null)).toBe('^( int, ^( int, int ) )');
+			expect(built('int + int + int', null)).toBe('+( +( int, int ), int )');
+			expect(built('int ^ int ^ int + int + int', null)).toBe(
+				'+( +( ^( int, ^( int, int ) ), int ), int )'
+			);
+		});
+
+		it('writes every rule in a form that is asked for', () => {
+			const loop = readAst(mixed, null, 'loop')!;
+			expect(loop).toMatchObject({ form: 'loop', written: 'mixed', choice: 'loop' });
+			expect(loop.reformed).toMatchObject({
+				text: 'E → T { + T }\nT → F { ^ F }\nF → int',
+				changed: ['T']
+			});
+			expect(built('int ^ int ^ int', 'loop')).toBe('^( ^( int, int ), int )');
+			const recursion = readAst(mixed, null, 'recursion')!;
+			expect(recursion.reformed).toMatchObject({
+				text: 'E → T [ + E ]\nT → F [ ^ T ]\nF → int',
+				changed: ['E']
+			});
+			expect(built('int + int + int', 'recursion')).toBe('+( int, +( int, int ) )');
+		});
+
+		it('takes the same grammar whichever rule comes first', () => {
+			const other = readParser('E → T [ = E ]\nT → F { + F }\nF → int');
+			const ast = readAst(other, readInput('int + int + int = int = int', other.ebnf!), null)!;
+			expect(ast).toMatchObject({ written: 'mixed', choice: 'written' });
+			expect(ast.reformed.changed).toEqual([]);
+			const run = ast.run!;
+			expect(bracketOf(nodesAt(run, run.steps.length - 1), run.result)).toBe(
+				'=( +( +( int, int ), int ), =( int, int ) )'
+			);
+		});
+	});
+
+	it('formFor: the form the state keeps for a choice', () => {
+		// The form the grammar is written in, and the grammar as written, need no entry.
+		expect(formFor('loop', 'loop')).toBeNull();
+		expect(formFor('recursion', 'loop')).toBe('recursion');
+		expect(formFor('recursion', 'recursion')).toBeNull();
+		expect(formFor('written', 'mixed')).toBeNull();
+		expect(formFor('loop', 'mixed')).toBe('loop');
+		expect(formFor('recursion', 'mixed')).toBe('recursion');
+		expect(formFor('written', null)).toBeNull();
 	});
 
 	it('does not run while the token string has errors, and still has the code', () => {

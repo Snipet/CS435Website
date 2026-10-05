@@ -45,7 +45,7 @@ const lines = (...rows: string[]) => rows.join('\n');
 
 describe('every preset', () => {
 	it.each(presets.map((p) => [p.id] as const))('%s loads without errors', (id) => {
-		const { source, parser, input, run, ast } = load(id);
+		const { state, source, parser, input, run, ast } = load(id);
 		expect(source.diagnostics.filter((d) => d.severity !== 'info')).toEqual([]);
 		expect(source.rewrite).not.toBeNull();
 		expect(parser.diagnostics.filter((d) => d.severity !== 'info')).toEqual([]);
@@ -63,6 +63,10 @@ describe('every preset', () => {
 		ast!.run?.steps.forEach((_, i) => {
 			expect(describeStep(ast!.run!, i).title.length).toBeGreaterThan(0);
 		});
+		// The AST panel opens on the grammar of the parser, with no rule rewritten.
+		expect(ast!.form).toBeNull();
+		expect(ast!.reformed.changed).toEqual([]);
+		expect(ast!.reformed.text).toBe(state.ebnf ?? source.rewrite!.text);
 	});
 
 	it.each(presets.map((p) => [p.id] as const))('%s keeps the language in its rewrite', (id) => {
@@ -346,7 +350,7 @@ describe('slide 39: right recursion', () => {
 			'Right recursion implies right associativity'
 		);
 		expect(run!.outcome).toBe('accept');
-		expect(ast!.form).toBe('recursion');
+		expect(ast).toMatchObject({ form: null, written: 'recursion', choice: 'recursion' });
 		const built = ast!.run!;
 		expect(bracketOf(nodesAt(built, built.steps.length - 1), built.result)).toBe(
 			'op( X, op( X, X ) )'
@@ -359,7 +363,7 @@ describe('slide 40: AST construction', () => {
 
 	it('generates the function of the slide', () => {
 		expect(state.astStep).toBe(0);
-		expect(ast!.form).toBe('loop');
+		expect(ast).toMatchObject({ form: null, written: 'loop', choice: 'loop' });
 		expect(functionText(ast!.code.program, 0)).toBe(SLIDE_40_CODE);
 		expect(preset('ast').questions![0].code).toBe(SLIDE_40_CODE);
 	});

@@ -324,6 +324,66 @@ describe('other rules', () => {
 			expect(generateAst(ebnf(text)).missing, text).toContain('A');
 	});
 
+	it('gives no function to a rule that would leave an operator out of the tree', () => {
+		// A prefix operator: without a node for it, - int would have the tree of int.
+		const prefix = generateAst(ebnf('E → T { + T }\nT → F { * F }\nF → int | - F'));
+		expect(prefix.rules.map((r) => r.shape)).toEqual(['loop', 'loop', null]);
+		expect(prefix.missing).toEqual(['F']);
+		expect(programText(prefix.program)).not.toContain("match ('-')");
+		expect(runAst(prefix, ['-', 'int'])).toBeNull();
+
+		// An assignment: the tree of E alone has neither the target nor the :=.
+		const assignment = generateAst(ebnf('S → id := E\nE → T { + T }\nT → int'));
+		expect(assignment.missing).toEqual(['S']);
+		expect(assignment.program.functions.map((f) => f.name)).toEqual(['E', 'T']);
+
+		for (const text of [
+			'A → B !\nB → b', // a postfix operator
+			'A → not B\nB → b',
+			'A → f ( B )\nB → b', // the name before the parenthesis
+			'A → ( B ) !\nB → b',
+			'A → ( ( B ) )\nB → b',
+			'A → B ( b )\nB → b', // the non-terminal is not the one enclosed
+			'A → ( b )', // nothing but terminals
+			'A → - B { + B }\nB → b'
+		])
+			expect(generateAst(ebnf(text)).missing, text).toContain('A');
+	});
+
+	it('takes a non-terminal between two terminals as an operand, whatever the terminals', () => {
+		for (const text of [
+			'A → ( B )\nB → b',
+			'A → begin B end\nB → b',
+			'A → "|" B "|"\nB → b',
+			'A → "[" B "]" { + B }\nB → b',
+			'A → B | ( A )\nB → b'
+		])
+			expect(generateAst(ebnf(text)).missing, text).toEqual([]);
+		expect(ast(run('A → B { + B }\nB → b | begin A end', 'b + begin b + b end'))).toBe(
+			'+( b, +( b, b ) )'
+		);
+	});
+
+	it('lists the terminals that enclose an operand: they get no node', () => {
+		expect(generateAst(ebnf(SLIDE_38)).enclosing).toEqual(['(', ')']);
+		expect(generateAst(ebnf(SLIDE_37)).enclosing).toEqual(['(', ')']);
+		expect(generateAst(ebnf('E → T { + T }\nT → int')).enclosing).toEqual([]);
+		expect(generateAst(ebnf('A → ( A ) | "[" A "]" | "|" A "|" | x')).enclosing).toEqual([
+			'(',
+			')',
+			'[',
+			']',
+			'|'
+		]);
+		// Every other token of a run is a node of the tree.
+		const r = run(SLIDE_38, '( int + int ) * ( int )');
+		const kept = nodesAt(r, r.steps.length - 1).map((n) => r.tokens[n.token]);
+		expect(kept).toEqual(['int', '+', 'int', '*', 'int']);
+		expect(r.tokens.filter((t) => !kept.includes(t))).toEqual(['(', ')', '(', ')', '$']);
+		// A rule without a function adds nothing.
+		expect(generateAst(ebnf('S → ( S ) x | y')).enclosing).toEqual([]);
+	});
+
 	it('calls a function that is missing by its name', () => {
 		const code = generateAst(ebnf('E → T { + T }\nT → a b'));
 		expect(code.missing).toEqual(['T']);
@@ -403,11 +463,63 @@ describe('running the functions', () => {
 		// After the second round the tree so far is the left child of the new node.
 		const last = r.steps.length - 1;
 		expect(r.steps[last]).toMatchObject({ kind: 'leave', fn: 0, to: null, value: 3 });
-		expect(variables(r, last)).toEqual({
+		expect(variables(r, last - 2)).toEqual({
 			tree: '+( +( int, int ), int )',
 			plus: '+( +( int, int ), int )'
 		});
+		// plus is declared in the body of the loop: return tree; is outside it.
+		expect(variables(r, last)).toEqual({ tree: '+( +( int, int ), int )' });
 		expect(r.result).toBe(3);
+	});
+
+	it('keeps a variable of the loop body in scope for one round only', () => {
+		const r = run('E → T { + T }\nT → int', 'int + int + int');
+		/** The variables of E () at every step that is in E (), by line of the code. */
+		const inE = r.steps
+			.map((s, i) => ({ s, i }))
+			.filter(({ s }) => s.stack.fn === 0)
+			.map(
+				({ s, i }) => `${r.program.lines[s.line].text.trim()} | ${Object.keys(variables(r, i))}`
+			);
+		const round = [
+			"while (token == '+') { | tree",
+			"match ('+'); | tree",
+			"Node* plus = makeNode ('+'); | tree,plus",
+			'plus->left  = tree; | tree,plus',
+			'plus->right = T (); | tree,plus',
+			'tree = plus; | tree,plus'
+		];
+		expect(inE).toEqual([
+			'E () { | ',
+			'Node* tree = T (); | tree',
+			...round,
+			// The second round starts without the plus of the first.
+			...round,
+			"while (token == '+') { | tree",
+			'return tree; | tree'
+		]);
+		// In each round plus is a new node.
+		const made = r.steps.filter((s) => s.kind === 'make' && s.label === '+');
+		expect(made.map((s) => s.stack.vars.plus)).toEqual([1, 3]);
+	});
+
+	it('ends the scope of each branch of a loop with several operators', () => {
+		const r = run('E → T { + T | - T }\nT → int', 'int - int + int');
+		const scopes = r.steps.map((s) => Object.keys(s.stack.vars).join(','));
+		// minus and plus are each declared in their own if.
+		expect(new Set(scopes)).toEqual(new Set(['', 'tree', 'tree,minus', 'tree,plus']));
+		expect(Object.keys(r.steps[r.steps.length - 1].stack.vars)).toEqual(['tree']);
+		expect(ast(r)).toBe('+( -( int, int ), int )');
+	});
+
+	it('ends the scope of the operator variable after the if of the recursive form', () => {
+		const r = run('E → T [ + E ]\nT → int', 'int + int');
+		const returns = r.steps.filter((s) => s.kind === 'leave' && s.fn === 0);
+		expect(returns).toHaveLength(2);
+		for (const step of returns) expect(Object.keys(step.stack.vars)).toEqual(['tree']);
+		// While the inner E () runs, the outer one is inside its if and still has plus.
+		const inner = r.steps.find((s) => s.kind === 'leave' && s.fn === 0)!;
+		expect(Object.keys(inner.stack.parent!.vars)).toEqual(['tree', 'plus']);
 	});
 
 	it('keeps the variables of the outer calls', () => {
@@ -468,12 +580,43 @@ describe('the two forms of a rule', () => {
 			'recursion',
 			null
 		]);
-		expect(writtenForm(ebnf(SLIDE_38))).toBe('loop');
-		expect(writtenForm(ebnf(SLIDE_37))).toBe('recursion');
-		expect(writtenForm(ebnf('S → 1 { 0 }'))).toBeNull();
 		// E → E { + T } is not an operand followed by operators on that operand.
 		expect(ruleForms(ebnf('E → T { + F }\nT → int\nF → int'))).toEqual([null, null, null]);
 		expect(ruleForms(ebnf('E → T [ + T ]\nT → int'))).toEqual([null, null]);
+	});
+
+	it('tells how the grammar as a whole is written', () => {
+		expect(writtenForm(ebnf(SLIDE_38))).toBe('loop');
+		expect(writtenForm(ebnf(SLIDE_37))).toBe('recursion');
+		expect(writtenForm(ebnf('S → 1 { 0 }'))).toBeNull();
+		// A left-associative and a right-associative operator, in either order.
+		expect(writtenForm(ebnf('E → T { + T }\nT → F [ * T ]\nF → int'))).toBe('mixed');
+		expect(writtenForm(ebnf('E → T [ = E ]\nT → F { + F }\nF → int'))).toBe('mixed');
+		// T → ( E ) | int [ * T ] has two alternatives, so it has no other form to be written in.
+		expect(writtenForm(ebnf('E → T { + T }\nT → ( E ) | int [ * T ]'))).toBe('loop');
+	});
+
+	it('leaves every rule as it is written when no form is asked for', () => {
+		for (const text of [SLIDE_38, SLIDE_37, 'E → T { + T }\nT → F [ ^ T ]\nF → int']) {
+			const e = ebnf(text);
+			const same = withForm(e, null);
+			expect(same).toMatchObject({ text, changed: [] });
+			expect(same.grammar.rules.map((rule) => rule.body)).toEqual(e.rules.map((rule) => rule.body));
+		}
+		// The mixed grammar keeps both associativities; a form gives every rule one of them.
+		const mixed = ebnf('E → T { + T }\nT → F [ ^ T ]\nF → int');
+		const input = 'int ^ int ^ int + int + int';
+		expect(ast(run(withForm(mixed, null).grammar, input))).toBe(
+			'+( +( ^( int, ^( int, int ) ), int ), int )'
+		);
+		expect(ast(run(withForm(mixed, 'loop').grammar, input))).toBe(
+			'+( +( ^( ^( int, int ), int ), int ), int )'
+		);
+		expect(ast(run(withForm(mixed, 'recursion').grammar, input))).toBe(
+			'+( ^( int, ^( int, int ) ), +( int, int ) )'
+		);
+		expect(withForm(mixed, 'loop').changed).toEqual(['T']);
+		expect(withForm(mixed, 'recursion').changed).toEqual(['E']);
 	});
 
 	it('writes X → Y { op Y } as X → Y [ op X ]', () => {

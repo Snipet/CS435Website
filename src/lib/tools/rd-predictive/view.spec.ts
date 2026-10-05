@@ -8,6 +8,7 @@ import {
 	forestAt,
 	formulaParts,
 	grammarLines,
+	listingMarks,
 	outcomeText,
 	scrollFor,
 	stackRows,
@@ -275,6 +276,57 @@ describe('tokens and lines to mark', () => {
 		expect(stackRows(built, 2)[0].variables).toEqual([{ name: 'tree', value: 'null', node: null }]);
 		expect(stackRows(built, 0)[0].variables).toEqual([]);
 	});
+
+	it('stackRows: a variable of the loop body is listed only while the body runs', () => {
+		const built = build(SLIDE_38, 'int + int * int');
+		/** The names listed for the outermost call, E (). */
+		const listed = (i: number) =>
+			stackRows(built, i)
+				.at(-1)!
+				.variables.map((v) => v.name);
+		const last = built.steps.length - 1;
+		// return tree; after the loop: plus was declared inside the while.
+		expect(built.program.lines[built.steps[last].line].text).toBe('  return tree;');
+		expect(listed(last)).toEqual(['tree']);
+		expect(stackRows(built, last)[0].variables).toEqual([
+			{ name: 'tree', value: '+( int, *( int, int ) )', node: 1 }
+		]);
+		const made = built.steps.findIndex((s) => s.kind === 'make' && s.label === '+');
+		expect(listed(made - 1)).toEqual(['tree']);
+		expect(listed(made)).toEqual(['tree', 'plus']);
+	});
+
+	it('listingMarks: the executing line and the waiting calls of a run of the same code', () => {
+		const parser = readParser(SLIDE_37);
+		const run = runParser(parser, readInput('int * int', parser.ebnf!))!;
+		expect(listingMarks(parser.program!, run, 8)).toEqual({
+			line: run.steps[8].line,
+			sites: [29, 11, 2],
+			tone: 'neutral'
+		});
+		expect(listingMarks(parser.program!, run, 5).tone).toBe('accept');
+		const none = { line: null, sites: [], tone: 'neutral' };
+		expect(listingMarks(parser.program!, run, 99)).toEqual(none);
+		expect(listingMarks(parser.program!, null, 0)).toEqual(none);
+	});
+
+	it('listingMarks: a run of other code marks no line', () => {
+		// The run of the default grammar is kept while the token string has errors for a new one.
+		const before = readParser(SLIDE_38);
+		const kept = runParser(before, readInput('int + int * int', before.ebnf!))!;
+		const after = readParser('S → b { a }');
+		expect(runParser(after, readInput('int + int * int', after.ebnf!))).toBeNull();
+		for (let i = 0; i < kept.steps.length; i++) {
+			expect(listingMarks(after.program!, kept, i)).toEqual({
+				line: null,
+				sites: [],
+				tone: 'neutral'
+			});
+			expect(listingMarks(before.program!, kept, i).line).toBe(kept.steps[i].line);
+		}
+		// The same text read again is other code too: its run has to be its own.
+		expect(listingMarks(readParser(SLIDE_38).program!, kept, 3).line).toBeNull();
+	});
 });
 
 describe('forestAt', () => {
@@ -303,14 +355,24 @@ describe('forestAt', () => {
 		const r = build(SLIDE_38, 'int + int * int');
 		const forest = forestAt(r, r.steps.length - 1);
 		expect(forest).toHaveLength(1);
+		// The loop has ended, so its plus is out of scope: tree alone points to the AST.
 		expect(forest[0]).toMatchObject({
 			text: '+( int, *( int, int ) )',
-			names: ['tree', 'plus'],
+			names: ['tree'],
 			dim: [],
 			current: [[]]
 		});
 		expect(forestAt(r, 0)).toEqual([]);
 		expect(forestAt(r, 999)).toEqual([]);
+	});
+
+	it('names a tree after the operator variable only inside the block that declares it', () => {
+		const r = build('E → T { + T }\nT → int', 'int + int');
+		const names = r.steps.map((_, i) => forestAt(r, i).map((t) => t.names.join(' ')));
+		const assigned = r.steps.findIndex((s) => s.kind === 'assign' && s.from === 'plus');
+		expect(names[assigned]).toEqual(['tree plus']);
+		// The test that ends the loop, and return tree.
+		expect(names.slice(assigned + 1)).toEqual([['tree'], ['tree']]);
 	});
 
 	it('marks a node inside a tree by its path', () => {

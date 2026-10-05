@@ -26,6 +26,7 @@
 	} from '$lib/tools/rd-predictive/compare';
 	import Findings from '$lib/tools/rd-predictive/Findings.svelte';
 	import {
+		formFor,
 		readAst,
 		readInput,
 		readParser,
@@ -54,7 +55,7 @@
 		stateFromHash,
 		type PredictiveState
 	} from '$lib/tools/rd-predictive/state';
-	import { callSites, describeStep } from '$lib/tools/rd-predictive/view';
+	import { listingMarks } from '$lib/tools/rd-predictive/view';
 	import { createCompareWorker } from '$lib/tools/rd-predictive/worker';
 	import { syncToHash } from '$lib/url-state';
 
@@ -224,7 +225,6 @@
 	const rewriteComparison = $derived(comparisonOf(rewriteTask, rewriteRequest));
 	const parserComparison = $derived(comparisonOf(parserTask, parserRequest));
 
-	const runStep = $derived(run ? run.steps[runStepper.index] : undefined);
 	const conflicts = $derived(parser?.prediction?.conflicts ?? []);
 	/** Conflicts listed before the rest is summed up. */
 	const CONFLICT_LIMIT = 6;
@@ -394,11 +394,10 @@
 
 						<section aria-labelledby="code-title">
 							<h3 id="code-title">Code <span>the line being executed is marked</span></h3>
+							<!-- A run kept from the grammar before an edit marks no line of this code. -->
 							<CodeListing
 								program={parser.program}
-								line={runStep?.line ?? null}
-								sites={callSites(runStep)}
-								tone={run && runStep ? describeStep(run, runStepper.index).tone : 'neutral'}
+								{...listingMarks(parser.program, run, runStepper.index)}
 								maxHeight="min(46rem, 75vh)"
 								ariaLabel="Generated parser"
 							/>
@@ -429,10 +428,10 @@
 				<AstPanel
 					model={ast}
 					stepper={astStepper}
-					onform={(value) => {
+					onform={(choice) => {
 						astStepper.pause();
-						// The form the grammar is written in needs no choice: it is what a link opens on.
-						form.ast = value === ast.written ? null : value;
+						// The grammar as written needs no choice: it is what a link opens on.
+						form.ast = formFor(choice, ast.written);
 						form.astStep = null;
 					}}
 					inputError={!!input?.error}

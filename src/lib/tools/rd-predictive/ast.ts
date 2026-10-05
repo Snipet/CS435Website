@@ -25,14 +25,20 @@
  * `[ op operand ]`:
  *
  * - the operand is a single terminal, which becomes a leaf
- *   (`makeNode (token)`), or one non-terminal with any terminals around it,
- *   which are matched and left out of the tree (`( E )`);
+ *   (`makeNode (token)`), a single non-terminal, whose tree is returned, or a
+ *   non-terminal between two terminals (`( E )`), which are matched and left
+ *   out of the tree: the shape of the tree says what they enclose;
  * - inside the brackets every alternative is an operator terminal followed
  *   by one symbol.
  *
  * Other rules (S → 1 { 0 }, E’ → + T E’ | ε) have no function, and code with
- * a function missing is not run. Only the function of slide 40 is on the
+ * a function missing is not run. That includes a non-terminal with terminals
+ * on one side only (F → - F, S → id := E): leaving those tokens out would
+ * give `- int` the tree of `int`. Only the function of slide 40 is on the
  * slides; the functions for operands follow the parser of slide 37.
+ *
+ * A variable declared in the body of the while or the if (`Node* plus`) is in
+ * scope until that body ends (run.ts).
  */
 import type { EbnfGrammar, ParseNode } from '$lib/theory/grammar/types';
 import { writeAlternatives, writeBracketWith, writeTerminal, type Scope } from './codegen';
@@ -64,6 +70,12 @@ import { runProgram, type HeapEvent, type RunOptions, type RunResult } from './r
 /** `loop`: X → Y { op Y }, left-associative. `recursion`: X → Y [ op X ], right-associative. */
 export type AstForm = 'loop' | 'recursion';
 
+/**
+ * What the AST panel offers: a form for every rule that has one, or
+ * (`written`) each rule as the grammar of the parser writes it.
+ */
+export type AstChoice = AstForm | 'written';
+
 /** What a rule's function does: build operators in a loop, by recursion, or return one operand. */
 export type RuleShape = AstForm | 'operand';
 
@@ -81,13 +93,18 @@ export interface AstCode {
 	rules: AstRule[];
 	/** The non-terminals without a function. The code runs only when there are none. */
 	missing: string[];
+	/**
+	 * The terminals around an enclosed operand (`(` and `)` of `( E )`) in the
+	 * rules that have a function: matched, with no node of their own.
+	 */
+	enclosing: string[];
 }
 
 type Bracket = Extract<Item, { kind: 'opt' | 'rep' }>;
 
 /** One alternative as an operand with an optional tail of operators. */
 interface AltShape {
-	/** The symbols before the tail. */
+	/** The symbols before the tail: the operand, or the operand between two terminals. */
 	head: string[];
 	/** Index in `head` of the operand. */
 	operand: number;
@@ -106,24 +123,20 @@ function shapeOf(alt: Alt, isNonterminal: (name: string) => boolean): AltShape |
 		if (item.kind !== 'sym') return null;
 		head.push(item.name);
 	}
-	if (head.length === 0) return null;
-	const operands = head.filter(isNonterminal);
-	if (operands.length > 1) return null;
-	// Without a non-terminal, the one terminal is the operand.
-	if (operands.length === 0 && head.length !== 1) return null;
+	// One symbol is the operand. Three are an operand when the outer two enclose a non-terminal.
+	if (head.length !== 1 && head.length !== 3) return null;
+	const operand = head.length === 1 ? 0 : 1;
+	if (head.length === 3 && !head.every((name, at) => isNonterminal(name) === (at === operand))) {
+		return null;
+	}
 	if (tail) {
 		for (const inner of tail.alts) {
 			if (inner.length !== 2) return null;
-			const [op, operand] = inner;
-			if (op.kind !== 'sym' || operand.kind !== 'sym' || isNonterminal(op.name)) return null;
+			const [op, right] = inner;
+			if (op.kind !== 'sym' || right.kind !== 'sym' || isNonterminal(op.name)) return null;
 		}
 	}
-	return {
-		head,
-		operand: operands.length === 0 ? 0 : head.indexOf(operands[0]),
-		leaf: operands.length === 0,
-		tail
-	};
+	return { head, operand, leaf: !isNonterminal(head[operand]), tail };
 }
 
 /** The left-hand side of an assignment: `Node* tree = `, `tree = `, `plus->left  = `. */
@@ -286,7 +299,14 @@ export function generateAst(e: EbnfGrammar, lookahead: Lookahead = lookaheadOf(e
 			text: printRule(rule),
 			shape: shapes ? ruleShape(shapes) : null
 		})),
-		missing: shaped.filter(({ shapes }) => !shapes).map(({ rule }) => rule.lhs)
+		missing: shaped.filter(({ shapes }) => !shapes).map(({ rule }) => rule.lhs),
+		enclosing: [
+			...new Set(
+				shaped.flatMap(({ shapes }) =>
+					(shapes ?? []).flatMap(({ head, operand }) => head.filter((_, at) => at !== operand))
+				)
+			)
+		]
 	};
 }
 
@@ -339,9 +359,19 @@ export function ruleForms(
 	return lookahead.rules.map((rule) => operatorsOf(rule, lookahead.isNonterminal)?.form ?? null);
 }
 
-/** The form of the first rule that has one, or null. */
-export function writtenForm(e: EbnfGrammar, lookahead: Lookahead = lookaheadOf(e)): AstForm | null {
-	return ruleForms(e, lookahead).find((form) => form !== null) ?? null;
+/**
+ * How a grammar writes the rules that have a form: all of them in one form,
+ * some in each (`mixed`: a left-associative and a right-associative
+ * operator), or it has no such rule (null).
+ */
+export type WrittenForm = AstForm | 'mixed' | null;
+
+export function writtenForm(e: EbnfGrammar, lookahead: Lookahead = lookaheadOf(e)): WrittenForm {
+	const forms = ruleForms(e, lookahead);
+	const loop = forms.includes('loop');
+	const recursion = forms.includes('recursion');
+	if (loop && recursion) return 'mixed';
+	return loop ? 'loop' : recursion ? 'recursion' : null;
 }
 
 export interface Reformed {
@@ -354,16 +384,17 @@ export interface Reformed {
 
 /**
  * `e` with every rule X → Y { op Y } or X → Y [ op X ] written in `form`:
- * the same language, with the other associativity in the AST.
+ * the same language, with the other associativity in the AST. With `form`
+ * null every rule stays as it is written.
  */
 export function withForm(
 	e: EbnfGrammar,
-	form: AstForm,
+	form: AstForm | null,
 	lookahead: Lookahead = lookaheadOf(e)
 ): Reformed {
 	const changed: string[] = [];
 	const rules = lookahead.rules.map((rule): Rule => {
-		const found = operatorsOf(rule, lookahead.isNonterminal);
+		const found = form === null ? null : operatorsOf(rule, lookahead.isNonterminal);
 		if (!found || found.form === form) return rule;
 		changed.push(rule.lhs);
 		const inner = found.ops.map((op) => [sym(op), sym(form === 'loop' ? found.operand : rule.lhs)]);

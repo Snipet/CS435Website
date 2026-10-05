@@ -1,33 +1,34 @@
 <!--
 	AST construction as on slide 40: the functions that build the tree, run step
 	by step on the token string, with the local variables of every call and the
-	trees that exist after each step. The rules X → Y { op Y } and X → Y [ op X ]
-	can be shown in either form on the same input.
+	trees that exist after each step. The functions are for the grammar of the
+	parser as it is written; the rules X → Y { op Y } and X → Y [ op X ] can be
+	shown in either form on the same input.
 -->
 <script lang="ts">
 	import { ParseTreeView, TokenStream } from '$lib/components/grammar';
 	import { Callout, SegmentedControl, StepControls, type Stepper } from '$lib/components/ui';
-	import type { AstForm } from './ast';
+	import type { AstChoice } from './ast';
 	import CallStack from './CallStack.svelte';
 	import CodeListing from './CodeListing.svelte';
 	import GrammarBox from './GrammarBox.svelte';
 	import type { AstModel } from './model';
 	import StepLine from './StepLine.svelte';
 	import {
-		callSites,
 		describeStep,
 		forestAt,
+		listingMarks,
 		outcomeText,
 		stackRows,
 		tokenHighlights
 	} from './view';
 
 	interface Props {
-		/** The functions for the grammar in the form shown, with their run. */
+		/** The functions for the grammar as written or in the form chosen, with their run. */
 		model: AstModel;
 		stepper: Stepper;
-		/** The other form was chosen. */
-		onform: (form: AstForm) => void;
+		/** Another of the choices was made. */
+		onform: (choice: AstChoice) => void;
 		/** The token string has errors, so there is nothing to run. */
 		inputError?: boolean;
 	}
@@ -36,9 +37,32 @@
 
 	const uid = $props.id();
 
-	const FORMS: { value: AstForm; label: string; title: string }[] = [
+	interface Option {
+		value: AstChoice;
+		label: string;
+		title: string;
+	}
+	const FORMS: Option[] = [
 		{ value: 'loop', label: '{ } left-associative', title: 'X → Y { op Y }: a loop' },
 		{ value: 'recursion', label: '[ ] right-associative', title: 'X → Y [ op X ]: recursion' }
+	];
+	/**
+	 * A grammar with rules in both forms: either form changes a rule, so the
+	 * grammar of the parser itself is a choice. ("As written" is the BNF grammar
+	 * of the first panel on this page.)
+	 */
+	const MIXED: Option[] = [
+		{
+			value: 'written',
+			label: 'As in the parser',
+			title: 'Every rule in the form the grammar of the parser gives it'
+		},
+		{ value: 'loop', label: 'All { }', title: 'Every rule as X → Y { op Y }: left-associative' },
+		{
+			value: 'recursion',
+			label: 'All [ ]',
+			title: 'Every rule as X → Y [ op X ]: right-associative'
+		}
 	];
 
 	const run = $derived(model.run);
@@ -62,19 +86,22 @@
 	{#if hasForms}
 		<div class="forms">
 			<SegmentedControl
-				options={FORMS}
-				value={model.form}
-				label="Operator rules with"
+				options={model.written === 'mixed' ? MIXED : FORMS}
+				value={model.choice}
+				label={model.written === 'mixed' ? 'Operator rules' : 'Operator rules with'}
 				showLabel
 				size="sm"
 				onchange={onform}
 			/>
 			<p class="implies">
-				{#if model.form === 'loop'}
+				{#if model.choice === 'loop'}
 					A loop makes the tree so far the left child of each new node.
-				{:else}
+				{:else if model.choice === 'recursion'}
 					A recursive call returns the tree of everything after the operator, which becomes the
 					right child.
+				{:else}
+					Each rule keeps the form the parser has it in: {'{ }'} is a loop and gives a left-associative
+					tree, [ ] is a recursive call and gives a right-associative one.
 				{/if}
 			</p>
 		</div>
@@ -98,7 +125,8 @@
 						A function returns one tree. A rule gets one when each alternative is a single operand,
 						optionally followed by <code>{'{ op operand }'}</code> or
 						<code>[ op operand ]</code>, as in <code>E → T {'{ + T }'}</code> and
-						<code>A → X [ op A ]</code>.
+						<code>A → X [ op A ]</code>. An operand is one symbol, or a non-terminal between two
+						terminals, as in <code>( E )</code>.
 						{none ? '' : 'The functions below are not run.'}
 					</p>
 				</Callout>
@@ -106,12 +134,21 @@
 			{#if !none}
 				<CodeListing
 					program={code.program}
-					line={step?.line ?? null}
-					sites={callSites(step)}
-					tone={step ? describeStep(run!, index).tone : 'neutral'}
+					{...listingMarks(code.program, run, index)}
 					maxHeight="min(34rem, 70vh)"
 					ariaLabel="Functions that build the AST"
 				/>
+				{#if code.enclosing.length > 0}
+					<p class="note">
+						No node is made for
+						{#each code.enclosing as terminal, i (terminal)}{i === 0
+								? ''
+								: i === code.enclosing.length - 1
+									? ' and '
+									: ', '}<code>{terminal}</code>{/each}: the tokens are matched, and the tree of
+						what they enclose is returned.
+					</p>
+				{/if}
 			{/if}
 		</div>
 

@@ -15,9 +15,11 @@ import {
 	runAst,
 	withForm,
 	writtenForm,
+	type AstChoice,
 	type AstCode,
 	type AstForm,
-	type Reformed
+	type Reformed,
+	type WrittenForm
 } from './ast';
 import { generateParser } from './codegen';
 import {
@@ -162,12 +164,21 @@ export function runParser(parser: Parser, input: Input | null): RunResult | null
 	return runProgram(parser.program, input.tokens);
 }
 
-/** The functions that build the AST, for the grammar in one of its two forms. */
+/**
+ * The functions that build the AST: for the grammar of the parser as it is
+ * written, or with every rule X → Y { op Y } and X → Y [ op X ] in one form.
+ */
 export interface AstModel {
-	/** The form shown: the one asked for, or the one the grammar is written in. */
-	form: AstForm;
-	/** The grammar is written with rules in both forms, or in neither. */
-	written: AstForm | null;
+	/** The form asked for. Null: every rule as the grammar writes it. */
+	form: AstForm | null;
+	/** How the grammar writes those rules: in one form, in both (`mixed`), or it has none (null). */
+	written: WrittenForm;
+	/**
+	 * What is shown, as one of the panel's choices. A grammar in one form is
+	 * that form; `written` is a choice of its own for a mixed grammar, where
+	 * either form changes a rule.
+	 */
+	choice: AstChoice;
 	/** The grammar the functions are for, with the rules that were rewritten for `form`. */
 	reformed: Reformed;
 	code: AstCode;
@@ -175,6 +186,11 @@ export interface AstModel {
 	run: RunResult | null;
 }
 
+/**
+ * With `form` null the functions are for the grammar exactly as written, so
+ * the AST is the one the parser's grammar gives; a form is applied only when
+ * it is asked for.
+ */
 export function readAst(
 	parser: Parser,
 	input: Input | null,
@@ -182,12 +198,20 @@ export function readAst(
 ): AstModel | null {
 	if (!parser.ebnf || !parser.lookahead) return null;
 	const written = writtenForm(parser.ebnf, parser.lookahead);
-	const shown = form ?? written ?? 'loop';
-	const reformed = withForm(parser.ebnf, shown, parser.lookahead);
+	const reformed = withForm(parser.ebnf, form, parser.lookahead);
 	const code = generateAst(reformed.grammar);
 	const run = input && !hasErrors(input.diagnostics) ? runAst(code, input.tokens) : null;
-	return { form: shown, written, reformed, code, run };
+	const choice = form ?? (written === 'mixed' || written === null ? 'written' : written);
+	return { form, written, choice, reformed, code, run };
 }
+
+/**
+ * The form to keep in the state for a choice made in the panel: null when
+ * the choice is what the grammar writes anyway, so that a link opens on the
+ * grammar as written.
+ */
+export const formFor = (choice: AstChoice, written: WrittenForm): AstForm | null =>
+	choice === 'written' || choice === written ? null : choice;
 
 /** A token string without the `$` at its end, as the other parsing tools take it. */
 export const withoutMarker = (text: string): string => text.replace(/\s*\$\s*$/u, '').trim();

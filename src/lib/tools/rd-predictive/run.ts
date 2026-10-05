@@ -33,7 +33,11 @@ export interface Frame {
 	site: number | null;
 	/** Index of the next token when the function was entered. */
 	entered: number;
-	/** Local variables: the id of the node each points to; null before it has a value. */
+	/**
+	 * The local variables in scope: the id of the node each points to; null
+	 * before it has a value. A variable declared in the body of a while or an
+	 * if (`Node* plus`) is here until that body ends.
+	 */
 	vars: Readonly<Record<string, number | null>>;
 	parent: Frame | null;
 	/** 1 for the outermost call. */
@@ -140,7 +144,20 @@ interface Cursor {
 	at: number;
 	/** The while whose body this is: its test is evaluated again at the end. */
 	loop: Extract<Stmt, { kind: 'while' }> | null;
+	/**
+	 * The variables declared in this block, which go out of scope at its end.
+	 * The generated code declares no name again in a block inside the one that
+	 * declares it, so the end of a block hides no outer variable.
+	 */
+	declared: string[];
 }
+
+const block = (body: readonly Stmt[], loop: Cursor['loop'] = null): Cursor => ({
+	body,
+	at: 0,
+	loop,
+	declared: []
+});
 
 interface Activation {
 	fn: number;
@@ -187,12 +204,22 @@ export function runProgram(
 	const write = (target: Target, value: number | null): void => {
 		const act = top();
 		if (target.kind === 'variable') {
+			// The block being executed is the one the declaration is written in.
+			if (target.declares) act.cursors[act.cursors.length - 1]?.declared.push(target.name);
 			act.frame = { ...act.frame, vars: { ...act.frame.vars, [target.name]: value } };
 			return;
 		}
 		const node = act.frame.vars[target.object];
 		if (node === null || node === undefined) return;
 		events.push({ kind: 'set', node, field: target.field, child: value });
+	};
+
+	/** The end of a block: the variables declared in it are no longer in scope. */
+	const endBlock = (act: Activation, cursor: Cursor): void => {
+		if (cursor.declared.length === 0) return;
+		const vars = { ...act.frame.vars };
+		for (const name of cursor.declared) delete vars[name];
+		act.frame = { ...act.frame, vars };
 	};
 
 	const call = (fn: number, site: number | null, target: Target | undefined): void => {
@@ -209,7 +236,7 @@ export function runProgram(
 			parent: caller?.frame ?? null,
 			depth: (caller?.frame.depth ?? 0) + 1
 		};
-		stack.push({ fn, frame, cursors: [{ body: f.body, at: 0, loop: null }], target, key });
+		stack.push({ fn, frame, cursors: [block(f.body)], target, key });
 		calls.push(fn);
 		record(caller ? { kind: 'enter', fn, from: caller.fn } : { kind: 'start', fn }, f.head);
 		if (nested >= nesting) {
@@ -257,11 +284,11 @@ export function runProgram(
 						arm.line
 					);
 					if (yes) {
-						act.cursors.push({ body: arm.body, at: 0, loop: null });
+						act.cursors.push(block(arm.body));
 						return;
 					}
 				}
-				if (stmt.otherwise) act.cursors.push({ body: stmt.otherwise.body, at: 0, loop: null });
+				if (stmt.otherwise) act.cursors.push(block(stmt.otherwise.body));
 				return;
 			}
 			case 'while': {
@@ -270,7 +297,7 @@ export function runProgram(
 					{ kind: 'test', test: stmt.test, tokens: stmt.tokens, result: yes, loop: true },
 					stmt.line
 				);
-				if (yes) act.cursors.push({ body: stmt.body, at: 0, loop: stmt });
+				if (yes) act.cursors.push(block(stmt.body, stmt));
 				return;
 			}
 			case 'error':
@@ -321,19 +348,22 @@ export function runProgram(
 			continue;
 		}
 		act.cursors.pop();
+		// The end of the function's own statements: it returns at its closing brace.
+		if (act.cursors.length === 0) {
+			leave(null, program.functions[act.fn].close);
+			continue;
+		}
+		endBlock(act, cursor);
 		if (cursor.loop) {
-			// The end of a loop body: the test again.
+			// The end of a loop body: the test again, and each round declares its variables anew.
 			const loop = cursor.loop;
 			const yes = holds(loop.tokens);
 			record(
 				{ kind: 'test', test: loop.test, tokens: loop.tokens, result: yes, loop: true },
 				loop.line
 			);
-			if (yes) act.cursors.push({ body: loop.body, at: 0, loop });
-			continue;
+			if (yes) act.cursors.push(block(loop.body, loop));
 		}
-		// The end of the function's own statements: it returns at its closing brace.
-		if (act.cursors.length === 0) leave(null, program.functions[act.fn].close);
 	}
 
 	return { program, tokens, steps, outcome, calls, events, result };

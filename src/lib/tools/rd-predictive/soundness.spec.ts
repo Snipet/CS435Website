@@ -16,7 +16,8 @@ import {
 import { generateAst, nodesAt, runAst, type AstNode } from './ast';
 import { generateParser } from './codegen';
 import { predict } from './predict';
-import { leftOver, runProgram } from './run';
+import type { Program, Stmt } from './program';
+import { framesOf, leftOver, runProgram, type RunResult } from './run';
 import { rewriteGrammar } from './transform';
 
 function ebnf(text: string): EbnfGrammar {
@@ -106,13 +107,63 @@ function inOrder(nodes: readonly AstNode[], root: number | null): string[] {
 	return out;
 }
 
+/** A variable declared inside the body of a while or an if, with the lines it is in scope on. */
+interface Declaration {
+	fn: number;
+	name: string;
+	from: number;
+	to: number;
+}
+
+/** The declarations in the nested blocks of a program: `Node* plus = makeNode ('+');`. */
+function nestedDeclarations(program: Program): Declaration[] {
+	const out: Declaration[] = [];
+	const visit = (fn: number, body: readonly Stmt[], close: number | null): void => {
+		for (const stmt of body) {
+			if (stmt.kind === 'make' && stmt.target.kind === 'variable' && stmt.target.declares) {
+				if (close !== null) out.push({ fn, name: stmt.target.name, from: stmt.line, to: close });
+			} else if (stmt.kind === 'while') visit(fn, stmt.body, stmt.close);
+			else if (stmt.kind === 'if') {
+				for (const arm of stmt.arms) visit(fn, arm.body, arm.close ?? arm.line);
+				if (stmt.otherwise) visit(fn, stmt.otherwise.body, stmt.otherwise.close);
+			}
+		}
+	};
+	program.functions.forEach((f, fn) => visit(fn, f.body, null));
+	return out;
+}
+
+/**
+ * The frames of a run that list an operator variable on a line outside the
+ * block that declares it, or leave one out inside it. A call that waits for
+ * another is on the line of that call.
+ */
+function scopeErrors(run: RunResult, declarations: readonly Declaration[]): string[] {
+	const out: string[] = [];
+	run.steps.forEach((step, index) => {
+		const frames = framesOf(step);
+		frames.forEach((frame, depth) => {
+			const line = depth === 0 ? step.line : frames[depth - 1].site!;
+			const expected = declarations
+				.filter((d) => d.fn === frame.fn && d.from <= line && line <= d.to)
+				.map((d) => d.name);
+			const listed = Object.keys(frame.vars).filter((name) => name !== 'tree');
+			if ([...listed].sort().join() !== [...expected].sort().join())
+				out.push(`step ${index}, line ${line + 1}: ${listed.join()} for ${expected.join()}`);
+		});
+	});
+	return out;
+}
+
 describe('the functions that build an AST', () => {
 	it.each([
 		['slide 38', 'E → T { + T }\nT → F { * F }\nF → ( E ) | int', 6],
 		['slide 38 with [ ]', 'E → T [ + E ]\nT → F [ * T ]\nF → ( E ) | int', 6],
 		['slide 37', 'E → T [ + E ]\nT → ( E ) | int [ * T ]', 6],
 		['slide 39', 'A → X [ op A ]', 8],
-		['two operators', 'E → T { + T | - T }\nT → int | ( E )', 6]
+		['two operators', 'E → T { + T | - T }\nT → int | ( E )', 6],
+		['a { } rule and a [ ] rule', 'E → T { + T }\nT → F [ ^ T ]\nF → ( E ) | int', 6],
+		['other enclosing terminals', 'E → T { + T }\nT → int | begin E end | "[" E "]"', 5]
 	] as const)(
 		'%s: read the sentences, and the AST has their tokens in order',
 		(_, text, length) => {
@@ -120,19 +171,32 @@ describe('the functions that build an AST', () => {
 			const grammar = ebnfToGrammar(e);
 			const code = generateAst(e);
 			expect(code.missing).toEqual([]);
+			const declarations = nestedDeclarations(code.program);
+			expect(declarations.length).toBeGreaterThan(0);
 			let sentences = 0;
 			for (const tokens of strings(e.terminals, length)) {
 				const run = runAst(code, tokens)!;
+				// In sentences and in strings that stop at an error alike.
+				expect(scopeErrors(run, declarations), tokens.join(' ')).toEqual([]);
 				const whole = run.outcome === 'done' && leftOver(run).length === 0;
 				expect(whole, tokens.join(' ')).toBe(recognizes(grammar, tokens));
 				if (!whole) continue;
 				sentences++;
-				// Parentheses are matched and left out of the tree; everything else is a node.
+				// The enclosing terminals are matched and left out of the tree; everything else is a node.
 				const nodes = nodesAt(run, run.steps.length - 1);
-				expect(inOrder(nodes, run.result)).toEqual(tokens.filter((t) => t !== '(' && t !== ')'));
+				expect(inOrder(nodes, run.result)).toEqual(
+					tokens.filter((t) => !code.enclosing.includes(t))
+				);
 				expect(nodes.map((n) => tokens[n.token])).toEqual(nodes.map((n) => n.label));
 			}
 			expect(sentences).toBeGreaterThan(0);
 		}
 	);
+
+	it('the enclosing terminals of the slide grammars are the parentheses', () => {
+		expect(generateAst(ebnf('E → T { + T }\nT → F { * F }\nF → ( E ) | int')).enclosing).toEqual([
+			'(',
+			')'
+		]);
+	});
 });

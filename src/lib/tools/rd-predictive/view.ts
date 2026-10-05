@@ -7,7 +7,7 @@ import { highlightGrammar } from '$lib/components/grammar/grammar-text';
 import type { HighlightRange } from '$lib/components/ui/types';
 import type { ParseNode } from '$lib/theory/grammar/types';
 import { bracketOf, nodesAt, pathTo, placeholderPaths, rootsOf, treeOf, type AstNode } from './ast';
-import type { Target } from './program';
+import type { Program, Target } from './program';
 import { framesOf, leftOver, type Frame, type RunResult, type Step } from './run';
 
 export type StepTone = 'neutral' | 'accept' | 'reject' | 'warn';
@@ -239,6 +239,32 @@ export function callSites(step: Step | undefined): number[] {
 		.filter((line): line is number => line !== null);
 }
 
+/** What a code listing marks for a step. */
+export interface ListingMarks {
+	/** The line being executed (from 0), or null. */
+	line: number | null;
+	/** The lines of the calls in progress. */
+	sites: number[];
+	/** The color of the executing line. */
+	tone: StepTone;
+}
+
+/**
+ * The lines a listing of `program` marks for step `index` of `run`. A run of
+ * other code marks nothing: its line numbers are not lines of `program`. The
+ * page keeps showing the last run while a new token string has errors, and
+ * that run may be of the grammar before the last edit.
+ */
+export function listingMarks(
+	program: Program,
+	run: RunResult | null | undefined,
+	index: number
+): ListingMarks {
+	const step = run && run.program === program ? run.steps[index] : undefined;
+	if (!run || !step) return { line: null, sites: [], tone: 'neutral' };
+	return { line: step.line, sites: callSites(step), tone: describeStep(run, index).tone };
+}
+
 export interface StackRow {
 	/** Unique among the rows of one step. */
 	key: number;
@@ -248,7 +274,7 @@ export interface StackRow {
 	calledFrom: number | null;
 	/** The token the function was entered on, with its index; null past the end. */
 	entered: { index: number; token: string | null };
-	/** Local variables with the trees they point to; `null` before a variable has a value. */
+	/** The local variables in scope with the trees they point to; `null` before a variable has a value. */
 	variables: { name: string; value: string; node: number | null }[];
 }
 
