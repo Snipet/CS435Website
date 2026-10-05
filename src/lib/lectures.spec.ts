@@ -9,6 +9,17 @@ describe('formatCitation', () => {
 		);
 		expect(formatCitation({ deck: '04' })).toBe('Lexical Analysis');
 	});
+
+	it('adds the topic only to the Intro decks, whose titles repeat', () => {
+		expect(formatCitation({ deck: '00', slide: 2 })).toBe(
+			'Intro: Compilers, interpreters, and language processors · slide 2'
+		);
+		expect(formatCitation({ deck: '09', slide: 23 })).toBe('Introduction to Parsing · slide 23');
+		expect(formatCitation({ deck: '10', slide: [4, 5] })).toBe(
+			'Ambiguity, Precedence, Associativity & Top-Down Parsing · slides 4–5'
+		);
+		expect(formatCitation({ deck: '11', slide: 20 })).toBe('Top-Down Parsing · slide 20');
+	});
 });
 
 describe('citationParts', () => {
