@@ -20,10 +20,16 @@
 	import BacktrackingTab from '$lib/tools/rd-backtracking/BacktrackingTab.svelte';
 	import FunctionsTab from '$lib/tools/rd-backtracking/FunctionsTab.svelte';
 	import PresetNote from '$lib/tools/rd-backtracking/PresetNote.svelte';
-	import { presetFor, presets, type RdPreset } from '$lib/tools/rd-backtracking/presets';
+	import {
+		presetFor,
+		presetState,
+		presets,
+		type RdPreset
+	} from '$lib/tools/rd-backtracking/presets';
 	import { reverseAlternatives } from '$lib/tools/rd-backtracking/reverse';
 	import {
 		analyze,
+		anywayApplies,
 		showsLimitation,
 		summarize,
 		type Run
@@ -63,9 +69,11 @@
 
 	const backSteps = $derived(run?.backtracking?.steps.length ?? 0);
 	const functionSteps = $derived(run?.limited?.steps.length ?? 0);
-	const back = new Stepper(() => backSteps, { index: untrack(() => Math.max(0, backSteps - 1)) });
+	const back = new Stepper(() => backSteps, {
+		index: untrack(() => form.step ?? Math.max(0, backSteps - 1))
+	});
 	const functions = new Stepper(() => functionSteps, {
-		index: untrack(() => Math.max(0, functionSteps - 1))
+		index: untrack(() => form.fstep ?? Math.max(0, functionSteps - 1))
 	});
 
 	// form.step and form.fstep (null = the last step) drive the steppers…
@@ -99,6 +107,12 @@
 		});
 	});
 
+	// "Run anyway" is switched on for a left-recursive grammar. When the grammar has no left
+	// recursion any more it goes off, so that one entered later is not run until it is asked for.
+	$effect(() => {
+		if (form.anyway && !anywayApplies(analysis)) form.anyway = false;
+	});
+
 	function pause() {
 		back.pause();
 		functions.pause();
@@ -113,9 +127,10 @@
 
 	const preset = $derived(presetFor(form.grammar, form.input, form.tab));
 
+	/** A preset opens on its first step, like the slides it is from. */
 	function loadPreset(p: RdPreset) {
 		pause();
-		Object.assign(form, { ...DEFAULT_STATE, ...p.value, numbers: p.value.numbers ?? false });
+		Object.assign(form, presetState(p));
 	}
 
 	const reversed = $derived(reverseAlternatives(form.grammar));
@@ -133,6 +148,8 @@
 
 	/** Shown only for the grammar as it is now, not for a faded earlier run. */
 	const leftRecursive = $derived(analysis.run?.leftRecursion ?? []);
+	/** The nesting at which a run of the left-recursive grammar is stopped. */
+	const depthCap = $derived(analysis.run?.depthCap ?? DEFAULT_DEPTH_CAP);
 
 	// Other tools open on this grammar, and on the token stream while it has no errors.
 	const links = $derived.by(() => {
@@ -254,7 +271,7 @@
 				<Toggle
 					bind:checked={form.anyway}
 					label="Run anyway"
-					description="Stops when {DEFAULT_DEPTH_CAP} instances are nested with no token matched between them."
+					description="Stops when {depthCap} instances of one non-terminal are nested with no token matched between them."
 					onchange={edited}
 				/>
 			</div>

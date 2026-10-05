@@ -14,11 +14,13 @@ import {
 	ORDER_1,
 	ORDER_2,
 	presetFor,
+	presetState,
 	presets,
 	type RdPreset
 } from './presets';
 import { reverseAlternatives } from './reverse';
 import { analyze, showsLimitation, summarize, type Run } from './session';
+import { isRdHash } from './state';
 import { fringeText, limitedVerdict, logLines, traceLines } from './view';
 
 const preset = (id: string): RdPreset => presets.find((p) => p.id === id)!;
@@ -53,6 +55,21 @@ describe('every preset', () => {
 			expect(traceLines(run.program, run.limited!, i).length).toBe(step.calls);
 		});
 		expect(summarize(run)).toHaveLength(2);
+	});
+
+	it.each(presets.map((p) => [p.id, p] as const))('%s opens on its first step', (_, p) => {
+		const state = presetState(p);
+		expect(state).toEqual({
+			grammar: p.value.grammar,
+			input: p.value.input,
+			tab: p.value.tab,
+			numbers: p.value.numbers ?? false,
+			anyway: false,
+			step: 0,
+			fstep: 0
+		});
+		expect(isRdHash(state)).toBe(true);
+		expect(presetFor(state.grammar, state.input, state.tab)).toBe(p);
 	});
 
 	it('has a unique id, a group, a description and a slide of Top-Down Parsing', () => {

@@ -27,15 +27,18 @@ export interface RdState {
 /** What the hash may hold: a link from another tool, or a saved view. */
 export type RdHash = LinkStates['rd-backtracking'] & Partial<Omit<RdState, 'grammar' | 'input'>>;
 
-/** Example 1 (Top-Down Parsing, slides 4–16). */
+/**
+ * Example 1 (Top-Down Parsing, slides 4–16) at its first step, where slide 5
+ * starts. An edit shows the last step instead (see `step`).
+ */
 export const DEFAULT_STATE: RdState = {
 	grammar: 'E → T | T + E\nT → int | int * T | ( E )',
 	input: '( int )',
 	tab: 'backtracking',
 	numbers: false,
 	anyway: false,
-	step: null,
-	fstep: null
+	step: 0,
+	fstep: 0
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -56,7 +59,11 @@ export function isRdHash(value: unknown): value is RdHash {
 	return isFlag(value.numbers) && isFlag(value.anyway) && isStep(value.step) && isStep(value.fstep);
 }
 
-/** The state a hash value describes (missing fields take their defaults). */
+/**
+ * The state a hash value describes. Missing options are off, and a link
+ * without a step (one from another tool) shows the last step: the finished
+ * parse.
+ */
 export function stateFromHash(value: RdHash): RdState {
 	return {
 		grammar: value.grammar,

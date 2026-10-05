@@ -68,9 +68,11 @@
 		<Callout tone="warn" title="The run was stopped">
 			{#if result.stop.reason === 'depth'}
 				<p>
-					{result.stop.limit} instances are nested with no token matched between them, and the next one
-					would be expanded the same way. With left recursion the nesting can go on without end: the tree
-					grows down its left edge while the input pointer stays where it is.
+					{result.stop.limit} instances
+					{#if result.stop.symbol !== undefined}of <code>{result.stop.symbol}</code>{/if}
+					are nested with no token matched between them, and the next one would be expanded the same way.
+					With left recursion the nesting can go on without end: the tree grows down its left edge while
+					the input pointer stays where it is.
 				</p>
 			{:else}
 				<p>

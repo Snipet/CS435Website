@@ -6,7 +6,7 @@
  */
 import type { Citation } from '$lib/lectures';
 import type { Preset } from '$lib/components/ui/types';
-import type { TabId } from './state';
+import { DEFAULT_STATE, type RdState, type TabId } from './state';
 
 export interface RdPresetValue {
 	grammar: string;
@@ -146,6 +146,21 @@ export const presets: readonly RdPreset[] = [
 ];
 
 export const DEFAULT_PRESET_ID = 'example-1';
+
+/**
+ * The state a preset opens with: the first step on both tabs, so the steps
+ * are gone through in the order of the slides, and nothing run anyway.
+ */
+export function presetState(p: RdPreset): RdState {
+	return {
+		...DEFAULT_STATE,
+		...p.value,
+		numbers: p.value.numbers ?? false,
+		anyway: false,
+		step: 0,
+		fstep: 0
+	};
+}
 
 const squash = (text: string): string => text.trim().replace(/[ \t]+/g, ' ');
 

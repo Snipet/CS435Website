@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { hasErrors } from '$lib/theory/diagnostics';
+import { bracketForm } from '$lib/theory/grammar';
 import { DEFAULT_DEPTH_CAP } from './backtrack';
-import { programText } from './limited';
+import { functionOf, programText } from './limited';
 import {
 	MAX_TOKENS_CHECKED,
 	analyze,
+	anywayApplies,
 	leftRecursionNotes,
 	showsLimitation,
 	summarize
@@ -114,8 +116,74 @@ describe('left recursion', () => {
 		expect(first.limited!.leftover).toEqual(['0']);
 
 		const reversed = analyze('S → S 0 | 1', '1 0', { anyway: true, depthCap: 5 }).run!;
-		expect(reversed.backtracking!.stop).toEqual({ reason: 'depth', limit: 5 });
-		expect(reversed.limited!.stop).toEqual({ reason: 'depth', limit: 5 });
+		expect(reversed.backtracking!.stop).toEqual({ reason: 'depth', limit: 5, symbol: 'S' });
+		expect(reversed.limited!.stop).toEqual({
+			reason: 'depth',
+			limit: 5,
+			fn: functionOf(reversed.program, 'S')
+		});
+	});
+
+	it('runs the part of a grammar that the left recursion is not in', () => {
+		// Ten non-terminals are expanded before the first token; the left-recursive Z is not one of them.
+		const chain =
+			'A → B\nB → C\nC → D\nD → F\nF → G\nG → H\nH → I\nI → J\nJ → K\nK → a | Z\nZ → Z b | b';
+		const refused = analyze(chain, 'a').run!;
+		expect(refused.leftRecursion.map((l) => l.nonterminal)).toEqual(['Z']);
+		expect(refused.refused).toBe(true);
+
+		const run = analyze(chain, 'a', { anyway: true }).run!;
+		expect(run.depthCap).toBe(DEFAULT_DEPTH_CAP);
+		expect(run.inLanguage).toBe(true);
+		expect(run.backtracking!.stop).toBeNull();
+		expect(run.backtracking!.outcome).toBe('accept');
+		expect(bracketForm(run.backtracking!.tree!)).toBe(
+			'A( B( C( D( F( G( H( I( J( K(a) ) ) ) ) ) ) ) ) )'
+		);
+		expect(run.limited!.stop).toBeNull();
+		expect(run.limited!.outcome).toBe('accept');
+		expect(summarize(run).map((row) => [row.verdict, row.note, row.tried])).toEqual([
+			['accept', null, 10],
+			['accept', null, 10]
+		]);
+
+		// b is reached through Z, which is stopped: Z b is tried for every new Z.
+		const through = analyze(chain, 'b', { anyway: true }).run!;
+		expect(through.backtracking!.stop).toEqual({
+			reason: 'depth',
+			limit: DEFAULT_DEPTH_CAP,
+			symbol: 'Z'
+		});
+		expect(through.limited!.stop).toEqual({
+			reason: 'depth',
+			limit: DEFAULT_DEPTH_CAP,
+			fn: functionOf(through.program, 'Z')
+		});
+	});
+
+	it('raises the cap with the token string, so a parse that ends is not stopped', () => {
+		// 1 followed by nine 0: ten S are nested at the first token, one for every token.
+		const tokens = '1 0 0 0 0 0 0 0 0 0';
+		const run = analyze('S → 1 | S 0', tokens, { anyway: true }).run!;
+		expect(run.depthCap).toBe(11);
+		expect(run.inLanguage).toBe(true);
+		expect(run.backtracking!.outcome).toBe('accept');
+		expect(run.backtracking!.stop).toBeNull();
+		// The functions return after S → 1, as on the shorter string.
+		expect(run.limited!.outcome).toBe('reject');
+		expect(run.limited!.leftover).toHaveLength(9);
+
+		const reversed = analyze('S → S 0 | 1', tokens, { anyway: true }).run!;
+		expect(reversed.backtracking!.stop).toEqual({ reason: 'depth', limit: 11, symbol: 'S' });
+		expect(summarize(reversed).map((row) => row.note)).toEqual([
+			'depth cap of 11',
+			'depth cap of 11'
+		]);
+		// A short string keeps the default.
+		expect(analyze('S → S 0 | 1', '1 0 0 0 0 0 0', { anyway: true }).run!.depthCap).toBe(
+			DEFAULT_DEPTH_CAP
+		);
+		expect(analyze('S → S 0 | 1', '1 0 0 0 0 0 0 0', { anyway: true }).run!.depthCap).toBe(9);
 	});
 
 	it('names the productions of an indirect left recursion (slide 27)', () => {
@@ -129,6 +197,44 @@ describe('left recursion', () => {
 				(n) => `${n.nonterminal}: ${n.productions.join(', ')}`
 			)
 		).toEqual(['E: E → E + T', 'T: T → T * F']);
+	});
+});
+
+describe('"Run anyway"', () => {
+	it('stays on while the grammar is left-recursive', () => {
+		expect(anywayApplies(analyze('E → E + T | T\nT → int', 'int + int', { anyway: true }))).toBe(
+			true
+		);
+		expect(anywayApplies(analyze('S → A a | d\nA → S b', 'd', { anyway: true }))).toBe(true);
+		// The grammar is what counts: an error in the token stream changes nothing.
+		const tokenError = analyze('S → S 0 | 1', '1 2', { anyway: true });
+		expect(tokenError.run).toBeNull();
+		expect(tokenError.leftRecursion.map((l) => l.nonterminal)).toEqual(['S']);
+		expect(anywayApplies(tokenError)).toBe(true);
+	});
+
+	it('goes off when the grammar has no left recursion any more', () => {
+		const a = analyze('E → T + E | T\nT → int', 'int + int', { anyway: true });
+		expect(a.leftRecursion).toEqual([]);
+		expect(anywayApplies(a)).toBe(false);
+		expect(anywayApplies(analyze(ORDER_1, '( int )', { anyway: true }))).toBe(false);
+		expect(anywayApplies(analyze(ORDER_1, 'int -', { anyway: true }))).toBe(false);
+	});
+
+	it('is left alone while the grammar has an error', () => {
+		const a = analyze('E → E + T |', 'int', { anyway: true });
+		expect(a.grammar).toBeNull();
+		expect(a.leftRecursion).toEqual([]);
+		expect(anywayApplies(a)).toBe(true);
+		expect(anywayApplies(analyze('', '', { anyway: true }))).toBe(true);
+	});
+
+	it('gives the left recursion of the grammar with and without a run', () => {
+		const a = analyze('S → 1 | S 0', '1 0');
+		expect(a.leftRecursion).toEqual(a.run!.leftRecursion);
+		expect(a.leftRecursion).toEqual([
+			{ nonterminal: 'S', immediate: true, productions: ['S → S 0'] }
+		]);
 	});
 });
 

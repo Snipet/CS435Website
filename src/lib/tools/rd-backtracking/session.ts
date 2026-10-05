@@ -15,7 +15,7 @@ import {
 	tokenizeInput,
 	type Grammar
 } from '$lib/theory/grammar';
-import { DEFAULT_DEPTH_CAP, backtrack, type BacktrackResult } from './backtrack';
+import { backtrack, depthCapFor, type BacktrackResult } from './backtrack';
 import { generateProgram, runLimited, type LimitedResult, type Program } from './limited';
 
 /** Longest token string that is checked against L(G) for the summary. */
@@ -50,6 +50,8 @@ export interface Run {
 export interface Analysis {
 	grammar: Grammar | null;
 	grammarDiagnostics: Diagnostic[];
+	/** The left recursion of the grammar; empty when it has none, and while it has an error. */
+	leftRecursion: LeftRecursionNote[];
 	tokens: string[];
 	inputDiagnostics: Diagnostic[];
 	/** Null while the grammar or the token string has an error. */
@@ -59,6 +61,7 @@ export interface Analysis {
 export interface AnalyzeOptions {
 	/** Run a left-recursive grammar, with `depthCap`. */
 	anyway?: boolean;
+	/** Default: `depthCapFor` the token string, which stops only runs that would not end. */
 	depthCap?: number;
 	maxSteps?: number;
 }
@@ -88,23 +91,25 @@ export function analyze(
 		return {
 			grammar: null,
 			grammarDiagnostics: parsed.diagnostics,
+			leftRecursion: [],
 			tokens: [],
 			inputDiagnostics: [],
 			run: null
 		};
 	const input = tokenizeInput(inputText, g.terminals, { nonterminals: g.nonterminals });
+	const notes = leftRecursionNotes(g);
 	const analysis: Analysis = {
 		grammar: g,
 		grammarDiagnostics: parsed.diagnostics,
+		leftRecursion: notes,
 		tokens: input.tokens,
 		inputDiagnostics: input.diagnostics,
 		run: null
 	};
 	if (hasErrors(input.diagnostics)) return analysis;
 
-	const notes = leftRecursionNotes(g);
 	const refused = notes.length > 0 && !opts.anyway;
-	const depthCap = notes.length > 0 ? (opts.depthCap ?? DEFAULT_DEPTH_CAP) : null;
+	const depthCap = notes.length > 0 ? (opts.depthCap ?? depthCapFor(input.tokens.length)) : null;
 	const program = generateProgram(g);
 	const limits = { depthCap, ...(opts.maxSteps === undefined ? {} : { maxSteps: opts.maxSteps }) };
 	analysis.run = {
@@ -121,6 +126,17 @@ export function analyze(
 		inLanguage: input.tokens.length <= MAX_TOKENS_CHECKED ? recognizes(g, input.tokens) : null
 	};
 	return analysis;
+}
+
+/**
+ * Whether "Run anyway" still has something to apply to. It is switched on
+ * for a left-recursive grammar, so it is switched off again once the grammar
+ * is known to have no left recursion: a left-recursive grammar entered later
+ * is then not run until it is asked for. A grammar with an error says nothing
+ * either way and leaves the setting alone.
+ */
+export function anywayApplies(analysis: Analysis): boolean {
+	return analysis.grammar === null || analysis.leftRecursion.length > 0;
 }
 
 export type Verdict = 'accept' | 'reject' | 'stopped' | 'not-run';

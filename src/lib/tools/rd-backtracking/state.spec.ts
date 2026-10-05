@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { decode, encode } from '$lib/url-state';
 import type { LinkStates } from '$lib/tools/links';
-import { DEFAULT_PRESET_ID, presets } from './presets';
+import { DEFAULT_PRESET_ID, presetState, presets } from './presets';
 import { DEFAULT_STATE, isRdHash, stateFromHash, type RdState } from './state';
 
 describe('URL state', () => {
@@ -66,7 +66,7 @@ describe('URL state', () => {
 		expect(decode(encode({ re: 'a' }), isRdHash)).toBeNull();
 	});
 
-	it('starts on Example 1, at the end of the run', () => {
+	it('starts on Example 1, at the first step', () => {
 		const p = presets.find((x) => x.id === DEFAULT_PRESET_ID)!;
 		expect(DEFAULT_STATE).toEqual({
 			grammar: p.value.grammar,
@@ -74,8 +74,21 @@ describe('URL state', () => {
 			tab: p.value.tab,
 			numbers: false,
 			anyway: false,
+			step: 0,
+			fstep: 0
+		});
+		expect(DEFAULT_STATE).toEqual(presetState(p));
+	});
+
+	it('shows the last step for a link without one', () => {
+		// A link from another tool, and a saved view left on the last step.
+		expect(stateFromHash({ grammar: 'S → a', input: 'a' })).toMatchObject({
 			step: null,
 			fstep: null
 		});
+		const saved = decode(encode({ ...DEFAULT_STATE, step: null, fstep: null }), isRdHash)!;
+		expect(stateFromHash(saved)).toMatchObject({ step: null, fstep: null });
+		// The first step is a step like any other.
+		expect(stateFromHash(decode(encode(DEFAULT_STATE), isRdHash)!)).toEqual(DEFAULT_STATE);
 	});
 });

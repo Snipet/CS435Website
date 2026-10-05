@@ -358,7 +358,9 @@ describe('verdicts', () => {
 		const v = limitedVerdict(run('S → S 0 | 1', '1 0', true))!;
 		expect(v.tone).toBe('warn');
 		expect(v.title).toBe('The run was stopped');
-		expect(v.lines[0]).toMatch(/^8 calls of non-terminal functions are nested/);
+		expect(v.lines).toEqual([
+			'8 calls of S () are nested and next has not moved. Each of them does what the one before it did, so in C the calls go on until the stack overflows.'
+		]);
 		const budget = limitedVerdict(analyze(ORDER_1, '( int )', { maxSteps: 6 }).run!)!;
 		expect(budget.lines).toEqual(['The functions did not return within 6 steps.']);
 	});

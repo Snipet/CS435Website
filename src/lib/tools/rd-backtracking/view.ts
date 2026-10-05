@@ -318,16 +318,21 @@ export function limitedVerdict(run: Run): VerdictView | null {
 			title: 'Accept',
 			lines: [`${start} returned true and next points to end-of-stream.`]
 		};
-	if (r.outcome === 'stopped')
+	if (r.outcome === 'stopped') {
+		const nested =
+			r.stop?.fn === undefined
+				? 'one function'
+				: `${plainText([run.program.functions[r.stop.fn].name])} ()`;
 		return {
 			tone: 'warn',
 			title: 'The run was stopped',
 			lines: [
 				r.stop?.reason === 'depth'
-					? `${r.stop.limit} calls of non-terminal functions are nested and next has not moved. In C the calls go on until the stack overflows.`
+					? `${r.stop.limit} calls of ${nested} are nested and next has not moved. Each of them does what the one before it did, so in C the calls go on until the stack overflows.`
 					: `The functions did not return within ${r.stop?.limit ?? 0} steps.`
 			]
 		};
+	}
 	const lines = [
 		r.returned
 			? `${start} returned true with ${listTokens(r.leftover)} left over, so the input is rejected.`

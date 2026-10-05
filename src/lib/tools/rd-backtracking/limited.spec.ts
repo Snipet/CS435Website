@@ -548,10 +548,10 @@ describe('left recursion and the step budget', () => {
 		const r = runLimited(p, ['1', '0'], { depthCap: 4 });
 		expect(r.outcome).toBe('stopped');
 		expect(r.returned).toBeNull();
-		expect(r.stop).toEqual({ reason: 'depth', limit: 4 });
+		expect(r.stop).toEqual({ reason: 'depth', limit: 4, fn: functionOf(p, 'S') });
 		const last = r.steps[r.steps.length - 1];
 		expect(last.event).toBe('stop');
-		expect(messageText(last)).toEqual(['Stopped: 4 calls nested and next has not moved']);
+		expect(messageText(last)).toEqual(['Stopped: 4 calls of S () nested and next has not moved']);
 		expect(callsAt(p, r, r.steps.length - 1)).toBe('S > S1 > S > S1 > S > S1 > S > S1');
 		expect(r.steps.every((s) => s.next === 0)).toBe(true);
 		expect(r.calls.every((c) => c.end === null)).toBe(true);
@@ -570,6 +570,71 @@ describe('left recursion and the step budget', () => {
 		const g = grammar('S → ( S ) | x');
 		const s = input(g, '( ( ( ( x ) ) ) )');
 		expect(runLimited(generateProgram(g), s, { depthCap: 1 }).outcome).toBe('accept');
+	});
+
+	// Ten non-terminals in a row before the first token, and a left-recursive Z that a is parsed without.
+	const CHAIN =
+		'A → B\nB → C\nC → D\nD → F\nF → G\nG → H\nH → I\nI → J\nJ → K\nK → a | Z\nZ → Z b | b';
+
+	it('does not count the calls of other functions', () => {
+		const p = generateProgram(grammar(CHAIN));
+		// K () is the tenth function called with next at the first token; none is called twice.
+		for (const depthCap of [1, 8]) {
+			const r = runLimited(p, ['a'], { depthCap });
+			expect(r.outcome).toBe('accept');
+			expect(r.stop).toBeNull();
+			expect(r.steps.map(messageText)).toEqual(runLimited(p, ['a']).steps.map(messageText));
+		}
+		expect(Math.max(...runLimited(p, ['a']).steps.map((s) => s.top?.depth ?? 0))).toBe(20);
+	});
+
+	it('stops at the function that calls itself below them', () => {
+		const p = generateProgram(grammar(CHAIN));
+		const r = runLimited(p, ['b'], { depthCap: 3 });
+		expect(r.stop).toEqual({ reason: 'depth', limit: 3, fn: functionOf(p, 'Z') });
+		const last = r.steps[r.steps.length - 1];
+		expect(messageText(last)).toEqual(['Stopped: 3 calls of Z () nested and next has not moved']);
+		expect(
+			callsAt(p, r, r.steps.length - 1)
+				.split(' > ')
+				.slice(-8)
+		).toEqual(['K', 'K2', 'Z', 'Z1', 'Z', 'Z1', 'Z', 'Z1']);
+	});
+
+	it('stops at the first repeat only when the functions would not return', () => {
+		// A call with next where the call around it found it does what that one did.
+		const next = random(9);
+		const budget = 1200;
+		let stopped = 0;
+		let ended = 0;
+		for (let n = 0; n < 400 && stopped + ended < 400; n++) {
+			const g = randomGrammar(next);
+			if (leftRecursion(g).length === 0) continue;
+			const p = generateProgram(g);
+			const alphabet = g.terminals.slice(0, 2);
+			const strings: string[][] = [[]];
+			for (let len = 1; len <= 3; len++)
+				for (const s of strings.filter((x) => x.length === len - 1))
+					for (const t of alphabet) strings.push([...s, t]);
+			for (const s of strings) {
+				const capped = runLimited(p, s, { depthCap: 1, maxSteps: budget });
+				const free = runLimited(p, s, { maxSteps: budget });
+				const what = [programText(p), s.join(' ')];
+				if (capped.stop?.reason === 'depth') {
+					stopped++;
+					expect([...what, free.outcome]).toEqual([...what, 'stopped']);
+					continue;
+				}
+				ended++;
+				expect([...what, capped.outcome, capped.steps.length]).toEqual([
+					...what,
+					free.outcome,
+					free.steps.length
+				]);
+			}
+		}
+		expect(stopped).toBeGreaterThan(100);
+		expect(ended).toBeGreaterThan(100);
 	});
 
 	it('stops at the step budget', () => {

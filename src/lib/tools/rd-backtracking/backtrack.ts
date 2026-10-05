@@ -26,8 +26,26 @@ import { joinPieces, plainText, text, type Piece } from './notation';
 
 /** Steps recorded before a run stops by itself. */
 export const DEFAULT_MAX_STEPS = 3000;
-/** Instances that may be nested with no token matched between them (`depthCap`). */
+/** The smallest `depthCap` the page runs with: the tree is drawn at least this far down its left edge. */
 export const DEFAULT_DEPTH_CAP = 8;
+
+/**
+ * The `depthCap` for a token string of `tokens` tokens: large enough that it
+ * only ends runs that would never end by themselves.
+ *
+ * Take instances of one non-terminal nested in each other that all start at
+ * the same token. In the tree a run ends with, each of them ends at a
+ * different token: were two to cover the same tokens, the smaller tree
+ * without the outer one would have been reached first, or the search would
+ * never have come back from the inner one to get past it. And while it runs,
+ * the search cannot get rid of such a nest again, because giving up the inner
+ * instance means trying on it the rule that made the nest, which makes the
+ * next one. A string of n tokens has n + 1 places to end at, so once more
+ * than n + 1 instances are nested the run can neither accept nor reject.
+ */
+export function depthCapFor(tokens: number): number {
+	return Math.max(DEFAULT_DEPTH_CAP, tokens + 1);
+}
 
 /** A node of the partial parse tree. */
 export interface RdNode extends ParseNode {
@@ -72,9 +90,14 @@ export type BacktrackEvent =
 	'try' | 'match' | 'mismatch' | 'backtrack' | 'exhausted' | 'accept' | 'reject' | 'stop';
 
 export interface StopInfo {
-	/** `depth`: too many instances nested without input consumed; `steps`: the step budget. */
+	/**
+	 * `depth`: too many instances of one non-terminal nested without input
+	 * consumed; `steps`: the step budget.
+	 */
 	reason: 'depth' | 'steps';
 	limit: number;
+	/** `depth`: the non-terminal whose instances are nested. */
+	symbol?: string;
 }
 
 export interface BacktrackStep {
@@ -152,9 +175,11 @@ export interface BacktrackOptions {
 	/** Steps to record at most, the closing `stop` step included. */
 	maxSteps?: number;
 	/**
-	 * Stop when this many instances are nested with no token matched between
-	 * them and one more would be expanded. Only a left-recursive grammar can
-	 * get there with a cap of at least |N|. Null (default) for no limit.
+	 * Stop when this many instances of one non-terminal are nested with no
+	 * token matched between them and one more of them would be expanded. Only
+	 * a left-recursive non-terminal can be nested in itself like that, so the
+	 * rest of the grammar is never held back. With `depthCapFor` the run that
+	 * is stopped could not have ended. Null (default) for no limit.
 	 */
 	depthCap?: number | null;
 }
@@ -248,10 +273,20 @@ export function describeStep(step: StepFacts, opts: { instances?: boolean } = {}
 			return [[text('End of input, accept')]];
 		case 'reject':
 			return [[text('No more choices, reject')]];
-		case 'stop':
-			return step.stop?.reason === 'depth'
-				? [[text(`Stopped: ${step.stop.limit} instances nested, no input consumed`)]]
-				: [[text(`Stopped after ${step.stop?.limit ?? 0} steps`)]];
+		case 'stop': {
+			if (step.stop?.reason !== 'depth')
+				return [[text(`Stopped after ${step.stop?.limit ?? 0} steps`)]];
+			const { limit, symbol } = step.stop;
+			if (symbol === undefined)
+				return [[text(`Stopped: ${limit} instances nested, no input consumed`)]];
+			return [
+				[
+					text(`Stopped: ${limit} instances of `),
+					{ text: sym(symbol), kind: 'nonterminal' },
+					text(' nested, no input consumed')
+				]
+			];
+		}
 	}
 }
 
@@ -582,7 +617,8 @@ interface Choice {
  * Example 2 reads E0 → T1 + E2, T1 → ( E3 ), T1 → int, T1 → int * T2.
  *
  * A left-recursive grammar can keep the search going forever: pass `depthCap`
- * (see `leftRecursion` in the grammar engine). `maxSteps` bounds every run.
+ * (see `leftRecursion` in the grammar engine and `depthCapFor`). `maxSteps`
+ * bounds every run.
  */
 export function backtrack(
 	g: Grammar,
@@ -661,7 +697,7 @@ export function backtrack(
 
 	/** Ends the run early with a `stop` step at `at`. */
 	function halt(reason: StopInfo['reason'], limit: number, at: Work | null): false {
-		stop = { reason, limit };
+		stop = reason === 'depth' && at ? { reason, limit, symbol: at.symbol } : { reason, limit };
 		log.push({ step: steps.length, undone: null, cause: null });
 		emit('stop', at, { stop });
 		return false;
@@ -741,10 +777,16 @@ export function backtrack(
 		return false;
 	}
 
-	/** Instances above `node` that were expanded at the current input position. */
+	/**
+	 * Instances of `node`'s non-terminal above it that were expanded at the
+	 * current input position. Other non-terminals between them do not count: a
+	 * chain of rules such as A → B, B → C is as long as the grammar makes it,
+	 * and only a non-terminal that comes round to itself can go on without end.
+	 */
 	function nested(node: Work): number {
 		let count = 0;
-		for (let n = node.parent; n && n.start === pos; n = n.parent) count++;
+		for (let n = node.parent; n && n.start === pos; n = n.parent)
+			if (n.symbol === node.symbol) count++;
 		return count;
 	}
 

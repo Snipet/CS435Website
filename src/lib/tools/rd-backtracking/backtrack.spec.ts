@@ -3,6 +3,7 @@ import {
 	bracketForm,
 	leftRecursion,
 	parseTrees,
+	printGrammar,
 	recognizes,
 	treeEquals,
 	yieldOf
@@ -23,6 +24,7 @@ import {
 	DEFAULT_MAX_STEPS,
 	attemptPieces,
 	backtrack,
+	depthCapFor,
 	describeStep,
 	instanceLabel,
 	matchedPaths,
@@ -527,13 +529,13 @@ describe('left recursion (Top-Down Parsing, slide 23)', () => {
 		expect(leftRecursion(g).map((l) => l.nonterminal)).toEqual(['S']);
 		const r = backtrack(g, input(g, '1 0'), { depthCap: 4 });
 		expect(r.outcome).toBe('stopped');
-		expect(r.stop).toEqual({ reason: 'depth', limit: 4 });
+		expect(r.stop).toEqual({ reason: 'depth', limit: 4, symbol: 'S' });
 		expect(r.steps.map((s) => s.message[0])).toEqual([
 			'Try S₀ → S₁ 0',
 			'Try S₁ → S₂ 0',
 			'Try S₂ → S₃ 0',
 			'Try S₃ → S₄ 0',
-			'Stopped: 4 instances nested, no input consumed'
+			'Stopped: 4 instances of S nested, no input consumed'
 		]);
 		const last = r.steps[r.steps.length - 1];
 		expect(last.event).toBe('stop');
@@ -564,16 +566,26 @@ describe('left recursion (Top-Down Parsing, slide 23)', () => {
 		const g = grammar('S → 1 | S 0');
 		const r = backtrack(g, input(g, '0'), { depthCap: 5 });
 		expect(r.outcome).toBe('stopped');
-		expect(r.stop).toEqual({ reason: 'depth', limit: 5 });
+		expect(r.stop).toEqual({ reason: 'depth', limit: 5, symbol: 'S' });
 		expect(r.steps[r.steps.length - 1].path).toEqual([0, 0, 0, 0, 0]);
 	});
 
 	it('stops on indirect left recursion and on the expression grammar', () => {
 		const indirect = grammar('S → A a | d\nA → S b');
-		expect(backtrack(indirect, ['d', 'b', 'a'], { depthCap: 6 }).stop).toEqual({
-			reason: 'depth',
-			limit: 6
-		});
+		const round = backtrack(indirect, ['d', 'b', 'a'], { depthCap: 3 });
+		// Three S are nested, with an A between each two: the A are not counted.
+		expect(round.stop).toEqual({ reason: 'depth', limit: 3, symbol: 'S' });
+		expect(tries(round)).toEqual([
+			'S₀ → A₁ a',
+			'A₁ → S₂ b',
+			'S₂ → A₃ a',
+			'A₃ → S₄ b',
+			'S₄ → A₅ a',
+			'A₅ → S₆ b'
+		]);
+		expect(round.steps[round.steps.length - 1].message).toEqual([
+			'Stopped: 3 instances of S nested, no input consumed'
+		]);
 		const e = grammar(LEFT_RECURSIVE);
 		const r = backtrack(e, input(e, 'int + int'), { depthCap: DEFAULT_DEPTH_CAP });
 		expect(r.stop?.reason).toBe('depth');
@@ -589,6 +601,40 @@ describe('left recursion (Top-Down Parsing, slide 23)', () => {
 		expect(r.outcome).toBe('accept');
 	});
 
+	// Ten non-terminals in a row before the first token, and a left-recursive Z that a is parsed without.
+	const CHAIN =
+		'A → B\nB → C\nC → D\nD → F\nF → G\nG → H\nH → I\nI → J\nJ → K\nK → a | Z\nZ → Z b | b';
+
+	it('does not count the instances of other non-terminals', () => {
+		const g = grammar(CHAIN);
+		expect(leftRecursion(g).map((l) => l.nonterminal)).toEqual(['Z']);
+		// K is the tenth instance at the first token, and no non-terminal is there twice.
+		for (const depthCap of [1, DEFAULT_DEPTH_CAP]) {
+			const r = backtrack(g, ['a'], { depthCap });
+			expect(r.outcome).toBe('accept');
+			expect(r.stop).toBeNull();
+			expect(r.tries).toBe(10);
+			expect(bracketForm(r.tree!)).toBe('A( B( C( D( F( G( H( I( J( K(a) ) ) ) ) ) ) ) ) )');
+			expect(r.steps.map((s) => s.message)).toEqual(
+				backtrack(g, ['a']).steps.map((s) => s.message)
+			);
+		}
+	});
+
+	it('stops at the left-recursive non-terminal below them', () => {
+		const g = grammar(CHAIN);
+		const r = backtrack(g, ['b'], { depthCap: 3 });
+		expect(r.stop).toEqual({ reason: 'depth', limit: 3, symbol: 'Z' });
+		expect(tries(r, false).slice(-5)).toEqual(['K → a', 'K → Z', 'Z → Z b', 'Z → Z b', 'Z → Z b']);
+		const last = r.steps[r.steps.length - 1];
+		expect(last.message).toEqual(['Stopped: 3 instances of Z nested, no input consumed']);
+		expect(plainText(describeStep(last, { instances: false })[0])).toBe(
+			'Stopped: 3 instances of Z nested, no input consumed'
+		);
+		// Thirteen instances are above the next Z at the first token; three of them are Z.
+		expect(last.path).toHaveLength(13);
+	});
+
 	it('without a cap the step budget ends the run', () => {
 		const g = grammar('S → S 0 | 1');
 		const r = backtrack(g, ['1'], { maxSteps: 40 });
@@ -597,6 +643,83 @@ describe('left recursion (Top-Down Parsing, slide 23)', () => {
 		expect(r.steps[39].message).toEqual(['Stopped after 40 steps']);
 		expect(r.steps[39].event).toBe('stop');
 		expect(r.depth).toBe(39);
+	});
+});
+
+describe('the depth cap for a token string', () => {
+	it('is at least the default, and more than the tokens', () => {
+		expect([0, 1, 6, 7, 8, 40].map(depthCapFor)).toEqual([
+			DEFAULT_DEPTH_CAP,
+			DEFAULT_DEPTH_CAP,
+			DEFAULT_DEPTH_CAP,
+			DEFAULT_DEPTH_CAP,
+			9,
+			41
+		]);
+	});
+
+	it('lets a parse end that nests one S for every token', () => {
+		const g = grammar('S → 1 | S 0');
+		const s = input(g, '1 0 0 0 0 0 0 0 0 0');
+		// Ten S start at the first token, each ending one 0 further on.
+		expect(backtrack(g, s, { depthCap: DEFAULT_DEPTH_CAP }).stop?.reason).toBe('depth');
+		const r = backtrack(g, s, { depthCap: depthCapFor(s.length) });
+		expect(r.outcome).toBe('accept');
+		expect(yieldOf(r.tree!)).toEqual(s);
+		expect(r.depth).toBe(10);
+		expect(r.steps.map((x) => x.message)).toEqual(backtrack(g, s).steps.map((x) => x.message));
+	});
+
+	it('stops the same grammar in the other order, and on a string outside the language', () => {
+		const s = ['1', ...Array<string>(9).fill('0')];
+		const reversed = backtrack(grammar('S → S 0 | 1'), s, { depthCap: depthCapFor(s.length) });
+		expect(reversed.stop).toEqual({ reason: 'depth', limit: 11, symbol: 'S' });
+		expect(reversed.tries).toBe(11);
+		const outside = backtrack(grammar('S → 1 | S 0'), ['1', '1'], { depthCap: depthCapFor(2) });
+		expect(outside.stop).toEqual({ reason: 'depth', limit: DEFAULT_DEPTH_CAP, symbol: 'S' });
+	});
+
+	it('only stops runs that do not end', () => {
+		// The cap of a string of n tokens is n + 1 here, without the floor of the default.
+		const next = random(5);
+		const budget = 1200;
+		let stopped = 0;
+		let ended = 0;
+		let accepted = 0;
+		for (let n = 0; n < 400 && stopped + ended < 320; n++) {
+			const g = randomGrammar(next);
+			if (leftRecursion(g).length === 0) continue;
+			const alphabet = g.terminals.slice(0, 2);
+			const strings: string[][] = [[]];
+			for (let len = 1; len <= 3; len++)
+				for (const s of strings.filter((x) => x.length === len - 1))
+					for (const t of alphabet) strings.push([...s, t]);
+			for (const s of strings) {
+				const capped = backtrack(g, s, { depthCap: s.length + 1, maxSteps: budget });
+				const free = backtrack(g, s, { maxSteps: budget });
+				const what = [printGrammar(g), s.join(' ')];
+				if (capped.stop?.reason === 'depth') {
+					stopped++;
+					// Without the cap the run is still going when the steps are used up.
+					expect([...what, free.outcome]).toEqual([...what, 'stopped']);
+					expect(capped.steps.length).toBeLessThan(free.steps.length);
+					continue;
+				}
+				// With the cap out of the way the run is the same, step for step.
+				expect([...what, capped.outcome, capped.steps.length]).toEqual([
+					...what,
+					free.outcome,
+					free.steps.length
+				]);
+				if (capped.outcome === 'stopped') continue;
+				ended++;
+				if (capped.outcome === 'accept') accepted++;
+				expect([...what, capped.outcome === 'accept']).toEqual([...what, recognizes(g, s)]);
+			}
+		}
+		expect(stopped).toBeGreaterThan(100);
+		expect(ended).toBeGreaterThan(60);
+		expect(accepted).toBeGreaterThan(15);
 	});
 });
 

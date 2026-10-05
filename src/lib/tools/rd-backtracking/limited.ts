@@ -461,9 +461,11 @@ export type LimitedEvent =
 	'start' | 'call' | 'match' | 'return' | 'restore' | 'accept' | 'reject' | 'stop';
 
 export interface LimitedStop {
-	/** `depth`: calls nested without `next` moving; `steps`: the step budget. */
+	/** `depth`: calls of one function nested without `next` moving; `steps`: the step budget. */
 	reason: 'depth' | 'steps';
 	limit: number;
+	/** `depth`: the non-terminal's function whose calls are nested. */
+	fn?: number;
 }
 
 export interface LimitedStep {
@@ -533,10 +535,13 @@ export interface LimitedOptions {
 	/** Steps to record at most, the closing `stop` step included. */
 	maxSteps?: number;
 	/**
-	 * Stop when this many non-terminal functions are in progress that were all
-	 * called with `next` where it is now, and one more would be called: the
-	 * recursion of a left-recursive grammar, which in C ends in a stack
-	 * overflow. Null (default) for no limit.
+	 * Stop when this many calls of one non-terminal's function are in progress
+	 * that were all made with `next` where it is now, and one more would be
+	 * made: the recursion of a left-recursive grammar, which in C ends in a
+	 * stack overflow. A call made with the same `next` does what the call
+	 * around it did, so the first repeat already never returns; functions of
+	 * other non-terminals between them do not count. Null (default) for no
+	 * limit.
 	 */
 	depthCap?: number | null;
 }
@@ -747,11 +752,10 @@ export function runLimited(
 		emit('return', lines, { fn, result, site });
 	}
 
-	/** Non-terminal functions in progress that were called with `next` where it is now. */
-	function nested(): number {
+	/** Calls of `fn` in progress that were made with `next` where it is now. */
+	function nested(fn: number): number {
 		let count = 0;
-		for (let f = top; f && f.entry === next; f = f.below)
-			if (bodies[f.fn].kind === 'nonterminal') count++;
+		for (let f = top; f && f.entry === next; f = f.below) if (f.fn === fn) count++;
 		return count;
 	}
 
@@ -789,8 +793,12 @@ export function runLimited(
 			break;
 		}
 		if (pending !== null) {
-			if (bodies[pending].kind === 'nonterminal' && depthCap !== null && nested() >= depthCap) {
-				stop = { reason: 'depth', limit: depthCap };
+			if (
+				bodies[pending].kind === 'nonterminal' &&
+				depthCap !== null &&
+				nested(pending) >= depthCap
+			) {
+				stop = { reason: 'depth', limit: depthCap, fn: pending };
 				break;
 			}
 			enter(pending);
@@ -881,13 +889,15 @@ export function runLimited(
 		emit(
 			'stop',
 			[
-				[
-					text(
-						stop.reason === 'depth'
-							? `Stopped: ${stop.limit} calls nested and next has not moved`
-							: `Stopped after ${stop.limit} steps`
-					)
-				]
+				stop.reason !== 'depth'
+					? [text(`Stopped after ${stop.limit} steps`)]
+					: stop.fn === undefined
+						? [text(`Stopped: ${stop.limit} calls nested and next has not moved`)]
+						: [
+								text(`Stopped: ${stop.limit} calls of `),
+								...name(stop.fn),
+								text(' nested and next has not moved')
+							]
 			],
 			{ stop, site: frame?.site ?? null, line }
 		);
