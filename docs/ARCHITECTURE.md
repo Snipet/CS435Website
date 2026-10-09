@@ -1160,7 +1160,7 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   its first factor (nothing is rewound). Recovery is panic mode: the statement
   or declaration is dropped, tokens are skipped through the next `;` or up to
   a `}`. `a < b < c`, an assignment whose left side is not a var, and `()`
-  for a parameter list are reported without dropping the statement. Nesting
+  for a parameter list are reported without dropping anything. Nesting
   deeper than `MAX_NESTING`, a tree deeper than `MAX_TREE_DEPTH` and more
   than `MAX_SYNTAX_ERRORS` errors end the parse, so every later walk of the
   tree may recurse. The parser accepts exactly the token strings that
@@ -1198,10 +1198,10 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   only the result is dropped), so the optimized program stops where the
   original does. Unreachable code is left in place.
 - **Run-time conventions** (the header of `runtime.ts` has the full text).
-  ac = 0, ac1 = 1, fp = 5, gp = 6, pc = 7. Globals start at `0(gp)` (gp =
-  dMem[0] = 1023) and go down; activation records lie below them and grow
-  toward address 0: `0(fp)` the caller's fp, `-1(fp)` the return address, then
-  parameters, locals, temporaries. Element 0 of an array has the lowest
+  ac = 0, ac1 = 1, fp = 5, gp = 6, pc = 7. Globals start at `0(gp)` (gp is
+  1023, read from dMem[0]) and go down; activation records lie below them and
+  grow toward address 0: `0(fp)` the caller's fp, `-1(fp)` the return address,
+  then parameters, locals, temporaries. Element 0 of an array has the lowest
   address; an array parameter holds the address of element 0. Code: the
   prelude (0–4), `HALT` (5, main returns here), a second `HALT` (6, the target
   of a negative subscript), `input` (7), `output` (10), then the functions.

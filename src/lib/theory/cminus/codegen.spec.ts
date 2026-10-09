@@ -726,6 +726,18 @@ describe('limits of the machine', () => {
 		expect(runTM(c.codegen!.peephole.code, []).outputs).toEqual([150]);
 	});
 
+	it('the code after the peephole pass decides whether the program fits', () => {
+		const body = 'x = x + 1; '.repeat(170);
+		const c = compile(`void main(void) { int x; x = 0; ${body} output(x); }`, { optimize: false });
+		expect(c.codegen!.code.instructions.length).toBeGreaterThan(IADDR_SIZE);
+		expect(c.codegen!.peephole.code.instructions.length).toBeLessThanOrEqual(IADDR_SIZE);
+		expect(c.stoppedAt).toBeNull();
+		expect(c.diagnostics).toEqual([]);
+		expect(runTM(c.codegen!.peephole.code, [])).toMatchObject({ stop: 'halted', outputs: [170] });
+		// The longer code cannot be loaded.
+		expect(runTM(c.codegen!.code, [])).toMatchObject({ stop: 'memory-error', steps: 0, pc: null });
+	});
+
 	it('reports globals and records that do not fit in data memory', () => {
 		const c = compile('int big[1020]; void main(void) { int x; int y; int z; x = 1; }');
 		expect(c.stoppedAt).toBe('codegen');
