@@ -138,15 +138,15 @@ export interface Num extends NodeBase {
 export type Decl = VarDecl | FunDecl;
 export type Stmt = Compound | If | While | Return | ExprStmt;
 export type Expr = Assign | Binary | Var | Index | Call | Num;
-export type Node = Program | Decl | Param | Stmt | Expr;
-export type NodeKind = Node['kind'];
+export type AstNode = Program | Decl | Param | Stmt | Expr;
+export type NodeKind = AstNode['kind'];
 
 const ARITH = new Set<string>(['+', '-', '*', '/']);
 export const isArithOp = (op: string): op is ArithOp => ARITH.has(op);
 export const isRelOp = (op: BinaryOp): op is RelOp => !ARITH.has(op);
 
 /** The children of a node, in source order. */
-export function childrenOf(node: Node): Node[] {
+export function childrenOf(node: AstNode): AstNode[] {
 	switch (node.kind) {
 		case 'Program':
 			return node.decls;
@@ -180,10 +180,10 @@ export function childrenOf(node: Node): Node[] {
 
 /** Visits `root` and everything under it in preorder. */
 export function walk(
-	root: Node,
-	visit: (node: Node, depth: number, parent: Node | null) => void
+	root: AstNode,
+	visit: (node: AstNode, depth: number, parent: AstNode | null) => void
 ): void {
-	const go = (node: Node, depth: number, parent: Node | null) => {
+	const go = (node: AstNode, depth: number, parent: AstNode | null) => {
 		visit(node, depth, parent);
 		for (const child of childrenOf(node)) go(child, depth + 1, node);
 	};
@@ -191,7 +191,7 @@ export function walk(
 }
 
 /** Numbers the nodes under `root` in preorder, starting at `first`. Returns the next free id. */
-export function numberNodes(root: Node, first = 0): number {
+export function numberNodes(root: AstNode, first = 0): number {
 	let next = first;
 	walk(root, (node) => {
 		node.id = next++;
@@ -200,15 +200,15 @@ export function numberNodes(root: Node, first = 0): number {
 }
 
 /** Every node under `root`, in preorder. */
-export function allNodes(root: Node): Node[] {
-	const out: Node[] = [];
+export function allNodes(root: AstNode): AstNode[] {
+	const out: AstNode[] = [];
 	walk(root, (node) => out.push(node));
 	return out;
 }
 
 /** The node with the given id, or null. */
-export function findNode(root: Node, id: number): Node | null {
-	let found: Node | null = null;
+export function findNode(root: AstNode, id: number): AstNode | null {
+	let found: AstNode | null = null;
 	walk(root, (node) => {
 		if (node.id === id) found = node;
 	});
@@ -216,8 +216,8 @@ export function findNode(root: Node, id: number): Node | null {
 }
 
 /** The innermost node whose span contains the source offset, or null. */
-export function nodeAt(root: Node, offset: number): Node | null {
-	let best: Node | null = null;
+export function nodeAt(root: AstNode, offset: number): AstNode | null {
+	let best: AstNode | null = null;
 	walk(root, (node) => {
 		if (offset >= node.span.start && offset < node.span.end) best = node;
 	});
@@ -225,7 +225,7 @@ export function nodeAt(root: Node, offset: number): Node | null {
 }
 
 /** One line of the printed tree: "VarDecl int a[10]", "Binary +", "Var x". */
-export function nodeLabel(node: Node): string {
+export function nodeLabel(node: AstNode): string {
 	switch (node.kind) {
 		case 'Program':
 			return 'Program';
@@ -269,7 +269,7 @@ export interface AstLine {
 }
 
 /** The tree as lines, one node per line in preorder. */
-export function astLines(root: Node): AstLine[] {
+export function astLines(root: AstNode): AstLine[] {
 	const lines: AstLine[] = [];
 	walk(root, (node, depth) =>
 		lines.push({ id: node.id, depth, label: nodeLabel(node), span: node.span })
@@ -278,7 +278,7 @@ export function astLines(root: Node): AstLine[] {
 }
 
 /** The tree as indented text, one node per line. */
-export function printAst(root: Node, opts: { indent?: string } = {}): string {
+export function printAst(root: AstNode, opts: { indent?: string } = {}): string {
 	const indent = opts.indent ?? '  ';
 	return astLines(root)
 		.map((l) => indent.repeat(l.depth) + l.label)

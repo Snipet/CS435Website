@@ -896,15 +896,18 @@ function scan(
 type Decl = VarDecl | FunDecl;
 type Stmt = Compound | If | While | Return | ExprStmt;
 type Expr = Assign | Binary | Var | Index | Call | Num;
-type Node = Program | Decl | Param | Stmt | Expr;
-function childrenOf(node: Node): Node[];
-function walk(root: Node, visit: (node: Node, depth: number, parent: Node | null) => void): void;
-function allNodes(root: Node): Node[]; // preorder: allNodes(program)[id].id === id
-function findNode(root: Node, id: number): Node | null;
-function nodeAt(root: Node, offset: number): Node | null; // innermost node at a source offset
-function nodeLabel(node: Node): string; // "VarDecl int a[10]", "Binary +", "Var x"
-function astLines(root: Node): { id: number; depth: number; label: string; span: SourceSpan }[];
-function printAst(root: Node, opts?: { indent?: string }): string; // one node per line
+type AstNode = Program | Decl | Param | Stmt | Expr;
+function childrenOf(node: AstNode): AstNode[];
+function walk(
+	root: AstNode,
+	visit: (node: AstNode, depth: number, parent: AstNode | null) => void
+): void;
+function allNodes(root: AstNode): AstNode[]; // preorder: allNodes(program)[id].id === id
+function findNode(root: AstNode, id: number): AstNode | null;
+function nodeAt(root: AstNode, offset: number): AstNode | null; // innermost node at a source offset
+function nodeLabel(node: AstNode): string; // "VarDecl int a[10]", "Binary +", "Var x"
+function astLines(root: AstNode): { id: number; depth: number; label: string; span: SourceSpan }[];
+function printAst(root: AstNode, opts?: { indent?: string }): string; // one node per line
 function printExpr(e: Expr): string; // C- text with the fewest parentheses
 
 // parser.ts — predictive recursive descent, one function per non-terminal of CMINUS_EBNF.

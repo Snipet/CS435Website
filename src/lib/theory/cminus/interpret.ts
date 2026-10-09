@@ -16,7 +16,7 @@ import {
 	type Call,
 	type Expr,
 	type FunDecl,
-	type Node,
+	type AstNode,
 	type Program,
 	type Stmt
 } from './ast';
@@ -59,7 +59,7 @@ type Storage = Cell | Int32Array;
 class Stop {
 	constructor(
 		readonly reason: StopReason,
-		readonly node: Node | null
+		readonly node: AstNode | null
 	) {}
 }
 
@@ -97,22 +97,22 @@ export function interpret(
 	}
 	let frame = new Map<number, Storage>();
 
-	const tick = (node: Node) => {
+	const tick = (node: AstNode) => {
 		if (++steps > maxSteps) {
 			steps = maxSteps;
 			throw new Stop('step-budget', node);
 		}
 	};
-	const storage = (node: Node): Storage => {
+	const storage = (node: AstNode): Storage => {
 		const id = semantic.refs.get(node.id);
 		const found = id === undefined ? undefined : (frame.get(id) ?? globals.get(id));
 		if (!found) throw new Error(`interpret: ${node.kind} ${node.id} has no storage`);
 		return found;
 	};
-	const cell = (node: Node): Cell => storage(node) as Cell;
-	const array = (node: Node): Int32Array => storage(node) as Int32Array;
+	const cell = (node: AstNode): Cell => storage(node) as Cell;
+	const array = (node: AstNode): Int32Array => storage(node) as Int32Array;
 	/** Checks a subscript the way compiled code does, and the upper bound as well. */
-	const checked = (a: Int32Array, i: number, node: Node): number => {
+	const checked = (a: Int32Array, i: number, node: AstNode): number => {
 		if (i < 0) throw new Stop('negative-subscript', node);
 		if (i >= a.length) throw new Stop('subscript-out-of-range', node);
 		return i;
@@ -211,7 +211,7 @@ export function interpret(
 		}
 	};
 
-	const done = (stop: StopReason, node: Node | null): InterpretResult => ({
+	const done = (stop: StopReason, node: AstNode | null): InterpretResult => ({
 		outputs,
 		stop,
 		steps,

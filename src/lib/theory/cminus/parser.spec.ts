@@ -13,7 +13,7 @@ import {
 	printExpr,
 	type Expr,
 	type FunDecl,
-	type Node,
+	type AstNode,
 	type Stmt
 } from './ast';
 import {
@@ -565,7 +565,7 @@ void main(void) { output(f(1, 2)); ; }`;
 				'While'
 			].sort()
 		);
-		const count = (n: Node): number => 1 + childrenOf(n).reduce((s, c) => s + count(c), 0);
+		const count = (n: AstNode): number => 1 + childrenOf(n).reduce((s, c) => s + count(c), 0);
 		expect(count(program)).toBe(allNodes(program).length);
 	});
 
@@ -578,7 +578,7 @@ void main(void) { output(f(1, 2)); ; }`;
 				expect(child.span.end).toBeLessThanOrEqual(node.span.end);
 			}
 		}
-		const text = (n: Node) => source.slice(n.span.start, n.span.end);
+		const text = (n: AstNode) => source.slice(n.span.start, n.span.end);
 		const f = program.decls[1] as FunDecl;
 		expect(text(program.decls[0])).toBe('int g;');
 		expect(source.slice(f.headSpan.start, f.headSpan.end)).toBe('int f(int a, int b[])');

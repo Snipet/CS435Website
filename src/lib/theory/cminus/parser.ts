@@ -29,7 +29,7 @@ import {
 	type FunDecl,
 	type If,
 	type Index,
-	type Node,
+	type AstNode,
 	type Param,
 	type Program,
 	type RelOp,
@@ -158,9 +158,9 @@ class Parser {
 	private errors = 0;
 	readonly diagnostics: SourceDiagnostic[] = [];
 	/** Depth of the subtree under each expression and statement node. */
-	private readonly depth = new WeakMap<Node, number>();
+	private readonly depth = new WeakMap<AstNode, number>();
 	/** A parenthesized expression's span with its parentheses. */
-	private readonly outer = new WeakMap<Node, SourceSpan>();
+	private readonly outer = new WeakMap<AstNode, SourceSpan>();
 
 	constructor(private readonly tokens: readonly Token[]) {}
 
@@ -211,12 +211,12 @@ class Parser {
 	// --- Tree bookkeeping ---------------------------------------------------
 
 	/** The span of an operand, parentheses included. */
-	private extent(node: Node): SourceSpan {
+	private extent(node: AstNode): SourceSpan {
 		return this.outer.get(node) ?? node.span;
 	}
 
 	/** Records the depth of a new node and refuses trees deeper than MAX_TREE_DEPTH. */
-	private built<T extends Node>(node: T, ...children: (Node | null)[]): T {
+	private built<T extends AstNode>(node: T, ...children: (AstNode | null)[]): T {
 		let d = 1;
 		for (const c of children) if (c) d = Math.max(d, 1 + (this.depth.get(c) ?? 1));
 		if (d > MAX_TREE_DEPTH) {

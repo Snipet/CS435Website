@@ -42,7 +42,7 @@ import {
 	type Call,
 	type Expr,
 	type FunDecl,
-	type Node,
+	type AstNode,
 	type Program,
 	type RelOp,
 	type Stmt
@@ -272,7 +272,7 @@ export function generateIr(program: Program, semantic: SemanticResult): IrProgra
 	const calls: number[] = [];
 	/** Symbol id → ids of the Assign nodes that assign to it as a whole variable, ascending. */
 	const assigns = new Map<number, number[]>();
-	const index = (node: Node): number => {
+	const index = (node: AstNode): number => {
 		if (node.kind === 'Call') calls.push(node.id);
 		if (node.kind === 'Assign' && node.target.kind === 'Var') {
 			const symbol = semantic.refs.get(node.target.id);
@@ -289,7 +289,7 @@ export function generateIr(program: Program, semantic: SemanticResult): IrProgra
 	};
 	index(program);
 
-	const symbolOf = (node: Node): SymbolInfo => {
+	const symbolOf = (node: AstNode): SymbolInfo => {
 		const id = semantic.refs.get(node.id);
 		if (id === undefined) throw new Error(`generateIr: ${node.kind} ${node.id} is not resolved`);
 		return semantic.symbols[id];

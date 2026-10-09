@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { allNodes, type Node } from './ast';
+import { allNodes, type AstNode } from './ast';
 import { parseSource } from './parser';
 import { SAMPLES, UNDECLARED_SOURCE } from './samples';
 import {
@@ -10,7 +10,7 @@ import {
 	type SymbolInfo
 } from './semantic';
 
-function check(source: string): SemanticResult & { source: string; nodes: Node[] } {
+function check(source: string): SemanticResult & { source: string; nodes: AstNode[] } {
 	const parsed = parseSource(source);
 	expect(parsed.diagnostics).toEqual([]);
 	return { ...analyze(parsed.program), source, nodes: allNodes(parsed.program) };
@@ -693,7 +693,7 @@ describe('types', () => {
 		);
 		for (const n of typed) expect(r.types.has(n.id)).toBe(true);
 		expect(r.types.size).toBe(typed.length);
-		const typeOf = (text: string, kind: Node['kind']) => {
+		const typeOf = (text: string, kind: AstNode['kind']) => {
 			const node = r.nodes.find(
 				(n) => n.kind === kind && source.slice(n.span.start, n.span.end) === text
 			);
