@@ -847,6 +847,408 @@ function compareGrammars(
   `maxLength` of a few dozen at most; `maxSteps` bounds the time whatever the
   bounds are.
 
+### 4.5 C- compiler (`theory/cminus/`)
+
+A compiler for C- (the language of Appendix A of the course text) that keeps
+the result of every phase: characters → tokens → abstract syntax tree → symbol
+tables and types → three-address code → optimized three-address code → TINY
+Machine (TM) code. `run.ts`, `codegen.ts` and `interpret.ts` import the
+machine, its instruction type and its memory sizes from
+`$lib/tools/tiny-vm/machine` (pure TypeScript); nothing else in `theory/`
+imports from a tool.
+
+```ts
+// tokens.ts
+interface SourceSpan extends Span {
+	line: number; // 1-based, of `start`
+	column: number; // 1-based, UTF-16 code units
+}
+interface SourceDiagnostic extends Diagnostic {
+	span?: SourceSpan; // every phase sets it; Compilation.diagnostics requires it
+}
+// TokenType, in the course's upper-case names: ELSE IF INT RETURN VOID WHILE ID NUM
+// PLUS MINUS TIMES OVER LT LTE GT GTE EQ NEQ ASSIGN SEMI COMMA LPAREN RPAREN
+// LBRACKET RBRACKET LBRACE RBRACE ENDFILE ERROR
+interface Token {
+	type: TokenType;
+	lexeme: string;
+	span: SourceSpan;
+	value?: number; /* NUM */
+}
+interface Trivia {
+	kind: 'whitespace' | 'comment';
+	text: string;
+	span: SourceSpan;
+}
+const KEYWORDS, SYMBOLS, TOKEN_TYPES;
+function spellingOf(type: TokenType): string | null; // "while", "<="; null for ID NUM ENDFILE ERROR
+function joinSpans(a: SourceSpan, b: SourceSpan): SourceSpan;
+
+// scanner.ts
+type IdentifierMode = 'letters' | 'extended'; // letter letter*  |  letter (letter | digit | _)*
+function scan(
+	source: string,
+	opts?: { identifiers?: IdentifierMode }
+): { tokens: Token[] /* ENDFILE last */; trivia: Trivia[]; diagnostics: SourceDiagnostic[] };
+
+// ast.ts — nodes { id, span, kind, … }; ids are preorder numbers from 0 (Program).
+// Kinds: Program VarDecl FunDecl Param Compound If While Return ExprStmt
+//        Assign Binary Var Index Call Num. Parentheses leave no node.
+type Decl = VarDecl | FunDecl;
+type Stmt = Compound | If | While | Return | ExprStmt;
+type Expr = Assign | Binary | Var | Index | Call | Num;
+type AstNode = Program | Decl | Param | Stmt | Expr;
+function childrenOf(node: AstNode): AstNode[];
+function walk(
+	root: AstNode,
+	visit: (node: AstNode, depth: number, parent: AstNode | null) => void
+): void;
+function allNodes(root: AstNode): AstNode[]; // preorder: allNodes(program)[id].id === id
+function findNode(root: AstNode, id: number): AstNode | null;
+function nodeAt(root: AstNode, offset: number): AstNode | null; // innermost node at a source offset
+function nodeLabel(node: AstNode): string; // "VarDecl int a[10]", "Binary +", "Var x"
+function astLines(root: AstNode): { id: number; depth: number; label: string; span: SourceSpan }[];
+function printAst(root: AstNode, opts?: { indent?: string }): string; // one node per line
+function printExpr(e: Expr): string; // C- text with the fewest parentheses
+
+// parser.ts — predictive recursive descent, one function per non-terminal of CMINUS_EBNF.
+const CMINUS_BNF: string; // the 29 rules, readable by parseGrammar
+const CMINUS_EBNF: string; // the grammar the parser follows, readable by parseEbnf
+const MAX_NESTING = 200, // statements and parenthesized expressions
+	MAX_TREE_DEPTH = 500, // levels of the tree; a + a + a + … is a level per operator
+	MAX_SYNTAX_ERRORS = 50;
+interface ParseResult {
+	program: Program; // what parsed; a statement or declaration with a syntax error is left out
+	diagnostics: SourceDiagnostic[];
+	ok: boolean;
+}
+function parse(tokens: readonly Token[]): ParseResult;
+function parseSource(source: string, opts?: { identifiers?: IdentifierMode }): ParseResult;
+
+// semantic.ts
+type CType =
+	| { kind: 'int' }
+	| { kind: 'void' }
+	| { kind: 'array' }
+	| { kind: 'error' }
+	| { kind: 'function'; returns: 'int' | 'void'; params: ('int' | 'array')[] };
+function typeText(t: CType): string; // "int", "int[]", "(int, int[]) → int", "error"
+interface SymbolInfo {
+	id: number;
+	name: string;
+	kind: 'variable' | 'array' | 'function' | 'parameter' | 'array-parameter';
+	type: CType;
+	scope: number; // id of the declaring scope
+	depth: number; // 0 global, 1 function, 2+ nested blocks
+	declSpan: SourceSpan | null; // null for input and output
+	node: number | null;
+	uses: SourceSpan[];
+	size: number | null; // arrays
+	params: { name: string; type: 'int' | 'array' }[] | null; // functions
+	builtin: boolean;
+	location: { base: 'gp' | 'fp'; offset: number } | null; // null for functions
+}
+interface Scope {
+	id: number;
+	kind: 'global' | 'function' | 'block';
+	name: string; // "global", "gcd", "main.1", "main.1.2"
+	depth: number;
+	parent: number | null;
+	children: number[];
+	symbols: number[];
+	function: number | null;
+	node: number | null;
+	span: SourceSpan | null;
+}
+interface FunctionInfo {
+	name: string;
+	symbol: number;
+	node: number;
+	scope: number;
+	returns: 'int' | 'void';
+	params: number[];
+	locals: number[]; // every local, nested blocks included
+	frameSize: number; // cells before the temporaries
+}
+interface SemanticResult {
+	symbols: SymbolInfo[]; // input and output first
+	scopes: Scope[]; // scopes[0] is global
+	functions: FunctionInfo[];
+	types: Map<number, CType>; // expression node id → type
+	refs: Map<number, number>; // Var/Index/Call and VarDecl/Param/FunDecl node id → symbol id
+	globalsSize: number;
+	diagnostics: SourceDiagnostic[];
+	ok: boolean; // no error (warnings allowed)
+}
+function analyze(program: Program): SemanticResult; // for a tree without syntax errors
+function visibleSymbols(result: SemanticResult, scopeId: number): SymbolInfo[];
+
+// ir.ts — quads in the layout of the phases tool: `#5`, `t1`, `L1`, `_`.
+// QuadOp: + - * / < <= > >= == != := =[] []= param call return label goto if_false begin end
+type Operand =
+	| { kind: 'const'; value: number }
+	| { kind: 'var'; name: string; symbol: number }
+	| { kind: 'temp'; name: string }
+	| { kind: 'label'; name: string }
+	| { kind: 'function'; name: string; symbol: number }
+	| { kind: 'count'; value: number };
+interface Quad {
+	id: number; // index in the generated code; kept by the optimizer
+	op: QuadOp;
+	arg1: Operand | null;
+	arg2: Operand | null;
+	result: Operand | null;
+	node: number | null;
+	span: SourceSpan | null;
+	changed?: ('op' | 'arg1' | 'arg2' | 'result')[]; // optimized code only
+}
+interface IrProgram {
+	quads: Quad[];
+	functions: {
+		name: string;
+		symbol: number;
+		from: number;
+		to: number;
+		names: Map<number, string>;
+	}[];
+}
+function generateIr(program: Program, semantic: SemanticResult): IrProgram;
+function quadColumns(q: Quad): [string, string, string, string];
+function formatQuad(q: Quad): string; // "+ x #1 t1"
+function quadText(q: Quad): string; // "t1 := x + 1", "a[i] := t2", "L1:"
+function printQuads(quads: readonly Quad[]): string; // four aligned columns
+function printCode(quads: readonly Quad[]): string; // one-line forms, labels at the margin
+function operandText(o: Operand | null): string;
+function sameOperand(a: Operand | null, b: Operand | null): boolean;
+function temporariesOf(quads: readonly Quad[]): string[];
+function functionRanges(quads: readonly Quad[]): { name; symbol; from; to }[];
+
+// optimize.ts
+// OptimizePass: constant copy fold identity branch retarget dead-temp jump label keep
+interface OptimizeLogEntry {
+	pass: OptimizePass;
+	round: number;
+	function: string;
+	quad: number; // Quad.id
+	before: string;
+	after: string | null; // null: removed
+	text: string;
+}
+function optimize(
+	ir: IrProgram,
+	semantic: SemanticResult
+): { program: IrProgram; log: OptimizeLogEntry[]; rounds: number; removed: number[] };
+function basicBlocks(quads: readonly Quad[]): { from: number; to: number }[];
+function isLeader(quads: readonly Quad[], i: number): boolean;
+
+// codegen.ts
+interface TmInstruction {
+	addr: number;
+	instr: Instruction; // tiny-vm: { op, a1, a2, a3 }
+	comment: string;
+	quad: number | null; // index in the quads the code was generated from
+	span: SourceSpan | null;
+	function: string | null;
+	header: string[]; // comment lines above it in the listing
+	line: number; // 1-based line in the listing
+	origin: number; // address before the peephole pass
+}
+interface TmCode {
+	instructions: TmInstruction[];
+	listing: string; // parseTM reads it back
+	entries: Map<string, number>;
+	haltAddress: number;
+	negativeSubscriptAddress: number;
+}
+interface FrameLayout {
+	function: string;
+	size: number;
+	slots: { name: string; kind: SlotKind; offset: number; size: number; symbol: number | null }[];
+}
+interface CodegenResult {
+	code: TmCode; // straight from the quads; may be longer than instruction memory (isLoadable)
+	peephole: {
+		code: TmCode; // the code to run
+		changes: {
+			rule: 'store-load' | 'jump-to-next';
+			addr: number;
+			instruction: string;
+			text: string;
+		}[];
+	};
+	globals: { size: number; slots: { name; kind; offset; address; size; symbol }[] };
+	frames: FrameLayout[]; // input, output, then the program's functions
+	diagnostics: SourceDiagnostic[]; // what does not fit the machine, each with a span
+	ok: boolean;
+}
+function generateCode(ir: IrProgram, semantic: SemanticResult): CodegenResult;
+function formatListing(instructions: readonly TmInstruction[], trailer?: readonly string[]): string;
+
+// run.ts, interpret.ts
+type StopReason =
+	| 'halted'
+	| 'input-exhausted'
+	| 'step-budget'
+	| 'memory-error'
+	| 'zero-divide'
+	| 'negative-subscript'
+	| 'subscript-out-of-range' /* interpreter only */;
+function runTM(
+	code: TmCode,
+	inputs: readonly number[],
+	opts?: { maxSteps?: number } // default DEFAULT_STEP_BUDGET = 1 000 000 instructions
+): { outputs: number[]; stop: StopReason; steps: number; pc: number | null; machine: Machine };
+function isLoadable(code: TmCode): boolean; // fits in instruction memory: runTM runs only such code
+function instructionMemory(code: TmCode): InstructionMemory;
+function interpret(
+	program: Program,
+	semantic: SemanticResult,
+	inputs: readonly number[],
+	opts?: { maxSteps?: number; maxCallDepth?: number } // defaults 1 000 000 and 512
+): {
+	outputs: number[];
+	stop: StopReason;
+	steps: number;
+	node: number | null; // where it stopped; main when the program does not fit before it starts
+	span: SourceSpan | null;
+};
+
+// compile.ts
+type Phase = 'scanner' | 'parser' | 'semantic' | 'ir' | 'optimizer' | 'codegen';
+interface Compilation {
+	source: string;
+	options: { identifiers: IdentifierMode; optimize: boolean };
+	scan: ScanResult;
+	parse: ParseResult | null;
+	semantic: SemanticResult | null;
+	ir: IrProgram | null;
+	optimized: OptimizeResult | null; // null when the optimizer is off
+	codegen: CodegenResult | null;
+	stoppedAt: Phase | null;
+	diagnostics: PhaseDiagnostic[]; // SourceDiagnostic & { phase: Phase; span: SourceSpan }
+}
+function compile(
+	source: string,
+	opts?: { identifiers?: IdentifierMode; optimize?: boolean } // defaults 'letters', true
+): Compilation;
+function codeQuads(c: Compilation): IrProgram | null; // the quads the code came from
+function finalCode(c: Compilation): TmCode | null; // null unless the program compiled
+function codeBeforePeephole(c: Compilation): TmCode | null; // codegen.code when it can run too
+function runCompilation(c, inputs, opts?): RunResult | null;
+function interpretCompilation(c, inputs, opts?): InterpretResult | null;
+
+// runtime.ts — AC AC1 FP GP PC, registerName, frame offsets, INT_MIN, INT_MAX,
+// arith(op, a, b) (null for a division by zero) and compare(op, a, b).
+// samples.ts — SAMPLES, sampleById, UNDECLARED_SOURCE.
+```
+
+- **Phases stop at the first error.** `compile` fills the results in order and
+  leaves every phase after an error `null`; `stoppedAt` names the phase.
+  Warnings (an int function that may reach its end without a return) do not
+  stop it. The one exception to "later phases are null": when the code or its
+  data does not fit the machine, `stoppedAt` is `'codegen'` and `codegen` is
+  still there to show (`finalCode` is `null`). Every entry of
+  `Compilation.diagnostics` has a span.
+- **Fitting the machine.** The code generator reports three things, as
+  errors. The code after the peephole pass is longer than the 1024
+  instruction cells (span: the name of main). The global variables and the
+  record of one function, temporaries included, are more than the 1024 data
+  cells (span: the name of the function). A function is called, and on the
+  shortest chain of calls from main to it the global variables and the
+  records on the stack are more than the data cells (span: the call that
+  ends the chain; the message lists the records; one report per function).
+  Recursion is not counted, so a program that compiles can still run out of
+  stack: `memory-error`. `codegen.code`, from before the peephole pass, may be
+  longer than instruction memory in a program that compiles; `runTM` does not
+  run such code (`memory-error`, 0 steps, `pc: null`). `isLoadable(code)`
+  tells, and `codeBeforePeephole(c)` is that code only when it can run.
+- **Scanner.** Maximal munch; a reserved word wins over ID. An illegal
+  character and a `!` without `=` are one ERROR token each; a comment that is
+  never closed is one ERROR token to the end of the text (and no trivia
+  entry). Tokens and trivia together cover the whole text.
+- **Parser.** The EBNF is the BNF with left recursion written as repetition.
+  Three choices take more than one token: a declaration is a variable or a
+  function by the token after `type-specifier ID`; `void` alone is the empty
+  parameter list; for `expression` the parser reads a var (or call) and then
+  looks for `=`, and without one hands what it read to `simple-expression` as
+  its first factor (nothing is rewound). Recovery is panic mode: the statement
+  or declaration is dropped, tokens are skipped through the next `;` or up to
+  a `}`. `a < b < c`, an assignment whose left side is not a var, and `()`
+  for a parameter list are reported without dropping anything. Nesting
+  deeper than `MAX_NESTING`, a tree deeper than `MAX_TREE_DEPTH` and more
+  than `MAX_SYNTAX_ERRORS` errors end the parse, so every later walk of the
+  tree may recurse (and a `Compilation` can be cloned). These are limits of
+  the parser, not of the grammar: `a + b + c` is a level of the tree per
+  operator, so a flat expression of about 500 operators in a row is refused,
+  with a message that calls it too long rather than nested. Within the
+  limits the parser accepts exactly the token strings that `CMINUS_BNF`
+  derives (a spec checks it with `recognizes` on mutated programs and random
+  token strings).
+- **Semantic analyzer.** Errors: undeclared name (once per use; the
+  expression gets the type `error`, which is accepted everywhere, so one
+  mistake gives one message); redeclaration in a scope (`input` and `output`
+  are in the global scope); void variable or parameter; main missing, not
+  last, or not `void main(void)`; a call of something that is not a function;
+  wrong number of arguments; an array where an int parameter is and the
+  reverse; an array, a void call or a function name where an int is needed
+  (operand, condition, right side of `=`, returned value, subscript,
+  statement); indexing something that is not an array; assigning to an array
+  or a function; `return` with a value in a void function and without one in
+  an int function; a number or array size that does not fit in 32 bits; an
+  array of size 0. Diagnostics come in source order.
+- **Three-address code.** Evaluation is left to right. Where a later operand
+  can change a variable an earlier operand named (an assignment to it, or for
+  a global any call), the earlier value is first copied to a temporary. The
+  `param` quads of a call directly precede it: every argument is computed
+  first. Temporaries are numbered per function, labels through the program.
+  In quad text a variable has its source name, except that the local of a
+  nested block that hides or repeats another name is `x.2`, `x.3`, …, and so
+  is a variable spelled like a temporary or a label (`t1.2`, `L1.2`; only
+  `extended` identifiers can be); the operand's `symbol` is what identifies
+  it.
+- **Optimizer.** Passes: constant and copy propagation, folding (32-bit
+  wrap-around; never a division by zero), the identities `x + 0`, `0 + x`,
+  `x − 0`, `x * 1`, `1 * x`, `x / 1`, `x * 0`, `0 * x`, and `if_false` on a
+  constant, all within a basic block; then `t := a op b · x := t` becomes
+  `x := a op b` when t has no other use, unused temporaries go, and so do
+  jumps to the next quad and labels nothing jumps to. Rounds repeat until
+  nothing changes. A call, a division whose divisor may be zero and an array
+  read whose subscript may be negative are never removed (of an unused call
+  only the result is dropped), so the optimized program stops where the
+  original does. Unreachable code is left in place.
+- **Run-time conventions** (the header of `runtime.ts` has the full text).
+  ac = 0, ac1 = 1, fp = 5, gp = 6, pc = 7. Globals start at `0(gp)` (gp is
+  1023, read from dMem[0]) and go down; activation records lie below them and
+  grow toward address 0: `0(fp)` the caller's fp, `-1(fp)` the return address,
+  then parameters, locals, temporaries. Element 0 of an array has the lowest
+  address; an array parameter holds the address of element 0. Code: the
+  prelude (0–4), `HALT` (5, main returns here), a second `HALT` (6, the target
+  of a negative subscript), `input` (7), `output` (10), then the functions.
+  Every quad is translated on its own through ac and ac1; jumps are
+  pc-relative. Ordering comparisons test the signs before subtracting, so
+  they are exact for every pair of 32-bit values.
+- **Agreement.** `interpret` and the TM code print the same and stop for the
+  same reason, with the optimizer on or off and before or after the peephole
+  pass; specs check it on the sample programs and on random programs. Outside
+  that agreement, because the language leaves them undefined: reading a local
+  variable before assigning it and the value of an int function that ends
+  without `return` (the interpreter gives 0, the machine whatever the cell or
+  ac holds), a subscript past the end of an array (the interpreter stops with
+  `subscript-out-of-range`, compiled code reads or writes the cell that is
+  there), and running out of memory. The machine has 1024 data cells for the
+  globals and every record on the stack, temporaries included. The
+  interpreter keeps no such count. It stops with `memory-error` in three
+  cases: the global variables and one record without temporaries (of main
+  at the start, of a function at its call) are more than 1024 cells, which
+  the code generator refuses as well; calls nest more than 512 deep, which
+  is more records than the machine holds; the JavaScript stack gives out
+  first (deep recursion through deeply nested statements). It gives a
+  variable its storage when the variable is first used, and no array larger
+  than the machine's memory ever gets any, so a run costs time and memory in
+  proportion to its steps, whatever sizes the program declares.
+- **Plain data.** A `Compilation` holds objects, arrays and Maps only, so it
+  survives a structured clone (§5.4).
+
 ## 5. UI contracts
 
 ### 5.1 Tool pages

@@ -1,0 +1,264 @@
+/**
+ * A direct interpreter of the abstract syntax tree: the reference the
+ * compiled code is checked against. It shares nothing with the intermediate
+ * code or the code generator.
+ *
+ * It follows the same rules as compiled code: 32-bit integers that wrap
+ * around, division truncating toward zero, operands and arguments evaluated
+ * left to right, and for `a[i] = e` the subscript, then e, then the store.
+ * Where compiled code leaves a value undefined the interpreter picks one: a
+ * local variable starts at 0, and an int function that ends without a return
+ * gives 0. It checks both bounds of a subscript; compiled code only checks
+ * for a negative one.
+ *
+ * Memory. The interpreter has no stack of cells, but it holds no storage the
+ * machine could not: the global variables together with one activation record
+ * (2 cells, the parameters and the locals; there are no temporaries here) must
+ * fit in the machine's data memory. That is checked for main before the
+ * program starts and for every other function when it is called; a record
+ * that does not fit stops the run with `memory-error`, and the code generator
+ * refuses the same program. So does a call nested deeper than `maxCallDepth`.
+ * A variable gets its storage when it is first used, so the work of a run is
+ * bounded by its steps, whatever the program declares.
+ */
+import { DADDR_SIZE } from '$lib/tools/tiny-vm/machine';
+import {
+	isArithOp,
+	type Call,
+	type Expr,
+	type FunDecl,
+	type AstNode,
+	type Program,
+	type Stmt
+} from './ast';
+import type { StopReason } from './run';
+import { FRAME_HEADER, arith, compare } from './runtime';
+import type { FunctionInfo, SemanticResult } from './semantic';
+import type { SourceSpan } from './tokens';
+
+/** Statements and expressions evaluated at most, unless `maxSteps` says otherwise. */
+export const DEFAULT_INTERPRETER_STEPS = 1_000_000;
+/**
+ * Calls nested at most. The machine's 1024 data cells hold at most 511
+ * activation records, so compiled code never goes deeper than this.
+ */
+export const DEFAULT_CALL_DEPTH = 512;
+
+export interface InterpretOptions {
+	/** Statements executed plus expression nodes evaluated, at most. */
+	maxSteps?: number;
+	maxCallDepth?: number;
+}
+
+export interface InterpretResult {
+	/** The integers the program printed, in order. */
+	outputs: number[];
+	stop: StopReason;
+	/** Statements executed plus expression nodes evaluated. */
+	steps: number;
+	/**
+	 * Id of the node at which it stopped: the expression or statement, the call
+	 * whose record does not fit or that nests too deep, or the declaration of
+	 * main when the program does not fit before it starts. Null when main
+	 * returned.
+	 */
+	node: number | null;
+	/** The source text of that node (of main, only its head). */
+	span: SourceSpan | null;
+}
+
+/** A simple variable. */
+interface Cell {
+	value: number;
+}
+type Storage = Cell | Int32Array;
+
+class Stop {
+	constructor(
+		readonly reason: StopReason,
+		readonly node: AstNode | null
+	) {}
+}
+
+/**
+ * Runs a checked program (no semantic errors) with the given input values.
+ */
+export function interpret(
+	program: Program,
+	semantic: SemanticResult,
+	inputs: readonly number[],
+	options: InterpretOptions = {}
+): InterpretResult {
+	const maxSteps = options.maxSteps ?? DEFAULT_INTERPRETER_STEPS;
+	const maxDepth = options.maxCallDepth ?? DEFAULT_CALL_DEPTH;
+	const outputs: number[] = [];
+	let steps = 0;
+	let inPos = 0;
+	let depth = 0;
+	let returned = 0;
+
+	const functions = new Map<number, FunDecl>();
+	for (const decl of program.decls) {
+		const symbol = semantic.refs.get(decl.id);
+		if (decl.kind === 'FunDecl' && symbol !== undefined) functions.set(symbol, decl);
+	}
+	const frameOf = new Map(semantic.functions.map((f) => [f.symbol, f] as const));
+
+	/**
+	 * True when the global variables and the record of the function (without
+	 * temporaries) fit in the machine's data memory. Only a function that passes
+	 * runs, so no array that gets storage is larger than that memory.
+	 */
+	const fits = (info: FunctionInfo | undefined): boolean =>
+		semantic.globalsSize + (info?.frameSize ?? FRAME_HEADER) <= DADDR_SIZE;
+	/** Symbol id → storage: the global variables, and the variables of the call in progress. */
+	const globals = new Map<number, Storage>();
+	let frame = new Map<number, Storage>();
+
+	const tick = (node: AstNode) => {
+		if (++steps > maxSteps) {
+			steps = maxSteps;
+			throw new Stop('step-budget', node);
+		}
+	};
+	/**
+	 * The storage of the variable a node names. A parameter has its storage from
+	 * the call. A global or local variable gets it, all zeros, when it is first
+	 * used: a call costs nothing for the locals it leaves alone.
+	 */
+	const storage = (node: AstNode): Storage => {
+		const id = semantic.refs.get(node.id);
+		if (id === undefined) throw new Error(`interpret: ${node.kind} ${node.id} is not resolved`);
+		let found = frame.get(id) ?? globals.get(id);
+		if (!found) {
+			const symbol = semantic.symbols[id];
+			if (symbol.kind !== 'variable' && symbol.kind !== 'array') {
+				throw new Error(`interpret: ${symbol.kind} ${symbol.name} has no storage`);
+			}
+			found = symbol.kind === 'array' ? new Int32Array(symbol.size ?? 1) : { value: 0 };
+			(symbol.depth === 0 ? globals : frame).set(id, found);
+		}
+		return found;
+	};
+	const cell = (node: AstNode): Cell => storage(node) as Cell;
+	const array = (node: AstNode): Int32Array => storage(node) as Int32Array;
+	/** Checks a subscript the way compiled code does, and the upper bound as well. */
+	const checked = (a: Int32Array, i: number, node: AstNode): number => {
+		if (i < 0) throw new Stop('negative-subscript', node);
+		if (i >= a.length) throw new Stop('subscript-out-of-range', node);
+		return i;
+	};
+
+	const call = (e: Call): number => {
+		const symbolId = semantic.refs.get(e.id)!;
+		const symbol = semantic.symbols[symbolId];
+		// Arguments left to right: an array is passed itself, an int by value.
+		const args: (number | Int32Array)[] = e.args.map((arg, i) =>
+			symbol.params?.[i]?.type === 'array' ? array(arg) : evaluate(arg)
+		);
+		if (symbol.builtin) {
+			if (symbol.name === 'input') {
+				if (inPos >= inputs.length) throw new Stop('input-exhausted', e);
+				return inputs[inPos++] | 0;
+			}
+			outputs.push(args[0] as number);
+			return 0;
+		}
+		const decl = functions.get(symbolId)!;
+		const info = frameOf.get(symbolId)!;
+		if (depth >= maxDepth || !fits(info)) throw new Stop('memory-error', e);
+		const caller = frame;
+		const callee = new Map<number, Storage>();
+		info.params.forEach((id, i) => {
+			const arg = args[i];
+			callee.set(id, typeof arg === 'number' ? { value: arg } : arg);
+		});
+		frame = callee;
+		depth++;
+		// Reaching the end of the body without a return gives 0.
+		const value = execute(decl.body) ? returned : 0;
+		depth--;
+		frame = caller;
+		return value;
+	};
+
+	const evaluate = (e: Expr): number => {
+		tick(e);
+		switch (e.kind) {
+			case 'Num':
+				return e.value | 0;
+			case 'Var':
+				return cell(e).value;
+			case 'Index': {
+				const i = evaluate(e.index);
+				const a = array(e);
+				return a[checked(a, i, e)];
+			}
+			case 'Call':
+				return call(e);
+			case 'Binary': {
+				const left = evaluate(e.left);
+				const right = evaluate(e.right);
+				if (!isArithOp(e.op)) return compare(e.op, left, right);
+				const value = arith(e.op, left, right);
+				if (value === null) throw new Stop('zero-divide', e);
+				return value;
+			}
+			case 'Assign': {
+				if (e.target.kind === 'Var') {
+					const value = evaluate(e.value);
+					cell(e.target).value = value;
+					return value;
+				}
+				const i = evaluate(e.target.index);
+				const value = evaluate(e.value);
+				const a = array(e.target);
+				a[checked(a, i, e.target)] = value;
+				return value;
+			}
+		}
+	};
+
+	/** Runs a statement; true when it executed a return (its value is in `returned`). */
+	const execute = (s: Stmt): boolean => {
+		tick(s);
+		switch (s.kind) {
+			case 'Compound':
+				for (const inner of s.body) if (execute(inner)) return true;
+				return false;
+			case 'ExprStmt':
+				if (s.expr) evaluate(s.expr);
+				return false;
+			case 'If':
+				if (evaluate(s.test) !== 0) return execute(s.then);
+				return s.else ? execute(s.else) : false;
+			case 'While':
+				while (evaluate(s.test) !== 0) if (execute(s.body)) return true;
+				return false;
+			case 'Return':
+				returned = s.value ? evaluate(s.value) : 0;
+				return true;
+		}
+	};
+
+	const done = (
+		stop: StopReason,
+		node: AstNode | null,
+		span: SourceSpan | null = node?.span ?? null
+	): InterpretResult => ({ outputs, stop, steps, node: node?.id ?? null, span });
+
+	const main = program.decls[program.decls.length - 1];
+	if (!main || main.kind !== 'FunDecl') return done('halted', null);
+	const info = frameOf.get(semantic.refs.get(main.id)!);
+	if (!fits(info)) return done('memory-error', main, main.headSpan);
+	try {
+		depth = 1;
+		execute(main.body);
+		return done('halted', null);
+	} catch (e) {
+		if (e instanceof Stop) return done(e.reason, e.node);
+		// The JavaScript stack gave out before the call-depth limit did.
+		if (e instanceof RangeError) return done('memory-error', null);
+		throw e;
+	}
+}
