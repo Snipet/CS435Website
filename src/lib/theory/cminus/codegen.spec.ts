@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { DADDR_SIZE, IADDR_SIZE, formatInstruction } from '$lib/tools/tiny-vm/machine';
 import { parseTM } from '$lib/tools/tiny-vm/parse';
 import { formatListing, generateCode, type CodegenResult, type TmCode } from './codegen';
-import { compile, type Compilation } from './compile';
+import { codeBeforePeephole, compile, finalCode, type Compilation } from './compile';
 import { quadText } from './ir';
-import { runTM } from './run';
+import { isLoadable, runTM } from './run';
 import {
 	AC,
 	AC1,
@@ -701,14 +701,18 @@ describe('limits of the machine', () => {
 		expect(c.stoppedAt).toBe('codegen');
 		const size = c.codegen!.peephole.code.instructions.length;
 		expect(size).toBeGreaterThan(IADDR_SIZE);
+		// The diagnostic is at the name of main.
 		expect(c.diagnostics).toEqual([
 			{
 				severity: 'error',
 				phase: 'codegen',
-				message: `The program needs ${size} instruction cells; the TINY Machine has 1024.`
+				message: `The program needs ${size} instruction cells; the TINY Machine has 1024.`,
+				span: { start: 5, end: 9, line: 1, column: 6, source: null }
 			}
 		]);
+		expect(c.source.slice(5, 9)).toBe('main');
 		expect(c.codegen!.ok).toBe(false);
+		expect(isLoadable(c.codegen!.peephole.code)).toBe(false);
 		// The code is there to look at, but it is not run.
 		expect(runTM(c.codegen!.peephole.code, [])).toMatchObject({
 			stop: 'memory-error',
@@ -734,8 +738,23 @@ describe('limits of the machine', () => {
 		expect(c.stoppedAt).toBeNull();
 		expect(c.diagnostics).toEqual([]);
 		expect(runTM(c.codegen!.peephole.code, [])).toMatchObject({ stop: 'halted', outputs: [170] });
-		// The longer code cannot be loaded.
+		// The longer code cannot be loaded: isLoadable and codeBeforePeephole say so.
 		expect(runTM(c.codegen!.code, [])).toMatchObject({ stop: 'memory-error', steps: 0, pc: null });
+		expect(isLoadable(c.codegen!.code)).toBe(false);
+		expect(isLoadable(c.codegen!.peephole.code)).toBe(true);
+		expect(codeBeforePeephole(c)).toBeNull();
+		expect(finalCode(c)).toBe(c.codegen!.peephole.code);
+	});
+
+	it('codeBeforePeephole is the first code when it can run next to the final one', () => {
+		const c = compile('void main(void) { int x; x = input(); output(x + 1); }');
+		expect(codeBeforePeephole(c)).toBe(c.codegen!.code);
+		expect(runTM(codeBeforePeephole(c)!, [4]).outputs).toEqual([5]);
+		// Not for a program that did not compile, whatever the reason.
+		expect(codeBeforePeephole(compile('void main(void) { x = 1; }'))).toBeNull();
+		const tooBig = compile('int big[2000]; void main(void) { big[0] = 1; }');
+		expect(isLoadable(tooBig.codegen!.code)).toBe(true);
+		expect(codeBeforePeephole(tooBig)).toBeNull();
 	});
 
 	it('reports globals and records that do not fit in data memory', () => {
@@ -759,14 +778,93 @@ describe('limits of the machine', () => {
 		expect(runTM(c.codegen!.peephole.code, [])).toMatchObject({ stop: 'halted', outputs: [5] });
 	});
 
-	it('a stack that runs out while the program runs is a memory error', () => {
+	it('reports a call whose record does not fit under the records of its callers', () => {
 		// main's record fits under the globals, the record of output does not.
-		const c = compile('int big[1021]; void main(void) { big[1020] = 5; output(big[1020]); }');
-		expect(c.stoppedAt).toBeNull();
-		expect(runTM(c.codegen!.peephole.code, [])).toMatchObject({
-			stop: 'memory-error',
-			outputs: []
-		});
+		const source = (size: number) =>
+			`int big[${size}]; void main(void) { big[0] = 5; output(big[0]); }`;
+		for (const optimize of [false, true]) {
+			// 1018 globals, 3 cells for main (with t1) and 3 for output: exactly 1024.
+			const fits = compile(source(1018), { optimize });
+			expect(fits.diagnostics).toEqual([]);
+			expect(runTM(finalCode(fits)!, [])).toMatchObject({ stop: 'halted', outputs: [5] });
+
+			const c = compile(source(1019), { optimize });
+			expect(c.stoppedAt).toBe('codegen');
+			expect(c.diagnostics.map((d) => d.message)).toEqual([
+				'The global variables (1019 cells) and the activation records of main (3 cells) and output (3 cells) do not fit in the 1024 cells of data memory.'
+			]);
+			// At the call.
+			const span = c.diagnostics[0].span;
+			expect(c.source.slice(span.start, span.end)).toBe('output(big[0])');
+			expect(finalCode(c)).toBeNull();
+			// Run all the same, the code stops at that call.
+			expect(runTM(c.codegen!.peephole.code, [])).toMatchObject({
+				stop: 'memory-error',
+				outputs: []
+			});
+		}
+	});
+
+	it('the shortest chain of calls from main decides, and names every record on it', () => {
+		const source = (size: number) => `void leaf(int v[]) { int one; one = 1; v[0] = one; }
+void middle(void) { int room[${size}]; leaf(room); output(room[0]); }
+void main(void) { middle(); }`;
+		// main 2, middle 2 + 1015 + t1, leaf 2 + 2: exactly 1024 cells.
+		const fits = compile(source(1015), { optimize: false });
+		expect(fits.diagnostics).toEqual([]);
+		expect(runTM(finalCode(fits)!, []).outputs).toEqual([1]);
+		// One more cell: the 3 cells of output still fit under middle, the 4 of leaf do not.
+		const c = compile(source(1016), { optimize: false });
+		expect(c.diagnostics.map((d) => d.message)).toEqual([
+			'The activation records of main (2 cells), middle (1019 cells) and leaf (4 cells) do not fit in the 1024 cells of data memory.'
+		]);
+		const span = c.diagnostics[0].span;
+		expect(c.source.slice(span.start, span.end)).toBe('leaf(room)');
+		expect(span.line).toBe(2);
+
+		// A function reached two ways is judged by the shorter one.
+		const twoWays = `int g[500];
+void leaf(void) { int room[300]; room[0] = 1; output(room[0]); }
+void middle(void) { int room[300]; room[0] = 2; if (g[0]) leaf(); }
+void main(void) { leaf(); middle(); }`;
+		const two = compile(twoWays);
+		expect(two.diagnostics).toEqual([]);
+		expect(runTM(finalCode(two)!, []).outputs).toEqual([1]);
+	});
+
+	it('a record that is too large alone is reported once, at its function', () => {
+		// Nothing more about the calls made from inside it, or the call of it.
+		const c = compile(
+			'int f(int n) { int big[2000]; big[0] = n; output(big[0]); return input(); } void main(void) { output(f(1)); }'
+		);
+		expect(c.diagnostics.map((d) => d.message)).toEqual([
+			'The activation record of f (2005 cells) does not fit in the 1024 cells of data memory.'
+		]);
+		expect(c.source.slice(c.diagnostics[0].span.start, c.diagnostics[0].span.end)).toBe('f');
+		// One report per function that cannot be reached, in source order.
+		const several = compile(
+			'int big[1019]; void f(void) { } void main(void) { int x; x = input(); f(); output(x); f(); output(x); }',
+			{ optimize: false }
+		);
+		expect(
+			several.diagnostics.map((d) => [
+				several.source.slice(d.span.start, d.span.end),
+				d.message.replace(/^.*records of | do not fit.*$/g, '')
+			])
+		).toEqual([
+			['input()', 'main (4 cells) and input (2 cells)'],
+			['f()', 'main (4 cells) and f (2 cells)'],
+			['output(x)', 'main (4 cells) and output (3 cells)']
+		]);
+	});
+
+	it('recursion is not counted: how deep it goes shows when the program runs', () => {
+		const source =
+			'int down(int n) { int room[600]; room[0] = n; if (n < 1) return room[0]; return down(n - 1); } void main(void) { output(down(input())); }';
+		const c = compile(source);
+		expect(c.diagnostics).toEqual([]);
+		expect(runTM(finalCode(c)!, [0])).toMatchObject({ stop: 'halted', outputs: [0] });
+		expect(runTM(finalCode(c)!, [1])).toMatchObject({ stop: 'memory-error', outputs: [] });
 	});
 
 	it('an enormous array is a diagnostic, not a crash', () => {

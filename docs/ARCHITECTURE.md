@@ -852,9 +852,10 @@ function compareGrammars(
 A compiler for C- (the language of Appendix A of the course text) that keeps
 the result of every phase: characters → tokens → abstract syntax tree → symbol
 tables and types → three-address code → optimized three-address code → TINY
-Machine (TM) code. `run.ts` and `codegen.ts` import the machine and its
-instruction type from `$lib/tools/tiny-vm/machine` (pure TypeScript); nothing
-else in `theory/` imports from a tool.
+Machine (TM) code. `run.ts`, `codegen.ts` and `interpret.ts` import the
+machine, its instruction type and its memory sizes from
+`$lib/tools/tiny-vm/machine` (pure TypeScript); nothing else in `theory/`
+imports from a tool.
 
 ```ts
 // tokens.ts
@@ -863,7 +864,7 @@ interface SourceSpan extends Span {
 	column: number; // 1-based, UTF-16 code units
 }
 interface SourceDiagnostic extends Diagnostic {
-	span?: SourceSpan; // only the code generator's size errors can lack one
+	span?: SourceSpan; // every phase sets it; Compilation.diagnostics requires it
 }
 // TokenType, in the course's upper-case names: ELSE IF INT RETURN VOID WHILE ID NUM
 // PLUS MINUS TIMES OVER LT LTE GT GTE EQ NEQ ASSIGN SEMI COMMA LPAREN RPAREN
@@ -913,8 +914,8 @@ function printExpr(e: Expr): string; // C- text with the fewest parentheses
 // parser.ts — predictive recursive descent, one function per non-terminal of CMINUS_EBNF.
 const CMINUS_BNF: string; // the 29 rules, readable by parseGrammar
 const CMINUS_EBNF: string; // the grammar the parser follows, readable by parseEbnf
-const MAX_NESTING = 200,
-	MAX_TREE_DEPTH = 500,
+const MAX_NESTING = 200, // statements and parenthesized expressions
+	MAX_TREE_DEPTH = 500, // levels of the tree; a + a + a + … is a level per operator
 	MAX_SYNTAX_ERRORS = 50;
 interface ParseResult {
 	program: Program; // what parsed; a statement or declaration with a syntax error is left out
@@ -1065,7 +1066,7 @@ interface FrameLayout {
 	slots: { name: string; kind: SlotKind; offset: number; size: number; symbol: number | null }[];
 }
 interface CodegenResult {
-	code: TmCode; // straight from the quads
+	code: TmCode; // straight from the quads; may be longer than instruction memory (isLoadable)
 	peephole: {
 		code: TmCode; // the code to run
 		changes: {
@@ -1077,7 +1078,7 @@ interface CodegenResult {
 	};
 	globals: { size: number; slots: { name; kind; offset; address; size; symbol }[] };
 	frames: FrameLayout[]; // input, output, then the program's functions
-	diagnostics: SourceDiagnostic[];
+	diagnostics: SourceDiagnostic[]; // what does not fit the machine, each with a span
 	ok: boolean;
 }
 function generateCode(ir: IrProgram, semantic: SemanticResult): CodegenResult;
@@ -1097,6 +1098,7 @@ function runTM(
 	inputs: readonly number[],
 	opts?: { maxSteps?: number } // default DEFAULT_STEP_BUDGET = 1 000 000 instructions
 ): { outputs: number[]; stop: StopReason; steps: number; pc: number | null; machine: Machine };
+function isLoadable(code: TmCode): boolean; // fits in instruction memory: runTM runs only such code
 function instructionMemory(code: TmCode): InstructionMemory;
 function interpret(
 	program: Program,
@@ -1107,7 +1109,7 @@ function interpret(
 	outputs: number[];
 	stop: StopReason;
 	steps: number;
-	node: number | null;
+	node: number | null; // where it stopped; main when the program does not fit before it starts
 	span: SourceSpan | null;
 };
 
@@ -1123,7 +1125,7 @@ interface Compilation {
 	optimized: OptimizeResult | null; // null when the optimizer is off
 	codegen: CodegenResult | null;
 	stoppedAt: Phase | null;
-	diagnostics: (SourceDiagnostic & { phase: Phase })[];
+	diagnostics: PhaseDiagnostic[]; // SourceDiagnostic & { phase: Phase; span: SourceSpan }
 }
 function compile(
 	source: string,
@@ -1131,6 +1133,7 @@ function compile(
 ): Compilation;
 function codeQuads(c: Compilation): IrProgram | null; // the quads the code came from
 function finalCode(c: Compilation): TmCode | null; // null unless the program compiled
+function codeBeforePeephole(c: Compilation): TmCode | null; // codegen.code when it can run too
 function runCompilation(c, inputs, opts?): RunResult | null;
 function interpretCompilation(c, inputs, opts?): InterpretResult | null;
 
@@ -1144,10 +1147,21 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   Warnings (an int function that may reach its end without a return) do not
   stop it. The one exception to "later phases are null": when the code or its
   data does not fit the machine, `stoppedAt` is `'codegen'` and `codegen` is
-  still there to show (`finalCode` is `null`). The fit is judged on the code
-  after the peephole pass; `codegen.code` may be longer than instruction
-  memory, and `runTM` does not run such code (`memory-error`, 0 steps,
-  `pc: null`).
+  still there to show (`finalCode` is `null`). Every entry of
+  `Compilation.diagnostics` has a span.
+- **Fitting the machine.** The code generator reports three things, as
+  errors. The code after the peephole pass is longer than the 1024
+  instruction cells (span: the name of main). The global variables and the
+  record of one function, temporaries included, are more than the 1024 data
+  cells (span: the name of the function). A function is called, and on the
+  shortest chain of calls from main to it the global variables and the
+  records on the stack are more than the data cells (span: the call that
+  ends the chain; the message lists the records; one report per function).
+  Recursion is not counted, so a program that compiles can still run out of
+  stack: `memory-error`. `codegen.code`, from before the peephole pass, may be
+  longer than instruction memory in a program that compiles; `runTM` does not
+  run such code (`memory-error`, 0 steps, `pc: null`). `isLoadable(code)`
+  tells, and `codeBeforePeephole(c)` is that code only when it can run.
 - **Scanner.** Maximal munch; a reserved word wins over ID. An illegal
   character and a `!` without `=` are one ERROR token each; a comment that is
   never closed is one ERROR token to the end of the text (and no trivia
@@ -1163,9 +1177,13 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   for a parameter list are reported without dropping anything. Nesting
   deeper than `MAX_NESTING`, a tree deeper than `MAX_TREE_DEPTH` and more
   than `MAX_SYNTAX_ERRORS` errors end the parse, so every later walk of the
-  tree may recurse. The parser accepts exactly the token strings that
-  `CMINUS_BNF` derives (a spec checks it with `recognizes` on mutated programs
-  and random token strings).
+  tree may recurse (and a `Compilation` can be cloned). These are limits of
+  the parser, not of the grammar: `a + b + c` is a level of the tree per
+  operator, so a flat expression of about 500 operators in a row is refused,
+  with a message that calls it too long rather than nested. Within the
+  limits the parser accepts exactly the token strings that `CMINUS_BNF`
+  derives (a spec checks it with `recognizes` on mutated programs and random
+  token strings).
 - **Semantic analyzer.** Errors: undeclared name (once per use; the
   expression gets the type `error`, which is accepted everywhere, so one
   mistake gives one message); redeclaration in a scope (`input` and `output`
@@ -1185,8 +1203,9 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   first. Temporaries are numbered per function, labels through the program.
   In quad text a variable has its source name, except that the local of a
   nested block that hides or repeats another name is `x.2`, `x.3`, …, and so
-  is a variable spelled like a temporary (`extended` identifiers); the
-  operand's `symbol` is what identifies it.
+  is a variable spelled like a temporary or a label (`t1.2`, `L1.2`; only
+  `extended` identifiers can be); the operand's `symbol` is what identifies
+  it.
 - **Optimizer.** Passes: constant and copy propagation, folding (32-bit
   wrap-around; never a division by zero), the identities `x + 0`, `0 + x`,
   `x − 0`, `x * 1`, `1 * x`, `x / 1`, `x * 0`, `0 * x`, and `if_false` on a
@@ -1216,9 +1235,17 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   without `return` (the interpreter gives 0, the machine whatever the cell or
   ac holds), a subscript past the end of an array (the interpreter stops with
   `subscript-out-of-range`, compiled code reads or writes the cell that is
-  there), and running out of memory (the machine has 1024 data cells; the
-  interpreter only limits the call depth, to 512, and returns `memory-error`
-  rather than exhausting the JavaScript stack).
+  there), and running out of memory. The machine has 1024 data cells for the
+  globals and every record on the stack, temporaries included. The
+  interpreter keeps no such count. It stops with `memory-error` in three
+  cases: the global variables and one record without temporaries (of main
+  at the start, of a function at its call) are more than 1024 cells, which
+  the code generator refuses as well; calls nest more than 512 deep, which
+  is more records than the machine holds; the JavaScript stack gives out
+  first (deep recursion through deeply nested statements). It gives a
+  variable its storage when the variable is first used, and no array larger
+  than the machine's memory ever gets any, so a run costs time and memory in
+  proportion to its steps, whatever sizes the program declares.
 - **Plain data.** A `Compilation` holds objects, arrays and Maps only, so it
   survives a structured clone (§5.4).
 

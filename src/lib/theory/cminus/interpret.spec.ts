@@ -241,6 +241,56 @@ describe('how a run ends', () => {
 		expect(deep.outputs).toEqual([]);
 	});
 
+	it('memory-error: global variables that cannot fit the machine are not allocated', () => {
+		// Two arrays of 8 GB each: main's head is where the run ends, before anything runs.
+		const huge = run(
+			'int a[2147483647]; int b[2147483647]; void main(void) { a[2147483646] = 7; b[5] = 1; output(a[2147483646]); }'
+		);
+		expect(huge).toMatchObject({ stop: 'memory-error', outputs: [], steps: 0 });
+		expect(where(huge)).toBe('void main(void)');
+		expect(huge.node).not.toBeNull();
+		// One declaration with a slip of the finger is enough.
+		expect(run('int a[1000000000]; void main(void) { output(1); }').stop).toBe('memory-error');
+		// The cost does not grow with the number of declarations.
+		const name = (i: number) => [...String(i)].map((d) => 'abcdefghij'[Number(d)]).join('');
+		const many = Array.from({ length: 4096 }, (_, i) => `int g${name(i)}[2147483647];`);
+		const r = run(`${many.join('\n')}\nvoid main(void) { output(1); }`);
+		expect(r).toMatchObject({ stop: 'memory-error', outputs: [], steps: 0 });
+	});
+
+	it('memory-error: the global variables and the record of main take at most 1024 cells', () => {
+		// 2 cells for the base of main's record.
+		const fits = 'int a[1022]; void main(void) { a[1021] = 5; output(a[1021]); }';
+		expect(run(fits)).toMatchObject({ stop: 'halted', outputs: [5] });
+		expect(run(fits.replace('1022', '1023')).stop).toBe('memory-error');
+		const locals = 'int g; void main(void) { int a[1021]; a[1020] = g + 6; output(a[1020]); }';
+		expect(run(locals)).toMatchObject({ stop: 'halted', outputs: [6] });
+		expect(run(locals.replace('1021', '1022')).stop).toBe('memory-error');
+	});
+
+	it('memory-error: a call whose record cannot fit the machine, at the call', () => {
+		const source = (size: number) =>
+			`int g[10]; int f(int n) { int big[${size}]; big[0] = n; return big[0] + 1; } void main(void) { output(1); output(f(4)); output(2); }`;
+		// 10 globals, 2 cells, the parameter and 1011 locals: exactly 1024.
+		expect(run(source(1011))).toMatchObject({ stop: 'halted', outputs: [1, 5, 2] });
+		const r = run(source(1012));
+		expect(r).toMatchObject({ stop: 'memory-error', outputs: [1] });
+		expect(where(r)).toBe('f(4)');
+		const enormous = run(source(2147483647));
+		expect(enormous).toMatchObject({ stop: 'memory-error', outputs: [1] });
+		expect(where(enormous)).toBe('f(4)');
+		// A function that is never called costs nothing.
+		expect(
+			run('void never(void) { int big[2147483647]; } void main(void) { output(3); }').outputs
+		).toEqual([3]);
+	});
+
+	it('every call gets fresh storage, however many calls there are', () => {
+		const source =
+			'int f(int n) { int a[1000]; a[999] = a[999] + n; return a[999]; } void main(void) { int i; int s; i = 0; s = 0; while (i < 3000) { s = s + f(i); i = i + 1; } output(s); }';
+		expect(run(source).outputs).toEqual([(2999 * 3000) / 2]);
+	});
+
 	it('reads input values as 32-bit integers', () => {
 		expect(outputs('output(input());', [4294967298])).toEqual([2]);
 		expect(outputs('output(input() + 1);', [2147483647])).toEqual([-2147483648]);

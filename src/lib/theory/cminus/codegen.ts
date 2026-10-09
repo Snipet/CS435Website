@@ -36,6 +36,16 @@
  * The peephole pass then removes a load that follows a store of the same
  * register and cell (the value is still in the register) and a jump to the
  * next instruction. Both versions of the code are returned.
+ *
+ * What does not fit the machine is an error, each with a span:
+ * - the code after the peephole pass is longer than instruction memory (at
+ *   the name of main);
+ * - the global variables and the record of a function are more than data
+ *   memory holds (at the name of the function);
+ * - a function is called, and on the shortest chain of calls from main to it
+ *   the global variables and the records on the stack are more than data
+ *   memory holds (at the call that ends that chain). Recursion is not counted:
+ *   how deep it goes is only known when the program runs.
  */
 import {
 	DADDR_SIZE,
@@ -169,9 +179,17 @@ export interface CodegenResult {
 	globals: GlobalLayout;
 	/** input, output, then the program's functions in order. */
 	frames: FrameLayout[];
+	/** What does not fit the machine; every one has a span. */
 	diagnostics: SourceDiagnostic[];
 	/** True when the code and its data fit in the machine. */
 	ok: boolean;
+}
+
+/** A call: the symbol ids of the calling and the called function, and the source text of the call. */
+interface CallSite {
+	from: number;
+	to: number;
+	span: SourceSpan | null;
 }
 
 /** One instruction before addresses are known: a jump names its target label. */
@@ -192,6 +210,12 @@ interface Asm {
 	/** Never removed by the peephole pass (the jump of a call). */
 	pinned: boolean;
 	origin: number;
+}
+
+/** "a", "a and b", "a, b and c". */
+function listText(items: readonly string[]): string {
+	if (items.length <= 1) return items.join('');
+	return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
 const MAIN_HALT = 'halt:main';
@@ -442,6 +466,14 @@ export function generateCode(ir: IrProgram, semantic: SemanticResult): CodegenRe
 		if (o?.kind !== 'label') throw new Error('codegen: a jump without a label');
 		return o.name;
 	};
+	/** Symbol id of a function → the cells of its record (input and output included). */
+	const recordSize = new Map<number, number>();
+	for (const s of semantic.symbols) {
+		const frame = s.builtin ? frames.find((f) => f.function === s.name) : undefined;
+		if (frame) recordSize.set(s.id, frame.size);
+	}
+	/** Symbol id of a function → its first call of each function it calls, in the order of its code. */
+	const callSites = new Map<number, CallSite[]>();
 
 	// --- Functions ----------------------------------------------------------
 
@@ -482,6 +514,14 @@ export function generateCode(ir: IrProgram, semantic: SemanticResult): CodegenRe
 				}))
 			]
 		});
+		recordSize.set(range.symbol, size);
+		const called = new Map<number, CallSite>();
+		for (const q of quads) {
+			if (q.op === 'call' && q.arg1?.kind === 'function' && !called.has(q.arg1.symbol)) {
+				called.set(q.arg1.symbol, { from: range.symbol, to: q.arg1.symbol, span: q.span });
+			}
+		}
+		callSites.set(range.symbol, [...called.values()]);
 		if (semantic.globalsSize + size > DADDR_SIZE) {
 			diagnostics.push({
 				severity: 'error',
@@ -691,6 +731,64 @@ export function generateCode(ir: IrProgram, semantic: SemanticResult): CodegenRe
 			}))
 	};
 
+	// --- Data memory: the stack under each function that is called ------------
+
+	const main = semantic.functions.find((f) => f.name === 'main');
+	const mainSpan = (main ? semantic.symbols[main.symbol].declSpan : null) ?? undefined;
+	if (main) {
+		const cells = (id: number) => recordSize.get(id) ?? 0;
+		/** Symbol id → the fewest cells in use (globals and records) when the function runs. */
+		const need = new Map<number, number>([
+			[main.symbol, semantic.globalsSize + cells(main.symbol)]
+		]);
+		/** Symbol id → the call that ends the shortest chain of calls from main to the function. */
+		const reached = new Map<number, CallSite>();
+		// A function calls only itself and functions declared before it, so going
+		// through the functions from main backward, each one's number is final
+		// before its own calls are looked at.
+		for (let i = semantic.functions.length - 1; i >= 0; i--) {
+			const caller = semantic.functions[i].symbol;
+			const base = need.get(caller);
+			if (base === undefined) continue;
+			for (const site of callSites.get(caller) ?? []) {
+				const total = base + cells(site.to);
+				if (total < (need.get(site.to) ?? Infinity)) {
+					need.set(site.to, total);
+					reached.set(site.to, site);
+				}
+			}
+		}
+		const chains: SourceDiagnostic[] = [];
+		for (const [callee, site] of reached) {
+			// One report per chain: none where the function's own record is already
+			// reported above, and none where its caller is out of memory itself.
+			if (
+				need.get(callee)! <= DADDR_SIZE ||
+				semantic.globalsSize + cells(callee) > DADDR_SIZE ||
+				need.get(site.from)! > DADDR_SIZE
+			) {
+				continue;
+			}
+			const chain: number[] = [];
+			for (let id: number | undefined = callee; id !== undefined; id = reached.get(id)?.from) {
+				chain.unshift(id);
+			}
+			const records = listText(
+				chain.map((id) => `${semantic.symbols[id].name} (${cells(id)} cells)`)
+			);
+			chains.push({
+				severity: 'error',
+				message:
+					semantic.globalsSize > 0
+						? `The global variables (${semantic.globalsSize} cells) and the activation records of ${records} do not fit in the ${DADDR_SIZE} cells of data memory.`
+						: `The activation records of ${records} do not fit in the ${DADDR_SIZE} cells of data memory.`,
+				span: site.span ?? mainSpan
+			});
+		}
+		chains.sort((x, y) => (x.span?.start ?? 0) - (y.span?.start ?? 0));
+		diagnostics.push(...chains);
+	}
+
 	// Comment lines of quads that produced no instruction at the very end.
 	const trailer = pendingHeader;
 	const code = assemble(asm, trailer);
@@ -699,7 +797,8 @@ export function generateCode(ir: IrProgram, semantic: SemanticResult): CodegenRe
 	if (final.instructions.length > IADDR_SIZE) {
 		diagnostics.push({
 			severity: 'error',
-			message: `The program needs ${final.instructions.length} instruction cells; the TINY Machine has ${IADDR_SIZE}.`
+			message: `The program needs ${final.instructions.length} instruction cells; the TINY Machine has ${IADDR_SIZE}.`,
+			span: mainSpan
 		});
 	}
 	return {

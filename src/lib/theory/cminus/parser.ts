@@ -18,8 +18,15 @@
  * A syntax error is a diagnostic. Recovery is panic mode: the statement (or
  * declaration) in progress is dropped and tokens are skipped to the next `;`
  * or to a `}`, so one program can report several errors.
+ *
+ * Limits of this parser, not of the grammar: statements and expressions nest
+ * at most MAX_NESTING deep and the tree is at most MAX_TREE_DEPTH levels deep,
+ * so that everything that walks the tree afterwards may recurse. The grammar
+ * nests `a + b + c` to the left, a level per operator, so an expression of
+ * about MAX_TREE_DEPTH operators in a row is refused as too long.
  */
 import {
+	childrenOf,
 	numberNodes,
 	type BinaryOp,
 	type Call,
@@ -111,7 +118,10 @@ args → [ expression { , expression } ]`;
 
 /** Statements and parenthesized expressions nest at most this deep. */
 export const MAX_NESTING = 200;
-/** The tree is at most this deep (a chain `a + a + a + …` deepens it by one per operator). */
+/**
+ * The tree is at most this deep. A chain `a + a + a + …` deepens it by one per
+ * operator, so this also bounds the operators an expression can have in a row.
+ */
 export const MAX_TREE_DEPTH = 500;
 /** Parsing stops after this many syntax errors. */
 export const MAX_SYNTAX_ERRORS = 50;
@@ -219,12 +229,45 @@ class Parser {
 	private built<T extends AstNode>(node: T, ...children: (AstNode | null)[]): T {
 		let d = 1;
 		for (const c of children) if (c) d = Math.max(d, 1 + (this.depth.get(c) ?? 1));
-		if (d > MAX_TREE_DEPTH) {
-			this.report(`This is nested more than ${MAX_TREE_DEPTH} levels deep.`, node.span);
-			throw new Abort();
-		}
+		if (d > MAX_TREE_DEPTH) this.tooDeep(node);
 		this.depth.set(node, d);
 		return node;
+	}
+
+	/**
+	 * Reports a tree deeper than MAX_TREE_DEPTH and ends the parse. The message
+	 * says what made it deep: nesting, or one long chain of operators, which is
+	 * written flat but is a level of the tree per operator.
+	 */
+	private tooDeep(node: AstNode): never {
+		// Down the deepest path, the longest run of operators that are each the
+		// left operand of the one above.
+		let longest: { top: AstNode; operators: number } | null = null;
+		let run: { top: AstNode; operators: number } | null = null;
+		for (let at: AstNode | undefined = node; at;) {
+			let deepest: AstNode | undefined;
+			for (const child of childrenOf(at)) {
+				if (!deepest || (this.depth.get(child) ?? 1) > (this.depth.get(deepest) ?? 1)) {
+					deepest = child;
+				}
+			}
+			if (at.kind === 'Binary') {
+				if (run) run.operators++;
+				else run = { top: at, operators: 1 };
+				if (!longest || run.operators > longest.operators) longest = run;
+				if (deepest !== at.left || deepest.kind !== 'Binary') run = null;
+			}
+			at = deepest;
+		}
+		if (longest && longest.operators * 2 > MAX_TREE_DEPTH) {
+			this.report(
+				`This expression is too long for this compiler: its chain of operators makes the syntax tree more than ${MAX_TREE_DEPTH} levels deep.`,
+				longest.top.span
+			);
+		} else {
+			this.report(`This is nested more than ${MAX_TREE_DEPTH} levels deep.`, node.span);
+		}
+		throw new Abort();
 	}
 
 	private enter(): void {

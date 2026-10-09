@@ -422,6 +422,42 @@ describe('names', () => {
 		expect(p.quads[2].result).toMatchObject({ kind: 'temp', name: 't1' });
 	});
 
+	it('a variable spelled like a label is told apart', () => {
+		const p = ir(
+			'int L2; void main(void) { int L1; L1 = input(); if (L1) L2 = L1 + 1; else L2 = 0; while (L2) L2 = L2 - 1; }',
+			'extended'
+		);
+		expect(p.quads.map(quadText)).toEqual([
+			'begin main',
+			't1 := call input, 0',
+			'L1.2 := t1',
+			'if_false L1.2 goto L1',
+			't2 := L1.2 + 1',
+			'L2.2 := t2',
+			'goto L2',
+			'L1:',
+			'L2.2 := 0',
+			'L2:',
+			'L3:',
+			'if_false L2.2 goto L4',
+			't3 := L2.2 - 1',
+			'L2.2 := t3',
+			'goto L3',
+			'L4:',
+			'end main'
+		]);
+		expect(p.quads.map(formatQuad)).toContain('if_false L1.2 _ L1');
+		expect(p.quads[3].arg1).toMatchObject({ kind: 'var', name: 'L1.2' });
+		expect(p.quads[3].result).toEqual({ kind: 'label', name: 'L1' });
+		expect([...p.functions[0].names.values()].sort()).toEqual(['L1.2', 'L2.2']);
+		// A name that only starts like one keeps its spelling, and so does every name in letters mode.
+		const plain = ir(
+			'void main(void) { int L; int Lx1; int t; L = 1; Lx1 = L; t = Lx1; }',
+			'extended'
+		);
+		expect([...plain.functions[0].names.values()].sort()).toEqual(['L', 'Lx1', 't']);
+	});
+
 	it('a global declared after a function is not in its names', () => {
 		const p = ir('void f(void) { } int late; void main(void) { late = 1; }');
 		expect([...p.functions[0].names.values()]).toEqual([]);

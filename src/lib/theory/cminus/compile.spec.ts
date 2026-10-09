@@ -5,7 +5,6 @@
  * programs.
  */
 import { describe, expect, it } from 'vitest';
-import { IADDR_SIZE } from '$lib/tools/tiny-vm/machine';
 import type { TmCode } from './codegen';
 import {
 	PHASES,
@@ -17,8 +16,8 @@ import {
 	type Compilation
 } from './compile';
 import { interpret } from './interpret';
-import { formatQuad } from './ir';
-import { runTM, type StopReason } from './run';
+import { formatQuad, quadText } from './ir';
+import { isLoadable, runTM, type StopReason } from './run';
 import { arith } from './runtime';
 import { SAMPLES, UNDECLARED_SOURCE, sampleById } from './samples';
 import type { IdentifierMode } from './scanner';
@@ -51,8 +50,7 @@ function allRuns(
 	];
 	for (const [name, code] of codes) {
 		// A program compiles when its code fits after the peephole pass; the code before it may not.
-		if (code.instructions.length <= IADDR_SIZE)
-			runs.push([name, runTM(code, inputs, { maxSteps })]);
+		if (isLoadable(code)) runs.push([name, runTM(code, inputs, { maxSteps })]);
 	}
 	return runs.map(([name, r]) => [name, r.stop, r.outputs] as const);
 }
@@ -376,8 +374,53 @@ describe('compile', () => {
 		expect(c.codegen).not.toBeNull();
 		expect(finalCode(c)).toBeNull();
 		expect(runCompilation(c, [])).toBeNull();
-		// The interpreter has no memory limit.
-		expect(interpretCompilation(c, [])).toMatchObject({ stop: 'halted' });
+		// The interpreter does not hold what the machine cannot either.
+		expect(interpretCompilation(c, [])).toMatchObject({ stop: 'memory-error', outputs: [] });
+	});
+
+	it('arrays far larger than the machine cost nothing, in any phase', () => {
+		const c = compile(
+			'int a[2147483647]; int b[2147483647]; void main(void) { a[2147483646] = 7; b[5] = 1; output(a[2147483646]); }'
+		);
+		expect(c.stoppedAt).toBe('codegen');
+		expect(c.diagnostics.map((d) => d.message)).toEqual([
+			'The global variables (4294967294 cells) and the activation record of main (3 cells) do not fit in the 1024 cells of data memory.'
+		]);
+		expect(interpretCompilation(c, [])).toMatchObject({
+			stop: 'memory-error',
+			outputs: [],
+			steps: 0
+		});
+		const local = compile(
+			'int f(void) { int a[2147483647]; a[5] = 1; return a[5]; } void main(void) { output(f()); }'
+		);
+		expect(local.stoppedAt).toBe('codegen');
+		expect(interpretCompilation(local, [])).toMatchObject({ stop: 'memory-error', outputs: [] });
+	});
+
+	it('every diagnostic of a compilation has a span, whatever the phase', () => {
+		const sources = [
+			'void main(void) { int x; x = 3 $ 4; }',
+			'void main(void) { int x; x = ; }',
+			'void main(void) { x = y; }',
+			'int f(int n) { if (n) return 1; } void main(void) { output(f(1)); }',
+			'int a[2000]; void main(void) { a[0] = 1; }',
+			'int a[1020]; void main(void) { a[0] = 1; output(a[0]); }',
+			`void main(void) { int x; x = 0; ${'x = x * 3 + input() - 1; output(x); '.repeat(60)} }`,
+			''
+		];
+		const phases = new Set<string>();
+		for (const source of sources) {
+			const c = compile(source);
+			expect(c.diagnostics.length).toBeGreaterThan(0);
+			for (const d of c.diagnostics) {
+				phases.add(d.phase);
+				expect(d.span.line).toBeGreaterThanOrEqual(1);
+				expect(d.span.column).toBeGreaterThanOrEqual(1);
+				expect(d.span.end).toBeLessThanOrEqual(source.length);
+			}
+		}
+		expect([...phases].sort()).toEqual(['codegen', 'parser', 'scanner', 'semantic']);
 	});
 
 	it('a warning does not stop the compilation', () => {
@@ -423,6 +466,25 @@ describe('compile', () => {
 		expect(
 			interpret(copy.parse!.program, copy.semantic!, [3, 1, 2, 0, 0, 0, 0, 0, 0, 0]).outputs
 		).toEqual([0, 0, 0, 0, 0, 0, 0, 1, 2, 3]);
+	});
+
+	it('the longest chain of operators the parser takes compiles, runs and still clones', () => {
+		// The limit on the depth of the tree is what keeps a Compilation cloneable.
+		const source = `void main(void) { int x; x = 1${' + 1'.repeat(490)}; output(x); }`;
+		const c = compile(source);
+		expect(c.stoppedAt).toBeNull();
+		expect(runCompilation(c, [])!.outputs).toEqual([491]);
+		expect(interpretCompilation(c, [])!.outputs).toEqual([491]);
+		const copy = structuredClone(c) as Compilation;
+		expect(runCompilation(copy, [])!.outputs).toEqual([491]);
+		// A longer one stops in the parser, as an expression that is too long.
+		const longer = compile(source.replace('x = 1', `x = 1${' + 1'.repeat(20)}`));
+		expect(longer.stoppedAt).toBe('parser');
+		expect(longer.diagnostics.map((d) => d.message)).toEqual([
+			'This expression is too long for this compiler: its chain of operators makes the syntax tree more than 500 levels deep.'
+		]);
+		const { span } = longer.diagnostics[0];
+		expect(longer.source.slice(span.start, span.end)).toMatch(/^1( \+ 1)+$/);
 	});
 
 	it('compiling twice gives the same result', () => {
@@ -514,7 +576,7 @@ describe('robustness', () => {
 			expect(c.stoppedAt === null).toBe(!c.diagnostics.some((d) => d.severity === 'error'));
 			for (const d of c.diagnostics) {
 				expect(d.message.length).toBeGreaterThan(5);
-				if (d.span) expect(d.span.line).toBeGreaterThanOrEqual(1);
+				expect(d.span.line).toBeGreaterThanOrEqual(1);
 			}
 			if (c.stoppedAt !== null) continue;
 			// Whatever the damage did to the program's meaning, running it ends in a stop reason.
@@ -727,6 +789,92 @@ int t2(int t3, int L2) { int t1; t1 = t3 * L2 + L1; return t1 - t2_(t3); }
 void main(void) { int t4; t1 = 5; L1 = 7; t4 = t2(2, 3) + t1 * (L1 - 1); if (t4 > t1) output(t4); output(t2(t1, L1)); }`;
 		expect(agreed(fixed, [], 'extended')).toEqual({ stop: 'halted', outputs: [36, 32] });
 	});
+
+	it('extended identifiers: a variable L1 next to the label L1', () => {
+		const source =
+			'void main(void) { int L1; int t1; L1 = input(); if (L1) t1 = L1 + 1; else t1 = 0; output(t1); }';
+		expect(agreed(source, [4], 'extended')).toEqual({ stop: 'halted', outputs: [5] });
+		expect(agreed(source, [0], 'extended')).toEqual({ stop: 'halted', outputs: [0] });
+		const c = compile(source, { identifiers: 'extended', optimize: false });
+		const text = c.ir!.quads.map(quadText);
+		expect(text).toContain('if_false L1.2 goto L1');
+		expect(text).toContain('L1:');
+		expect(text).toContain('t1.2 := 0');
+		// The comment lines of the listing say the same.
+		expect(finalCode(c)!.listing).toContain('* if_false L1.2 goto L1');
+		expect(finalCode(c)!.listing).not.toContain('goto L1.2');
+	});
+});
+
+describe('data memory at its limit', () => {
+	// Programs without recursion in which every function is reached one way, with
+	// sizes around the 1024 cells: the code generator's verdict is the machine's.
+	const shapes: [string, (n: number) => string][] = [
+		[
+			'a global array',
+			(n) => `int a[${n}]; void main(void) { a[${n - 1}] = 5; output(a[${n - 1}]); }`
+		],
+		['a local array of main', (n) => `void main(void) { int a[${n}]; a[0] = 5; output(a[0]); }`],
+		[
+			'a local array of a function',
+			(n) =>
+				`int f(int v) { int a[${n}]; a[0] = v; return a[0] + 1; } void main(void) { output(f(4)); }`
+		],
+		[
+			'an array handed down two calls',
+			(n) =>
+				`void set(int v[], int i) { v[i] = 5; } void fill(int v[]) { set(v, 0); } void main(void) { int a[${n}]; fill(a); output(a[0]); }`
+		],
+		[
+			'globals and locals together',
+			(n) =>
+				`int g[500]; int f(void) { int a[${n - 500}]; a[0] = g[0] + 5; return a[0]; } void main(void) { output(f()); }`
+		]
+	];
+
+	for (const [name, source] of shapes) {
+		it(`${name}: what compiles runs, and what does not would run out of memory`, () => {
+			const verdicts = new Set<string>();
+			for (let n = 1000; n <= 1030; n++) {
+				for (const optimize of [false, true]) {
+					const c = compile(source(n), { optimize });
+					const reference = interpretCompilation(c, [])!;
+					verdicts.add(String(c.stoppedAt));
+					if (c.stoppedAt === null) {
+						expect([n, runCompilation(c, [])!.stop]).toEqual([n, 'halted']);
+						expect(runCompilation(c, [])!.outputs).toEqual(reference.outputs);
+						expect([n, reference.stop]).toEqual([n, 'halted']);
+						expect(reference.outputs).toHaveLength(1);
+						continue;
+					}
+					expect(c.stoppedAt).toBe('codegen');
+					// One report for each function that cannot be entered.
+					expect(c.diagnostics.length).toBeGreaterThanOrEqual(1);
+					for (const d of c.diagnostics) expect(d.message).toContain('cells of data memory');
+					// Run all the same, the code stops where the diagnostic says it must.
+					expect([n, runTM(c.codegen!.peephole.code, []).stop]).toEqual([n, 'memory-error']);
+					expect(runTM(c.codegen!.peephole.code, []).outputs).toEqual([]);
+				}
+			}
+			// The sizes straddle the limit.
+			expect([...verdicts].sort()).toEqual(['codegen', 'null']);
+		});
+
+		it(`${name}: the interpreter never stops where the compiled program runs`, () => {
+			let stopped = 0;
+			for (let n = 1000; n <= 1030; n++) {
+				const c = compile(source(n));
+				const reference = interpretCompilation(c, [])!;
+				expect(['halted', 'memory-error']).toContain(reference.stop);
+				if (reference.stop === 'memory-error') {
+					stopped++;
+					expect([n, c.stoppedAt]).toEqual([n, 'codegen']);
+					expect(reference.outputs).toEqual([]);
+				}
+			}
+			expect(stopped).toBeGreaterThan(0);
+		});
+	}
 });
 
 describe('random programs', () => {

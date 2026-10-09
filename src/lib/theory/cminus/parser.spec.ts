@@ -497,13 +497,51 @@ describe('limits', () => {
 	});
 
 	it('a long chain of operators is an error, not a crash', () => {
+		const tooLong = `This expression is too long for this compiler: its chain of operators makes the syntax tree more than ${MAX_TREE_DEPTH} levels deep.`;
 		const chain = `x = 1${' + 1'.repeat(20000)};`;
 		const r = parseSource(inMain(chain));
-		expect(r.diagnostics.at(-1)?.message).toBe(
-			`This is nested more than ${MAX_TREE_DEPTH} levels deep.`
-		);
+		expect(r.diagnostics.map((d) => d.message)).toEqual([tooLong]);
 		const fine = parseSource(inMain(`x = 1${' + 1'.repeat(400)};`));
 		expect(fine.ok).toBe(true);
+	});
+
+	it('a flat expression that is too long is not called nested', () => {
+		const tooLong = `This expression is too long for this compiler: its chain of operators makes the syntax tree more than ${MAX_TREE_DEPTH} levels deep.`;
+		// Nothing is nested in 1+1+…+1: the message says the expression is long, and marks it.
+		const sum = Array(600).fill('1').join('+');
+		const source = `void main(void){ int x; x = ${sum}; }`;
+		const r = parseSource(source);
+		expect(r.diagnostics.map((d) => d.message)).toEqual([tooLong]);
+		const span = r.diagnostics[0].span!;
+		expect(span.start).toBe(source.indexOf('1+1'));
+		expect(source.slice(span.start, span.end)).toMatch(/^1(\+1)+$/);
+		expect(span.end - span.start).toBeGreaterThan(MAX_TREE_DEPTH);
+		// Just over the limit, the statement around the chain is what passes it; the chain is still named.
+		const edge = (operators: number) =>
+			parseSource(`void main(void){ int x; x = 1${' * 1'.repeat(operators)}; }`);
+		expect(edge(MAX_TREE_DEPTH - 6).ok).toBe(true);
+		const over = edge(MAX_TREE_DEPTH - 3);
+		expect(over.diagnostics.map((d) => d.message)).toEqual([tooLong]);
+		// Mixed operators and operands of every kind are one chain.
+		const mixed = parseSource(inMain(`x = a[1]${' - f(2) * x / 3 + (y = 4)'.repeat(300)};`));
+		expect(mixed.diagnostics.map((d) => d.message)).toEqual([tooLong]);
+		const relational = parseSource(inMain(`if (0 < 1${' + x'.repeat(600)}) ;`));
+		expect(relational.diagnostics.map((d) => d.message)).toEqual([tooLong]);
+	});
+
+	it('a tree made deep by nesting is called nested', () => {
+		// Four levels of the tree for each subscript: Index, <, +, *.
+		const nest = (n: number) => `x = ${'a[0 < 0 + 0 * '.repeat(n)}0${']'.repeat(n)};`;
+		expect(parseSource(inMain(nest(100))).ok).toBe(true);
+		const r = parseSource(inMain(nest(130)));
+		expect(r.diagnostics.map((d) => d.message)).toEqual([
+			`This is nested more than ${MAX_TREE_DEPTH} levels deep.`
+		]);
+		// A short chain inside deep nesting does not change that.
+		const both = parseSource(inMain(nest(130).replace('* 0]', `* 0${' + 1'.repeat(40)}]`)));
+		expect(both.diagnostics.map((d) => d.message)).toEqual([
+			`This is nested more than ${MAX_TREE_DEPTH} levels deep.`
+		]);
 	});
 
 	it('nesting up to the limit parses', () => {

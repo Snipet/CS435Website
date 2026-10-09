@@ -3,7 +3,7 @@ import { IADDR_SIZE, resetMachine, stepTM } from '$lib/tools/tiny-vm/machine';
 import { parseTM } from '$lib/tools/tiny-vm/parse';
 import type { TmCode } from './codegen';
 import { compile } from './compile';
-import { DEFAULT_STEP_BUDGET, instructionMemory, runTM } from './run';
+import { DEFAULT_STEP_BUDGET, instructionMemory, isLoadable, runTM } from './run';
 
 function code(source: string, optimize = true): TmCode {
 	const c = compile(source, { optimize });
@@ -148,9 +148,12 @@ describe('runTM', () => {
 			pc: null,
 			outputs: []
 		});
+		expect(isLoadable(padded)).toBe(false);
 		// Exactly 1024 instructions load.
 		const full: TmCode = { ...tm, instructions: padded.instructions.slice(0, IADDR_SIZE) };
 		expect(runTM(full, []).pc).not.toBeNull();
+		expect(isLoadable(full)).toBe(true);
+		expect(isLoadable(tm)).toBe(true);
 	});
 
 	it('a wild jump out of instruction memory is a memory error', () => {

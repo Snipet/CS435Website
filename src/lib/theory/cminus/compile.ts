@@ -13,10 +13,10 @@ import { interpret, type InterpretOptions, type InterpretResult } from './interp
 import { generateIr, type IrProgram } from './ir';
 import { optimize, type OptimizeResult } from './optimize';
 import { parse, type ParseResult } from './parser';
-import { runTM, type RunOptions, type RunResult } from './run';
+import { isLoadable, runTM, type RunOptions, type RunResult } from './run';
 import { scan, type IdentifierMode, type ScanResult } from './scanner';
 import { analyze, type SemanticResult } from './semantic';
-import type { SourceDiagnostic } from './tokens';
+import type { SourceDiagnostic, SourceSpan } from './tokens';
 
 export type Phase = 'scanner' | 'parser' | 'semantic' | 'ir' | 'optimizer' | 'codegen';
 
@@ -40,6 +40,8 @@ export interface CompileOptions {
 export interface PhaseDiagnostic extends SourceDiagnostic {
 	/** The phase that reported it. */
 	phase: Phase;
+	/** Where in the source: every diagnostic of a compilation has a place. */
+	span: SourceSpan;
 }
 
 export interface Compilation {
@@ -83,7 +85,11 @@ export function compile(source: string, options: CompileOptions = {}): Compilati
 	};
 	/** Collects a phase's diagnostics; true when the phase failed. */
 	const failed = (phase: Phase, ds: readonly SourceDiagnostic[]): boolean => {
-		for (const d of ds) c.diagnostics.push({ ...d, phase });
+		// Every phase gives its diagnostics a span; the start of the text would stand in for a missing one.
+		for (const d of ds) {
+			const span = d.span ?? { start: 0, end: 0, line: 1, column: 1, source: null };
+			c.diagnostics.push({ ...d, phase, span });
+		}
 		if (!hasErrors(ds)) return false;
 		c.stoppedAt = phase;
 		return true;
@@ -109,6 +115,16 @@ export function codeQuads(c: Compilation): IrProgram | null {
 /** The TM code to run (after the peephole pass); null when the program did not compile. */
 export function finalCode(c: Compilation): TmCode | null {
 	return c.stoppedAt === null && c.codegen ? c.codegen.peephole.code : null;
+}
+
+/**
+ * The TM code from before the peephole pass, to run it next to `finalCode`.
+ * Null when the program did not compile, and when this longer code does not
+ * fit in instruction memory although the final code does (`codegen.code` is
+ * still there to show).
+ */
+export function codeBeforePeephole(c: Compilation): TmCode | null {
+	return c.stoppedAt === null && c.codegen && isLoadable(c.codegen.code) ? c.codegen.code : null;
 }
 
 /** Runs the compiled program on the TINY Machine; null when it did not compile. */

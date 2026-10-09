@@ -10,7 +10,18 @@
  * local variable starts at 0, and an int function that ends without a return
  * gives 0. It checks both bounds of a subscript; compiled code only checks
  * for a negative one.
+ *
+ * Memory. The interpreter has no stack of cells, but it holds no storage the
+ * machine could not: the global variables together with one activation record
+ * (2 cells, the parameters and the locals; there are no temporaries here) must
+ * fit in the machine's data memory. That is checked for main before the
+ * program starts and for every other function when it is called; a record
+ * that does not fit stops the run with `memory-error`, and the code generator
+ * refuses the same program. So does a call nested deeper than `maxCallDepth`.
+ * A variable gets its storage when it is first used, so the work of a run is
+ * bounded by its steps, whatever the program declares.
  */
+import { DADDR_SIZE } from '$lib/tools/tiny-vm/machine';
 import {
 	isArithOp,
 	type Call,
@@ -21,8 +32,8 @@ import {
 	type Stmt
 } from './ast';
 import type { StopReason } from './run';
-import { arith, compare } from './runtime';
-import type { SemanticResult } from './semantic';
+import { FRAME_HEADER, arith, compare } from './runtime';
+import type { FunctionInfo, SemanticResult } from './semantic';
 import type { SourceSpan } from './tokens';
 
 /** Statements and expressions evaluated at most, unless `maxSteps` says otherwise. */
@@ -45,8 +56,14 @@ export interface InterpretResult {
 	stop: StopReason;
 	/** Statements executed plus expression nodes evaluated. */
 	steps: number;
-	/** Id of the node at which it stopped; null when main returned. */
+	/**
+	 * Id of the node at which it stopped: the expression or statement, the call
+	 * whose record does not fit or that nests too deep, or the declaration of
+	 * main when the program does not fit before it starts. Null when main
+	 * returned.
+	 */
 	node: number | null;
+	/** The source text of that node (of main, only its head). */
 	span: SourceSpan | null;
 }
 
@@ -87,14 +104,15 @@ export function interpret(
 	}
 	const frameOf = new Map(semantic.functions.map((f) => [f.symbol, f] as const));
 
-	const allocate = (symbolId: number): Storage => {
-		const symbol = semantic.symbols[symbolId];
-		return symbol.kind === 'array' ? new Int32Array(symbol.size ?? 1) : { value: 0 };
-	};
+	/**
+	 * True when the global variables and the record of the function (without
+	 * temporaries) fit in the machine's data memory. Only a function that passes
+	 * runs, so no array that gets storage is larger than that memory.
+	 */
+	const fits = (info: FunctionInfo | undefined): boolean =>
+		semantic.globalsSize + (info?.frameSize ?? FRAME_HEADER) <= DADDR_SIZE;
+	/** Symbol id → storage: the global variables, and the variables of the call in progress. */
 	const globals = new Map<number, Storage>();
-	for (const id of semantic.scopes[0].symbols) {
-		if (semantic.symbols[id].kind !== 'function') globals.set(id, allocate(id));
-	}
 	let frame = new Map<number, Storage>();
 
 	const tick = (node: AstNode) => {
@@ -103,10 +121,23 @@ export function interpret(
 			throw new Stop('step-budget', node);
 		}
 	};
+	/**
+	 * The storage of the variable a node names. A parameter has its storage from
+	 * the call. A global or local variable gets it, all zeros, when it is first
+	 * used: a call costs nothing for the locals it leaves alone.
+	 */
 	const storage = (node: AstNode): Storage => {
 		const id = semantic.refs.get(node.id);
-		const found = id === undefined ? undefined : (frame.get(id) ?? globals.get(id));
-		if (!found) throw new Error(`interpret: ${node.kind} ${node.id} has no storage`);
+		if (id === undefined) throw new Error(`interpret: ${node.kind} ${node.id} is not resolved`);
+		let found = frame.get(id) ?? globals.get(id);
+		if (!found) {
+			const symbol = semantic.symbols[id];
+			if (symbol.kind !== 'variable' && symbol.kind !== 'array') {
+				throw new Error(`interpret: ${symbol.kind} ${symbol.name} has no storage`);
+			}
+			found = symbol.kind === 'array' ? new Int32Array(symbol.size ?? 1) : { value: 0 };
+			(symbol.depth === 0 ? globals : frame).set(id, found);
+		}
 		return found;
 	};
 	const cell = (node: AstNode): Cell => storage(node) as Cell;
@@ -135,14 +166,13 @@ export function interpret(
 		}
 		const decl = functions.get(symbolId)!;
 		const info = frameOf.get(symbolId)!;
-		if (depth >= maxDepth) throw new Stop('memory-error', e);
+		if (depth >= maxDepth || !fits(info)) throw new Stop('memory-error', e);
 		const caller = frame;
 		const callee = new Map<number, Storage>();
 		info.params.forEach((id, i) => {
 			const arg = args[i];
 			callee.set(id, typeof arg === 'number' ? { value: arg } : arg);
 		});
-		for (const id of info.locals) callee.set(id, allocate(id));
 		frame = callee;
 		depth++;
 		// Reaching the end of the body without a return gives 0.
@@ -211,20 +241,18 @@ export function interpret(
 		}
 	};
 
-	const done = (stop: StopReason, node: AstNode | null): InterpretResult => ({
-		outputs,
-		stop,
-		steps,
-		node: node?.id ?? null,
-		span: node?.span ?? null
-	});
+	const done = (
+		stop: StopReason,
+		node: AstNode | null,
+		span: SourceSpan | null = node?.span ?? null
+	): InterpretResult => ({ outputs, stop, steps, node: node?.id ?? null, span });
 
 	const main = program.decls[program.decls.length - 1];
 	if (!main || main.kind !== 'FunDecl') return done('halted', null);
+	const info = frameOf.get(semantic.refs.get(main.id)!);
+	if (!fits(info)) return done('memory-error', main, main.headSpan);
 	try {
 		depth = 1;
-		const info = frameOf.get(semantic.refs.get(main.id)!);
-		for (const id of info?.locals ?? []) frame.set(id, allocate(id));
 		execute(main.body);
 		return done('halted', null);
 	} catch (e) {

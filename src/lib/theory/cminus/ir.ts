@@ -34,7 +34,7 @@
  * a quad a variable has its source name, except that a name that could stand
  * for two things in one function gets a number: the local of a nested block
  * that hides (or repeats) another name is `x.2`, and so is a variable that is
- * spelled like a temporary.
+ * spelled like a temporary or a label (`t1.2`, `L1.2`).
  */
 import {
 	childrenOf,
@@ -112,7 +112,8 @@ export interface IrProgram {
 	functions: IrFunction[];
 }
 
-const TEMP = /^t[0-9]+$/;
+/** The names the code makes up itself: temporaries `t1, t2, …` and labels `L1, L2, …`. */
+const GENERATED_NAME = /^[tL][0-9]+$/;
 
 export const constant = (value: number): Operand => ({ kind: 'const', value });
 export const temporary = (n: number): Operand => ({ kind: 'temp', name: `t${n}` });
@@ -452,14 +453,17 @@ export function generateIr(program: Program, semantic: SemanticResult): IrProgra
 /**
  * The names a function's quads use: its parameters and outermost locals keep
  * their names, then the globals they do not hide, then the locals of nested
- * blocks. A name that is taken (or looks like a temporary) gets `.2`, `.3`, ….
+ * blocks. A name that is taken (or looks like a temporary or a label) gets
+ * `.2`, `.3`, ….
  */
 function nameSymbols(semantic: SemanticResult, scopeId: number, fn: number): Map<number, string> {
 	const names = new Map<number, string>();
 	const taken = new Set<string>();
 	const assign = (symbol: SymbolInfo) => {
 		let name = symbol.name;
-		for (let k = 2; taken.has(name) || TEMP.test(name); k++) name = `${symbol.name}.${k}`;
+		for (let k = 2; taken.has(name) || GENERATED_NAME.test(name); k++) {
+			name = `${symbol.name}.${k}`;
+		}
 		taken.add(name);
 		names.set(symbol.id, name);
 	};
