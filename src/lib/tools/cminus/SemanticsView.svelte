@@ -8,7 +8,7 @@
 	import AstOutline from './AstOutline.svelte';
 	import DiagnosticList from './DiagnosticList.svelte';
 	import { revealMarked } from './reveal';
-	import { plural, within, type SelectionMarks, type SourceRange } from './selection';
+	import { plural, rangeOfUse, within, type SelectionMarks, type SourceRange } from './selection';
 	import MoreRows from './MoreRows.svelte';
 	import { SHORT_LIST, declaredSymbols, firstOf, phaseDiagnostics, scopeViews } from './views';
 
@@ -39,7 +39,7 @@
 	<section class="cm-section">
 		<h3 class="cm-heading">Diagnostics</h3>
 		{#if diagnostics.length}
-			<DiagnosticList {diagnostics} label="Semantic diagnostics" {onselect} />
+			<DiagnosticList {c} {diagnostics} label="Semantic diagnostics" {onselect} />
 		{:else}
 			<p class="cm-note">No errors and no warnings.</p>
 		{/if}
@@ -105,7 +105,7 @@
 													type="button"
 													class={['cm-chip', { 'cm-marked': inSelection(use.span) }]}
 													aria-label="Use of {s.name}, line {use.line}"
-													onclick={() => onselect(use.range)}>{use.line}</button
+													onclick={() => onselect(rangeOfUse(c, use.span))}>{use.line}</button
 												>
 											{:else}
 												<span class="words cm-muted">not used</span>

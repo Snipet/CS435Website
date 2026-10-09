@@ -52,7 +52,6 @@ import {
 	plural,
 	rangeOf,
 	rangeOfDeclaration,
-	rangeOfUse,
 	type SourceRange
 } from './selection';
 import type { TabId, Version } from './state';
@@ -237,7 +236,20 @@ export function stageViews(c: Compilation | null, run: RunOutput | null): StageV
 	});
 }
 
-/** The stage a tab (with its version) shows; null for the Language tab. */
+/**
+ * The version of the three-address code on display. Without the optimizer
+ * there is one version only, the code as generated, whichever version was
+ * chosen while the optimizer was on.
+ */
+export function irVersionShown(c: Compilation | null, chosen: Version): Version {
+	return c && !c.options.optimize ? 'before' : chosen;
+}
+
+/**
+ * The stage a tab shows, given the version each of the two-version tabs has
+ * on display (`irVersionShown` for the three-address code); null for the
+ * Language tab.
+ */
 export function stageOfTab(tab: TabId, ir: Version, code: Version): StageId | null {
 	const version = tab === 'ir' ? ir : tab === 'code' ? code : undefined;
 	return STAGES.find((s) => s.tab === tab && s.version === version)?.id ?? null;
@@ -617,7 +629,10 @@ export interface SymbolPlace {
 	line: number;
 	/** The name, where it is written. */
 	span: SourceRange;
-	/** What choosing the place selects: the declaration, or the expression the name is used in. */
+}
+
+export interface SymbolDeclaration extends SymbolPlace {
+	/** What choosing the declaration selects: `int x;`, a parameter, a function header. */
 	range: SourceRange;
 }
 
@@ -629,7 +644,12 @@ export interface SymbolRow {
 	/** "int", "int[10]", "(int, int) → int". */
 	type: string;
 	/** Where it is declared; null for input and output. */
-	declared: SymbolPlace | null;
+	declared: SymbolDeclaration | null;
+	/**
+	 * Where it is used. Choosing a use selects `rangeOfUse` of its span, which
+	 * is worked out when the use is chosen: a name can be used thousands of
+	 * times, and a table lists the first few.
+	 */
 	uses: SymbolPlace[];
 	/** "0(gp)", "-2(fp)", "-11(fp), 10 cells"; "—" for a function. */
 	storage: string;
@@ -689,11 +709,7 @@ export function scopeViews(c: Compilation): ScopeView[] {
 					s.declSpan && declRange
 						? { line: s.declSpan.line, span: rangeOf(s.declSpan), range: declRange }
 						: null,
-				uses: s.uses.map((use) => ({
-					line: use.line,
-					span: rangeOf(use),
-					range: rangeOfUse(c, use)
-				})),
+				uses: s.uses.map((use) => ({ line: use.line, span: rangeOf(use) })),
 				storage,
 				builtin: s.builtin
 			};
@@ -834,8 +850,13 @@ export interface ListingInstruction {
 export type ListingRow = ListingComment | ListingInstruction;
 
 export interface ListingSection {
-	/** 'prelude', or the function's name. */
+	/**
+	 * Tells the sections of one listing apart: the section's place in the
+	 * listing. (A name does not: a C- function can be called "prelude".)
+	 */
 	key: string;
+	/** The function whose code the section holds; null for the prelude. */
+	function: string | null;
 	/** "Prelude", "input", "gcd". */
 	title: string;
 	/** "addresses 14–47". */
@@ -895,9 +916,8 @@ export function listingSections(codegen: CodegenResult, version: Version): Listi
 		current.addresses = first === last ? `address ${first}` : `addresses ${first}–${last}`;
 	};
 	for (const i of code.instructions) {
-		const key = i.function ?? 'prelude';
 		let own = i.header;
-		if (!current || current.key !== key) {
+		if (!current || current.function !== i.function) {
 			const cut = current ? ownHeaderStart(i.header, i.function) : 0;
 			// Comment lines of quads that produced no instruction close the section before.
 			for (const text of i.header.slice(0, cut)) current!.rows.push({ kind: 'comment', text });
@@ -905,7 +925,8 @@ export function listingSections(codegen: CodegenResult, version: Version): Listi
 			close(i.addr - 1);
 			first = i.addr;
 			current = {
-				key,
+				key: String(sections.length),
+				function: i.function,
 				title: i.function ?? 'Prelude',
 				addresses: '',
 				frame: codegen.frames.find((f) => f.function === i.function) ?? null,

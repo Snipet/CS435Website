@@ -15,6 +15,7 @@ import {
 	rangeOf,
 	rangeOfCaret,
 	rangeOfDeclaration,
+	rangeOfDiagnostic,
 	rangeOfUse,
 	sameRange,
 	trimRange,
@@ -80,6 +81,28 @@ describe('ranges', () => {
 		expect(plural(0, 'token')).toBe('0 tokens');
 		expect(plural(1234, 'quad')).toBe('1,234 quads');
 		expect(plural(2, 'entry', 'entries')).toBe('2 entries');
+	});
+
+	it('lineAt counts the line breaks before an offset, for any text and offset', () => {
+		/** The definition, one character at a time. */
+		const counted = (text: string, offset: number) => {
+			let line = 1;
+			for (let i = 0; i < Math.min(offset, text.length); i++) if (text[i] === '\n') line++;
+			return line;
+		};
+		const texts = ['', 'a', '\n', '\n\n', 'a\n', '\na', 'ab\n\ncd\n', GCD, SORT, 'x;\n'.repeat(40)];
+		for (const text of texts) {
+			for (let offset = 0; offset <= text.length + 2; offset++) {
+				expect(lineAt(text, offset), `${JSON.stringify(text.slice(0, 12))} at ${offset}`).toBe(
+					counted(text, offset)
+				);
+			}
+		}
+		// Asked about one text, then another, then the first again.
+		expect(lineAt('a\nb', 2)).toBe(2);
+		expect(lineAt('a b', 2)).toBe(1);
+		expect(lineAt('a\nb', 2)).toBe(2);
+		expect(lineAt('a\nb', -1)).toBe(1);
 	});
 });
 
@@ -350,6 +373,53 @@ describe('from a click to a range', () => {
 		expect(textOf(c, rangeOfDeclaration(c, symbol('sort')))).toBe('void sort(int a[], int count)');
 		expect(rangeOfDeclaration(c, symbol('input'))).toBeNull();
 		expect(rangeOfDeclaration(c, symbol('output'))).toBeNull();
+	});
+
+	it('a diagnostic selects the text it is about', () => {
+		const undeclared = compile(presetById('undeclared')!.value.source);
+		expect(
+			undeclared.diagnostics.map((d) => textOf(undeclared, rangeOfDiagnostic(undeclared, d.span)))
+		).toEqual(['y', 'z']);
+		const illegal = compile('void main(void) { output(7 % 2); }');
+		expect(illegal.stoppedAt).toBe('scanner');
+		expect(textOf(illegal, rangeOfDiagnostic(illegal, illegal.diagnostics[0].span))).toBe('%');
+	});
+
+	it('a diagnostic about the end of the program selects the last token before it', () => {
+		// The parser reports what is missing at the end with an empty span: there is no character there.
+		const cases: [source: string, selected: string][] = [
+			['void main(void) {', '{'],
+			['void main(void) { output(1)', ')'],
+			['void main(void) { output(1) \n\n  ', ')'],
+			['int x', 'x'],
+			['void main(void) { output(1); /* the end */', ';']
+		];
+		for (const [source, selected] of cases) {
+			const broken = compile(source);
+			expect(broken.stoppedAt, source).toBe('parser');
+			expect(broken.diagnostics.length, source).toBeGreaterThan(0);
+			for (const d of broken.diagnostics) {
+				expect(d.span.end, source).toBe(d.span.start);
+				const range = rangeOfDiagnostic(broken, d.span);
+				expect(textOf(broken, range), source).toBe(selected);
+				// The page selects it: the range is not empty and has a token to mark.
+				expect(marksFor(broken, range).tokens.size, source).toBe(1);
+			}
+		}
+	});
+
+	it('an empty place selects the token after it when none comes before, and nothing without tokens', () => {
+		const c = compile('  int x;');
+		expect(textOf(c, rangeOfDiagnostic(c, { start: 0, end: 0 }))).toBe('int');
+		expect(textOf(c, rangeOfDiagnostic(c, { start: 5, end: 5 }))).toBe('int');
+		expect(textOf(c, rangeOfDiagnostic(c, { start: 6, end: 6 }))).toBe('int');
+		expect(textOf(c, rangeOfDiagnostic(c, { start: 7, end: 7 }))).toBe('x');
+		expect(textOf(c, rangeOfDiagnostic(c, { start: 8, end: 8 }))).toBe(';');
+		for (const source of ['', '   \n', '/* nothing but a comment */']) {
+			const empty = compile(source);
+			expect(empty.diagnostics, source).toHaveLength(1);
+			expect(rangeOfDiagnostic(empty, empty.diagnostics[0].span), source).toBeNull();
+		}
 	});
 });
 

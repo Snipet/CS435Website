@@ -10,7 +10,7 @@
 	import { revealMarked } from './reveal';
 	import { plural, rangeOf, type SelectionMarks, type SourceRange } from './selection';
 	import type { Version } from './state';
-	import { ROW_LIMIT, capGroups, logRows, quadGroups } from './views';
+	import { ROW_LIMIT, capGroups, irVersionShown, logRows, quadGroups } from './views';
 
 	interface Props {
 		c: Compilation;
@@ -29,7 +29,7 @@
 	const ir = $derived(c.ir!);
 	const optimized = $derived(c.optimized);
 	/** Without the optimizer there is one version only. */
-	const shownVersion = $derived<Version>(optimized ? version : 'before');
+	const shownVersion = $derived<Version>(irVersionShown(c, version));
 	const program = $derived(shownVersion === 'after' && optimized ? optimized.program : ir);
 	const marked = $derived(shownVersion === 'after' ? marks.optimized : marks.quads);
 	const groups = $derived(quadGroups(program, shownVersion === 'before' ? optimized : null));

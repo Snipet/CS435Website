@@ -56,7 +56,7 @@
 
 <div class="cm-stack">
 	{#if diagnostics.length}
-		<DiagnosticList {diagnostics} label="Parser diagnostics" {onselect} />
+		<DiagnosticList {c} {diagnostics} label="Parser diagnostics" {onselect} />
 		<p class="cm-note">
 			The tree below holds what parsed: a statement or declaration with a syntax error is left out.
 		</p>

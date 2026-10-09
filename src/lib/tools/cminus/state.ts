@@ -30,7 +30,11 @@ export interface CminusState {
 	/** `letters`: ID = letter letter*. `extended`: letter (letter | digit | _)*. */
 	identifiers: IdentifierMode;
 	tab: TabId;
-	/** Intermediate code shown: as generated, or after the optimizer. */
+	/**
+	 * Intermediate code chosen: as generated, or after the optimizer. With the
+	 * optimizer off there is the code as generated only (`irVersionShown` in
+	 * views.ts); the choice is kept for when the optimizer is on again.
+	 */
 	ir: Version;
 	/** Target code shown: before or after the peephole pass. */
 	code: Version;

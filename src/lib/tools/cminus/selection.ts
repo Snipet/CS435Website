@@ -200,6 +200,25 @@ export function rangeOfDeclaration(c: Compilation, symbol: SymbolInfo): SourceRa
 	return rangeOf(node.kind === 'FunDecl' ? node.headSpan : node.span);
 }
 
+/**
+ * The range a diagnostic selects: the text it is about. A diagnostic about
+ * the end of the program has no text (its span is empty, as there is no
+ * character to point at): it selects the token just before that place, or the
+ * first one after it. Null when the program has no token to select.
+ */
+export function rangeOfDiagnostic(c: Compilation, span: SourceRange): SourceRange | null {
+	if (span.end > span.start) return rangeOf(span);
+	let before: SourceSpan | null = null;
+	// Tokens are in source order: the last one that ends at or before the place wins.
+	for (const t of c.scan.tokens) {
+		if (t.type === 'ENDFILE' || t.span.end <= t.span.start) continue;
+		if (t.span.end <= span.start) before = t.span;
+		else if (!before) return rangeOf(t.span);
+		else break;
+	}
+	return before ? rangeOf(before) : null;
+}
+
 const touches = (span: SourceRange, offset: number) => span.start <= offset && offset <= span.end;
 
 /**
@@ -291,12 +310,31 @@ export function plural(n: number, noun: string, many = `${noun}s`): string {
 	return `${n.toLocaleString('en-US')} ${n === 1 ? noun : many}`;
 }
 
+/** Where each line starts in the text asked about last: one text is asked about many times. */
+let lineTable: { source: string; starts: number[] } | null = null;
+
+function lineStarts(source: string): number[] {
+	if (lineTable?.source !== source) {
+		const starts = [0];
+		for (let i = source.indexOf('\n'); i !== -1; i = source.indexOf('\n', i + 1))
+			starts.push(i + 1);
+		lineTable = { source, starts };
+	}
+	return lineTable.starts;
+}
+
 /** 1-based line of an offset of the source. */
 export function lineAt(source: string, offset: number): number {
-	let line = 1;
-	for (let i = source.indexOf('\n'); i !== -1 && i < offset; i = source.indexOf('\n', i + 1))
-		line++;
-	return line;
+	const starts = lineStarts(source);
+	// The number of lines that start at or before the offset, by binary search.
+	let low = 0;
+	let high = starts.length;
+	while (low < high) {
+		const mid = (low + high) >> 1;
+		if (starts[mid] <= offset) low = mid + 1;
+		else high = mid;
+	}
+	return Math.max(1, low);
 }
 
 /** The selected text on one line: runs of white space become one space; long text is cut. */

@@ -443,6 +443,18 @@ describe('TargetView', () => {
 		expect(pickable).toBe(78 - 14);
 	});
 
+	it('shows a function named prelude in a section of its own, after the prelude', () => {
+		const c = compile('int prelude(void) { return 1; }\nvoid main(void) { output(prelude()); }');
+		for (const version of ['before', 'after'] as const) {
+			const html = render(TargetView, { props: { ...props, c, version } }).body;
+			expect(count(html, 'class="group')).toBe(5);
+			const shown = text(html);
+			expect(shown).toContain('Prelude addresses 0–6');
+			expect(shown).toMatch(/prelude addresses 14–\d+/);
+			expect(shown).toContain('* function prelude: ');
+		}
+	});
+
 	it('shows what the peephole pass removed, before that pass', () => {
 		const html = render(TargetView, { props: { ...props, version: 'before' } }).body;
 		const shown = text(html);
@@ -614,12 +626,42 @@ describe('DiagnosticList', () => {
 		const c = compile(`void main(void) { ${'q; '.repeat(8)}}`);
 		const diagnostics = phaseDiagnostics(c, 'semantic');
 		const html = render(DiagnosticList, {
-			props: { diagnostics, label: 'Semantic diagnostics', onselect, max: 5 }
+			props: { c, diagnostics, label: 'Semantic diagnostics', onselect, max: 5 }
 		}).body;
 		expect(count(html, '<button')).toBe(5);
 		expect(text(html)).toContain('line 1, col 19');
 		expect(text(html)).toContain('3 more not listed.');
 		expect(html).toContain('aria-label="Semantic diagnostics"');
+	});
+
+	it('makes a diagnostic about the end of the program a button too', () => {
+		// "Expected ";" …" and "Expected "}" …", both found the end of the program: their spans are empty.
+		const c = compile('void main(void) { output(1)');
+		const diagnostics = phaseDiagnostics(c, 'parser');
+		expect(diagnostics).toHaveLength(2);
+		const html = render(DiagnosticList, {
+			props: { c, diagnostics, label: 'Parser diagnostics', onselect }
+		}).body;
+		expect(count(html, '<button')).toBe(2);
+		expect(text(html)).toContain('found the end of the program. line 1, col 28');
+		// Through the Syntax tree tab as well.
+		const tab = render(SyntaxView, {
+			props: { c, marks: NO_MARKS, selection: null, grammarHref: null, onselect }
+		}).body;
+		expect(count(tab, /<button[^>]*class="what/g)).toBe(2);
+	});
+
+	it('lists a diagnostic of a program without tokens as text: there is nothing to select', () => {
+		for (const source of ['', '/* nothing here */']) {
+			const c = compile(source);
+			const diagnostics = phaseDiagnostics(c, 'parser');
+			const html = render(DiagnosticList, {
+				props: { c, diagnostics, label: 'Parser diagnostics', onselect }
+			}).body;
+			expect(count(html, '<li')).toBe(1);
+			expect(count(html, '<button')).toBe(0);
+			expect(text(html)).toContain('Expected a declaration');
+		}
 	});
 });
 

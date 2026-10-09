@@ -11,8 +11,8 @@ import {
 } from '$lib/theory/cminus';
 import { parseTM } from '$lib/tools/tiny-vm/parse';
 import { PRESETS, presetById } from './presets';
-import { nodeById, rangeOf, type SourceRange } from './selection';
-import { TABS } from './state';
+import { nodeById, rangeOf, rangeOfUse, type SourceRange } from './selection';
+import { MAX_SOURCE, TABS } from './state';
 import { runProgram, type RunOutput } from './tasks';
 import {
 	MAX_DRAWN,
@@ -36,6 +36,7 @@ import {
 	frameRows,
 	globalRows,
 	highlightSource,
+	irVersionShown,
 	keepCollapsed,
 	listingSections,
 	logRows,
@@ -211,6 +212,32 @@ describe('the phase strip', () => {
 		expect(stageOfTab('run', 'before', 'before')).toBe('machine');
 		expect(stageOfTab('language', 'before', 'before')).toBeNull();
 		expect(Object.keys(TAB_LABEL)).toEqual([...TABS]);
+	});
+
+	it('with the optimizer off, the intermediate code tab shows the generator’s stage', () => {
+		const on = compile(GCD);
+		const off = compile(GCD, { optimize: false });
+		expect(irVersionShown(on, 'before')).toBe('before');
+		expect(irVersionShown(on, 'after')).toBe('after');
+		// One version only: the choice made while the optimizer was on does not apply.
+		expect(irVersionShown(off, 'before')).toBe('before');
+		expect(irVersionShown(off, 'after')).toBe('before');
+		expect(irVersionShown(null, 'after')).toBe('after');
+
+		const current = (c: Compilation, ir: 'before' | 'after') =>
+			stageOfTab('ir', irVersionShown(c, ir), 'before');
+		expect(current(on, 'after')).toBe('optimizer');
+		expect(current(off, 'after')).toBe('icg');
+		// The stage marked as open is never the one that is switched off.
+		const stage = stageViews(off, null).find((s) => s.id === current(off, 'after'))!;
+		expect(stage).toMatchObject({ status: 'done', text: '26 quads' });
+		expect(stageViews(off, null).find((s) => s.id === 'optimizer')!.status).toBe('off');
+
+		// A program that stops before the generator: the same rule, from the options.
+		const stopped = compile(source('undeclared'), { optimize: false });
+		expect(stopped.ir).toBeNull();
+		expect(current(stopped, 'after')).toBe('icg');
+		expect(current(compile(source('undeclared')), 'after')).toBe('optimizer');
 	});
 });
 
@@ -605,9 +632,11 @@ describe('scopes and symbol tables', () => {
 		expect(text(row('numbers').declared!.range)).toBe('int numbers[10];');
 		expect(text(row('numbers').declared!.span)).toBe('numbers');
 		expect(row('numbers').uses.map((u) => u.line)).toEqual([33, 36, 39]);
-		expect(text(row('numbers').uses[0].range)).toBe('numbers[i]');
 		expect(text(row('numbers').uses[0].span)).toBe('numbers');
-		expect(text(row('numbers').uses[1].range)).toBe('numbers');
+		// A use holds the name's place only; what it selects is worked out when it is chosen.
+		expect(Object.keys(row('numbers').uses[0]).sort()).toEqual(['line', 'span']);
+		expect(text(rangeOfUse(c, row('numbers').uses[0].span))).toBe('numbers[i]');
+		expect(text(rangeOfUse(c, row('numbers').uses[1].span))).toBe('numbers');
 
 		expect(row('sort')).toMatchObject({ kind: 'function', type: '(int[], int) → void' });
 		expect(text(row('sort').declared!.range)).toBe('void sort(int a[], int count)');
@@ -626,6 +655,38 @@ describe('scopes and symbol tables', () => {
 		expect(undeclared.map((s) => s.title)).toEqual(['Global scope', 'Function main']);
 		expect(undeclared[1].symbols.map((s) => s.name)).toEqual(['x']);
 		expect(scopeViews(compile(source('missing-semicolon')))).toEqual([]);
+	});
+
+	// The page builds these tables itself, for every compilation, while the Semantics tab is open.
+	it.each([
+		['one name used thousands of times', `void main(void){int x; ${'x=x+1; '.repeat(2790)}}`],
+		['thousands of uses, one per line', `void main(void){int x;\n${'x=x;\n'.repeat(3990)}}`],
+		['hundreds of if statements', `void main(void){int x; ${'if(x<1)x=1;else x=2; '.repeat(940)}}`],
+		['thousands of blocks, one per line', `void main(void){\n${'{}\n'.repeat(6600)}}`],
+		['thousands of declarations', `void main(void){\n${'int a;\n'.repeat(2800)}}`],
+		['a thousand functions', `${'void f(void){}\n'.repeat(1300)}void main(void){}`]
+	])('takes a few milliseconds for the longest program compiled: %s', (_, text) => {
+		expect(text.length).toBeGreaterThan(19_000);
+		expect(text.length).toBeLessThanOrEqual(MAX_SOURCE);
+		const c = compile(text);
+		expect(c.semantic).not.toBeNull();
+		const started = performance.now();
+		const scopes = scopeViews(c);
+		// Time that grows with uses × nodes, or with scopes × lines, is hundreds of milliseconds here.
+		expect(performance.now() - started).toBeLessThan(250);
+		expect(scopes).toHaveLength(c.semantic!.scopes.length);
+		const uses = scopes.flatMap((s) => s.symbols).flatMap((s) => s.uses);
+		expect(uses).toHaveLength(c.semantic!.symbols.reduce((n, s) => n + s.uses.length, 0));
+	});
+
+	it('names the lines of every scope of a long program', () => {
+		const c = compile(`void main(void)\n{\n${'  { }\n'.repeat(500)}  {\n    int x;\n  }\n}\n`);
+		const scopes = scopeViews(c);
+		expect(scopes).toHaveLength(503);
+		expect(scopes[1].lines).toBe('lines 1–506');
+		expect(scopes[2].lines).toBe('line 3');
+		expect(scopes[501].lines).toBe('line 502');
+		expect(scopes[502].lines).toBe('lines 503–505');
 	});
 });
 
@@ -705,13 +766,14 @@ describe('the listing', () => {
 
 	it('has a section for the prelude, input, output and every function', () => {
 		const sections = listingSections(gcd.codegen!, 'after');
-		expect(sections.map((s) => [s.key, s.title, s.addresses, s.count])).toEqual([
-			['prelude', 'Prelude', 'addresses 0–6', 7],
+		expect(sections.map((s) => [s.function, s.title, s.addresses, s.count])).toEqual([
+			[null, 'Prelude', 'addresses 0–6', 7],
 			['input', 'input', 'addresses 7–9', 3],
 			['output', 'output', 'addresses 10–13', 4],
 			['gcd', 'gcd', 'addresses 14–47', 34],
 			['main', 'main', 'addresses 48–77', 30]
 		]);
+		expect(sections.map((s) => s.key)).toEqual(['0', '1', '2', '3', '4']);
 		expect(sections[0].frame).toBeNull();
 		expect(sections.slice(1).map((s) => s.frame?.function)).toEqual([
 			'input',
@@ -736,9 +798,43 @@ describe('the listing', () => {
 					for (const s of sections.slice(3)) {
 						expect(s.rows[0]).toEqual({
 							kind: 'comment',
-							text: expect.stringMatching(new RegExp(`^function ${s.key}: `))
+							text: expect.stringMatching(new RegExp(`^function ${s.function}: `))
 						});
 					}
+					// The list is keyed by these: no two sections may share one.
+					expect(new Set(sections.map((s) => s.key)).size).toBe(sections.length);
+				}
+			}
+		}
+	);
+
+	// A C- function can have the name the first section goes by.
+	it.each([['prelude'], ['Prelude']])(
+		'keeps the code of a function named %s apart from the prelude',
+		(name) => {
+			const text = `int ${name}(void) { return 1; }\nvoid main(void) { output(${name}()); }`;
+			for (const optimize of [true, false]) {
+				const c = compile(text, { optimize });
+				expect(c.stoppedAt).toBeNull();
+				for (const version of ['before', 'after'] as const) {
+					const code = version === 'before' ? c.codegen!.code : c.codegen!.peephole.code;
+					const sections = listingSections(c.codegen!, version);
+					expect(sections.map((s) => s.function)).toEqual([null, 'input', 'output', name, 'main']);
+					expect(sections.map((s) => s.title)).toEqual([
+						'Prelude',
+						'input',
+						'output',
+						name,
+						'main'
+					]);
+					expect(new Set(sections.map((s) => s.key)).size).toBe(5);
+					expect(sections[0].frame).toBeNull();
+					expect(sections[3].frame?.function).toBe(name);
+					expect(sections[3].rows[0]).toEqual({
+						kind: 'comment',
+						text: expect.stringMatching(new RegExp(`^function ${name}: `))
+					});
+					expect(rebuilt(code, sections)).toEqual(code.listing.split('\n'));
 				}
 			}
 		}

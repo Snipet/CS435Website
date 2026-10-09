@@ -77,7 +77,7 @@
 
 <div class="cm-stack">
 	{#if diagnostics.length}
-		<DiagnosticList {diagnostics} label="Code generator diagnostics" {onselect} />
+		<DiagnosticList {c} {diagnostics} label="Code generator diagnostics" {onselect} />
 	{/if}
 
 	<div class="cm-toolbar">
@@ -112,6 +112,7 @@
 					<th scope="col" class="cm-wide">Comment</th>
 				</tr>
 			</thead>
+			<!-- Keyed by place, not by name: a function can be called "prelude" like the first section. -->
 			{#each capped.groups as section (section.key)}
 				<tbody>
 					<tr class="group">

@@ -61,6 +61,7 @@
 		blockedBy,
 		editorDiagnostics,
 		highlightSource,
+		irVersionShown,
 		selectionLineClasses,
 		stageOfTab,
 		stageViews,
@@ -257,7 +258,8 @@
 	// ---- Phases and tabs ---------------------------------------------------------
 
 	const stages = $derived(stageViews(c, run));
-	const currentStage = $derived(stageOfTab(model.tab, model.ir, model.code));
+	// The stage of the version on display: with the optimizer off, the generator's quads.
+	const currentStage = $derived(stageOfTab(model.tab, irVersionShown(c, model.ir), model.code));
 	const status = $derived(tooLarge ? 'The program is too long to compile.' : statusText(c));
 	const tabs = TABS.map((id) => ({ id, label: TAB_LABEL[id] }));
 

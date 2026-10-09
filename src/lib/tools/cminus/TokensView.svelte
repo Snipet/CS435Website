@@ -43,7 +43,7 @@
 	</div>
 
 	{#if diagnostics.length}
-		<DiagnosticList {diagnostics} label="Scanner diagnostics" {onselect} />
+		<DiagnosticList {c} {diagnostics} label="Scanner diagnostics" {onselect} />
 	{/if}
 
 	<div class="cm-box" {@attach revealMarked(selKey)}>
