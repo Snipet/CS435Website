@@ -1277,8 +1277,8 @@ returns `null` when the target tool is not registered, so hide the link in that
 case (prerendering fails on links to pages that do not exist). A tool's own
 saved state must accept its `LinkStates` shape (extra fields are allowed).
 
-`phases`, `t-diagrams` and `tiny-vm` have no `LinkStates` entry: no tool links
-to them on a state. Link to them with `toolHref(slug)`, behind
+`phases` and `t-diagrams` have no `LinkStates` entry: no tool links to them on
+a state (`tiny-vm` has one: the C- compiler opens its generated code there). Link to them with `toolHref(slug)`, behind
 `toolBySlug(slug)` for the same reason. The midterm page (§2) is the one caller
 that opens two of them on a view: it appends `encode(state)` to
 `toolHref('phases')` and `toolHref('t-diagrams')`, where `state` has the shape

@@ -281,6 +281,8 @@ function topic(text: string, options: TopicOptions = {}): Topic {
 }
 
 const PHASES = [tool('phases')];
+/** Phases the C- compiler also carries out on a whole program. */
+const COMPILED = [tool('phases'), tool('cminus')];
 const T_DIAGRAMS = [tool('t-diagrams')];
 
 export const sections: readonly Section[] = [
@@ -305,16 +307,16 @@ export const sections: readonly Section[] = [
 	},
 	{
 		id: 'phases',
-		heads: [topic('Phases of Compilation', { stars: 2, links: PHASES })],
+		heads: [topic('Phases of Compilation', { stars: 2, links: COMPILED })],
 		topics: [
 			topic('Preprocessor — macros and textual inclusion', { links: PHASES }),
-			topic('Lexer', { links: PHASES }),
-			topic('Parser', { links: PHASES }),
-			topic('Semantic Analyzer', { links: PHASES, sub: ['Type Checking', 'Symbol Table'] }),
-			topic('Intermed. Codegen', { links: PHASES }),
-			topic('Optimizer', { links: PHASES }),
-			topic('Code Generator', { links: PHASES }),
-			topic('Target Code Optimizer', { links: PHASES }),
+			topic('Lexer', { links: COMPILED }),
+			topic('Parser', { links: COMPILED }),
+			topic('Semantic Analyzer', { links: COMPILED, sub: ['Type Checking', 'Symbol Table'] }),
+			topic('Intermed. Codegen', { links: COMPILED }),
+			topic('Optimizer', { links: COMPILED }),
+			topic('Code Generator', { links: COMPILED }),
+			topic('Target Code Optimizer', { links: COMPILED }),
 			topic('Assembler', { links: PHASES }),
 			topic('Linker', { links: PHASES })
 		]
@@ -374,7 +376,7 @@ export const sections: readonly Section[] = [
 			}),
 			topic('Table driven scanner', { links: [tool('scanner-dfa'), notation('tables')] }),
 			topic('Hand-coding a scanner', {
-				links: [linked('scanner-dfa', HAND_CODED_SWITCH, 'Hand-coded switch')],
+				links: [linked('scanner-dfa', HAND_CODED_SWITCH, 'Hand-coded switch'), tool('cminus')],
 				sub: ['Ada', 'C-']
 			}),
 			topic('Flex', {
@@ -419,7 +421,7 @@ export const sections: readonly Section[] = [
 					topic('Bison', { stars: 1 })
 				]
 			}),
-			topic('ASTs', { stars: 1, links: [tool('rd-predictive'), tool('phases')] }),
+			topic('ASTs', { stars: 1, links: [tool('rd-predictive'), tool('cminus'), tool('phases')] }),
 			topic('Ambiguity', { links: [tool('ambiguity'), notation('declarations')] }),
 			topic('Precedence cascades', {
 				stars: 1,

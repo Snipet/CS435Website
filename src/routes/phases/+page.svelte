@@ -14,6 +14,7 @@
 	import { tool } from '$lib/tools/catalog/phases';
 	import { toolLink } from '$lib/tools/links';
 	import { toolBySlug } from '$lib/tools/registry';
+	import { toolHref } from '$lib/site';
 	import { syncToHash } from '$lib/url-state';
 	import DeclTable from '$lib/tools/phases/DeclTable.svelte';
 	import PhaseTable from '$lib/tools/phases/PhaseTable.svelte';
@@ -54,6 +55,7 @@
 		return names;
 	});
 
+	const cminusTool = toolBySlug('cminus');
 	const lexerTool = toolBySlug('lexer');
 	const lexer = $derived.by(() => {
 		const { defs, rules } = lexerRules(model.view);
@@ -267,6 +269,11 @@
 				</div>
 			{/if}
 			<PhaseTable {compilation} view={model.view} grouping={model.grouping} {lexer} />
+			{#if cminusTool}
+				<p class="hint">
+					The <a href={toolHref('cminus')}>{cminusTool.title}</a> runs these phases on a whole program.
+				</p>
+			{/if}
 		</div>
 	</Panel>
 
