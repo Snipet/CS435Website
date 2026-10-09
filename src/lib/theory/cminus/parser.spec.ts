@@ -195,6 +195,22 @@ describe('statements (rules 10–17)', () => {
 		expect(a.kind === 'If' && a.headSpan).toMatchObject({ start: 18, end: 24 });
 	});
 
+	it('an if prints its condition, its statement and its else part as children', () => {
+		const r = parseSource(inMain('if (a) x = 1; else x = 2;'));
+		expect(printAst(r.program).split('\n').slice(3)).toEqual([
+			'      If',
+			'        Var a',
+			'        ExprStmt',
+			'          Assign =',
+			'            Var x',
+			'            Num 1',
+			'        ExprStmt',
+			'          Assign =',
+			'            Var x',
+			'            Num 2'
+		]);
+	});
+
 	it('an else belongs to the nearest if', () => {
 		const [outer] = statements('if (a) if (b) x = 1; else x = 2;');
 		expect(outer).toMatchObject({

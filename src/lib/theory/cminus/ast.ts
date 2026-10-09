@@ -238,7 +238,7 @@ export function nodeLabel(node: Node): string {
 		case 'Compound':
 			return 'Compound';
 		case 'If':
-			return node.else ? 'If Else' : 'If';
+			return 'If';
 		case 'While':
 			return 'While';
 		case 'Return':
