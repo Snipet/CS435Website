@@ -39,6 +39,10 @@ export interface LinkStates {
 	ambiguity: { grammar: string; input?: string };
 	'rd-backtracking': { grammar: string; input?: string };
 	'rd-predictive': { grammar: string; input?: string };
+	/** `source` is C- program text; `input` is the program's input numbers, space-separated. */
+	cminus: { source: string; input?: string };
+	/** `program` is TM assembly text; `input` is the input queue, space-separated. */
+	'tiny-vm': { program: string; input?: string };
 }
 
 export type LinkSlug = keyof LinkStates;
