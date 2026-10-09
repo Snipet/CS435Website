@@ -460,6 +460,78 @@ describe('compile', () => {
 	});
 });
 
+describe('robustness', () => {
+	it('compiles and runs thousands of damaged programs without throwing', () => {
+		const rnd = random(11);
+		const pieces = [
+			' ',
+			';',
+			'(',
+			')',
+			'{',
+			'}',
+			'[',
+			']',
+			'=',
+			'+',
+			'-',
+			'*',
+			'/',
+			'<',
+			',',
+			'0',
+			'7'
+		];
+		const words = [
+			'int',
+			'void',
+			'if',
+			'else',
+			'while',
+			'return',
+			'x',
+			'a',
+			'main',
+			'input',
+			'output'
+		];
+		const pick = <T>(list: readonly T[]) => list[Math.floor(rnd() * list.length)];
+		const sources = SAMPLES.map((s) => s.source);
+		const stopped = new Map<string, number>();
+		let ran = 0;
+		for (let n = 0; n < 3000; n++) {
+			let text = pick(sources);
+			for (let edits = 1 + Math.floor(rnd() * 3); edits > 0; edits--) {
+				const at = Math.floor(rnd() * text.length);
+				const kind = rnd();
+				if (kind < 0.3) text = text.slice(0, at) + text.slice(at + 1 + Math.floor(rnd() * 6));
+				else if (kind < 0.6) text = text.slice(0, at) + pick(pieces) + text.slice(at);
+				else if (kind < 0.8) text = `${text.slice(0, at)} ${pick(words)} ${text.slice(at)}`;
+				else text = text.slice(0, at) + pick(pieces) + text.slice(at + 1);
+			}
+			const c = compile(text, { optimize: n % 2 === 0 });
+			stopped.set(String(c.stoppedAt), (stopped.get(String(c.stoppedAt)) ?? 0) + 1);
+			expect(c.stoppedAt === null).toBe(!c.diagnostics.some((d) => d.severity === 'error'));
+			for (const d of c.diagnostics) {
+				expect(d.message.length).toBeGreaterThan(5);
+				if (d.span) expect(d.span.line).toBeGreaterThanOrEqual(1);
+			}
+			if (c.stoppedAt !== null) continue;
+			// Whatever the damage did to the program's meaning, running it ends in a stop reason.
+			const inputs = [3, 1, 4, 1, 5, 9, 2, 6, 5, 3];
+			const onMachine = runCompilation(c, inputs, { maxSteps: 20_000 })!;
+			const interpreted = interpretCompilation(c, inputs, { maxSteps: 20_000 })!;
+			expect(typeof onMachine.stop).toBe('string');
+			expect(typeof interpreted.stop).toBe('string');
+			ran++;
+		}
+		// The edits reach every phase, and many damaged programs still compile.
+		expect([...stopped.keys()].sort()).toEqual(['null', 'parser', 'scanner', 'semantic']);
+		expect(ran).toBeGreaterThan(300);
+		expect(stopped.get('semantic')).toBeGreaterThan(100);
+	});
+});
+
 describe('order of evaluation agrees everywhere', () => {
 	const cases: [string, number[], number[]][] = [
 		// [body of main, inputs, outputs]
