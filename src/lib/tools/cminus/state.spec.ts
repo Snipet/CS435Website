@@ -26,9 +26,19 @@ describe('default state', () => {
 			ir: 'before',
 			code: 'before',
 			comments: false,
+			visitor: 'print',
 			sel: null
 		});
-		expect(TABS).toEqual(['tokens', 'syntax', 'semantics', 'ir', 'code', 'run', 'language']);
+		expect(TABS).toEqual([
+			'tokens',
+			'syntax',
+			'visitor',
+			'semantics',
+			'ir',
+			'code',
+			'run',
+			'language'
+		]);
 	});
 });
 
@@ -42,6 +52,7 @@ describe('hash state', () => {
 		ir: 'after',
 		code: 'after',
 		comments: true,
+		visitor: 'symbols',
 		sel: [18, 37]
 	};
 
