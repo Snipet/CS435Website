@@ -69,7 +69,14 @@
 	const total = $derived(a.states.length);
 	const windowed = $derived(total > DRAW_ALL || ranged);
 
-	const methodOptions = METHODS.map((m) => ({ value: m, label: METHOD_NAMES[m] }));
+	const methodOptions = METHODS.map((m) => ({
+		value: m,
+		label: METHOD_NAMES[m],
+		title:
+			m === 'lr1'
+				? 'The canonical LR(1) automaton of the decks'
+				: 'Not built in the decks, which only name it (Bottom-up Parsing III, slide 26)'
+	}));
 	const viewOptions = [
 		{ value: 'boxes' as const, label: 'Item sets' },
 		{ value: 'circles' as const, label: 'Circles' }
