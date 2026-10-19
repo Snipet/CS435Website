@@ -72,8 +72,7 @@ src/
     checklist.ts              checklists kept in the browser (localStorage, versioned keys)
   routes/
     +page.svelte              home: tools grouped by compiler stage
-    notation/+page.svelte     notation reference; grammar-notation.ts and parsing-notation.ts
-                              hold its grammar and parsing examples
+    notation/+page.svelte     notation reference; examples in grammar-notation.ts, parsing-notation.ts
     midterm/+page.svelte      midterm review list; topics.ts holds the list and its links,
                               checklist.ts the line ids and views of its checklist
     <slug>/+page.svelte       one route per tool
