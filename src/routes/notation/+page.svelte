@@ -8,15 +8,28 @@
 	import StringSetView from '$lib/components/ui/StringSetView.svelte';
 	import TokenPairs from '$lib/components/ui/TokenPairs.svelte';
 	import type { HighlightRange, TokenPair } from '$lib/components/ui/types';
-	import { DerivationChain, ParseTreeView, TokenStream, pathKey } from '$lib/components/grammar';
 	import {
+		DerivationChain,
+		LrItem,
+		LrState,
+		ParseTreeView,
+		TokenStream,
+		pathKey,
+		type ItemStyle,
+		type ItemView
+	} from '$lib/components/grammar';
+	import { printSet } from '$lib/theory/grammar';
+	import {
+		bottomUpTree,
 		emptyParensTree,
 		instanceLabels,
 		instanceTree,
 		leftAssocTrees,
 		precedenceTrees,
+		shiftReduceForest,
 		sumTrees
 	} from '$lib/components/grammar/fixtures';
+	import GrammarClasses from './GrammarClasses.svelte';
 	import LegendGlyph, { type GlyphKind } from './LegendGlyph.svelte';
 	import {
 		danglingElseGrammar,
@@ -28,6 +41,36 @@
 		rewriteChain,
 		statusMessages
 	} from './grammar-notation';
+	import {
+		bisonDeclarations,
+		bottomUpGrammar,
+		cellCode,
+		closureCode,
+		configurationPieces,
+		conflictExamples,
+		formPieces,
+		formText,
+		handleRows,
+		ll1Algorithm,
+		ll1Columns,
+		ll1Grammar,
+		ll1Sets,
+		ll1Table,
+		ll1Trace,
+		lrAlgorithm,
+		lrEdges,
+		lrGrammar,
+		lrItem,
+		lrNonterminals,
+		lrStates,
+		lrTableRows,
+		lrTerminals,
+		shiftReduceForestRow,
+		shiftReduceTrace,
+		shiftRules,
+		transitionCode,
+		type FormPiece
+	} from './parsing-notation';
 
 	const groups = [
 		{
@@ -61,10 +104,26 @@
 				{ id: 'descent', title: 'Recursive descent' },
 				{ id: 'declarations', title: 'Disambiguating declarations' }
 			]
+		},
+		{
+			id: 'bottom-up',
+			title: 'LL(1) and bottom-up parsing',
+			sections: [
+				{ id: 'first-follow', title: 'First and Follow' },
+				{ id: 'll1-tables', title: 'LL(1) parsing tables' },
+				{ id: 'll1-traces', title: 'LL(1) parse traces' },
+				{ id: 'handles', title: 'Handles' },
+				{ id: 'shift-reduce', title: 'Shift-reduce parsing' },
+				{ id: 'lr-items', title: 'LR(1) items' },
+				{ id: 'lr-tables', title: 'LR parsing tables' },
+				{ id: 'conflicts', title: 'Conflicts' },
+				{ id: 'bison', title: 'Precedence in bison' },
+				{ id: 'grammar-classes', title: 'Grammar classes' }
+			]
 		}
 	] as const;
 
-	const sections = [...groups[0].sections, ...groups[1].sections] as const;
+	const sections = [...groups[0].sections, ...groups[1].sections, ...groups[2].sections] as const;
 
 	type SectionId = (typeof sections)[number]['id'];
 
@@ -130,7 +189,40 @@
 			{ deck: '11', slide: [29, 34] },
 			{ deck: '11', slide: 37 }
 		],
-		declarations: [{ deck: '10', slide: [16, 18] }]
+		declarations: [{ deck: '10', slide: [16, 18] }],
+		'first-follow': [
+			{ deck: '12', slide: [18, 19] },
+			{ deck: '12', slide: [20, 23] }
+		],
+		'll1-tables': [
+			{ deck: '12', slide: 3 },
+			{ deck: '12', slide: [7, 9] },
+			{ deck: '12', slide: [24, 26] }
+		],
+		'll1-traces': [{ deck: '12', slide: [10, 12] }],
+		handles: [
+			{ deck: '13', slide: 2 },
+			{ deck: '13', slide: 4 },
+			{ deck: '13', slide: [5, 11] }
+		],
+		'shift-reduce': [
+			{ deck: '14', slide: [2, 3] },
+			{ deck: '14', slide: [4, 15] }
+		],
+		'lr-items': [
+			{ deck: '15', slide: [5, 7] },
+			{ deck: '15', slide: [10, 14] }
+		],
+		'lr-tables': [
+			{ deck: '14', slide: [16, 19] },
+			{ deck: '14', slide: [20, 21] }
+		],
+		conflicts: [
+			{ deck: '15', slide: [16, 18] },
+			{ deck: '15', slide: [23, 25] }
+		],
+		bison: [{ deck: '15', slide: [19, 22] }],
+		'grammar-classes': [{ deck: '15', slide: 26 }]
 	};
 
 	const legend: { kind: GlyphKind; name: string; text: string }[] = [
@@ -172,6 +264,32 @@
 		'A tree that is ruled out is crossed out with an X.',
 		'An ε-production is drawn with an ε leaf.'
 	];
+
+	const bottomUpTreeRules = [
+		'The tokens sit on one bottom row, in input order, evenly spaced.',
+		'Each reduction adds a node above its children, centered over them, so the tree grows upward.',
+		'A node with a single child sits directly above it.',
+		'A node is raised further when a line to one of its children would pass through another child’s subtree.'
+	];
+
+	/** A right-hand side in an LL(1) cell: symbols with spaces, ε for none. */
+	const rhsText = (symbols: readonly string[]) => (symbols.length ? symbols.join(' ') : 'ε');
+
+	// Bottom-up Parsing III, slides 5, 8 and 14: one item in each of its forms.
+	const formsItem = lrItem('E', 'E + • ( E )', '+');
+	const itemForms: { name: string; used: string; style: ItemStyle; item: ItemView }[] = [
+		{
+			name: 'Bracketed',
+			used: 'definitions, algorithms and conflicts',
+			style: 'bracketed',
+			item: formsItem
+		},
+		{ name: 'Spaced', used: 'running text', style: 'spaced', item: formsItem },
+		{ name: 'Compact', used: 'inside a state box', style: 'compact', item: formsItem }
+	];
+	const mergedItem = lrItem('E', '• int', '$', '+');
+	const lrColumns = [...lrTerminals, ...lrNonterminals];
+	const srPieces = configurationPieces(shiftReduceForestRow);
 
 	// Top-Down Parsing, slide 20 numbers the instances E0, T1, T2.
 	const instanceLabel = (_: unknown, path: number[]) => instanceLabels[pathKey(path)];
@@ -228,7 +346,7 @@
 	<title>{pageTitle('Notation')}</title>
 	<meta
 		name="description"
-		content="The notation used by the CS435 tools: regular expressions, flex patterns, finite automata, state names, transition tables, token formats, grammars, derivations, and parse trees."
+		content="The notation used by the CS435 tools: regular expressions, flex patterns, finite automata, state names, transition tables, token formats, grammars, derivations, parse trees, LL(1) tables, shift-reduce parsing, LR(1) items, and parse conflicts."
 	/>
 </svelte:head>
 
@@ -252,6 +370,21 @@
 	<pre class="code">{#each grammarSegments(text, opts) as seg, i (i)}{#if seg.className}<span
 					class={seg.className}>{seg.text}</span
 				>{:else}{seg.text}{/if}{/each}</pre>
+{/snippet}
+
+{#snippet divider()}<span class="divider" title="divider">I</span>{/snippet}
+
+{#snippet becomes()}<span class="becomes">⇒</span>{/snippet}
+
+{#snippet pieces(list: FormPiece[], mark: string)}{#each list as piece, j (j)}{#if piece.mark}<span
+				class={mark}>{piece.text}</span
+			>{:else}{piece.text}{/if}{/each}{/snippet}
+
+{#snippet itemList(items: readonly ItemView[], partial: boolean)}
+	<ul class="item-list">
+		{#each items as item, i (i)}<li><LrItem {item} /></li>{/each}
+		{#if partial}<li class="omitted">…</li>{/if}
+	</ul>
 {/snippet}
 
 {#snippet sectionHead(id: SectionId, title: string)}
@@ -1505,6 +1638,665 @@
 					</figcaption>
 				</figure>
 			</section>
+
+			<p class="group-label">{groups[2].title}</p>
+
+			<!-- First and Follow -->
+			<section aria-labelledby="first-follow">
+				{@render sectionHead('first-follow', 'First and Follow')}
+				<p>
+					A predictive parser chooses a production by the next token. Two sets of terminals decide
+					the choice. <dfn>First</dfn> of a string of symbols holds the terminals that can begin
+					what it derives, and ε when it derives ε. <dfn>Follow</dfn> of a non-terminal holds the terminals
+					that can come right after it in a sentential form.
+				</p>
+				<p class="display f">
+					First(X) = &#123; b | X →<sup>*</sup> bα &#125; ∪ &#123; ε | X →<sup>*</sup> ε &#125;
+				</p>
+				<p class="display f">Follow(X) = &#123; b | S →<sup>*</sup> β X b ω &#125;</p>
+				<p>
+					Here b is a terminal and α, β, ω are strings of grammar symbols.
+					<span class="f">$</span> is the end marker: the end of the input, the bottom of the parser’s
+					stack, and a member of Follow(S) for the start symbol S.
+				</p>
+				<div class="rule-pair">
+					<div>
+						<h3>Computing First</h3>
+						<ol class="steps">
+							<li><span class="f">First(b) = &#123; b &#125;</span> for a terminal b.</li>
+							<li>
+								For every production <span class="f">X → A<sub>1</sub> … A<sub>n</sub></span>: add
+								<span class="f">First(A<sub>1</sub>) – &#123; ε &#125;</span> to First(X) and stop
+								if
+								<span class="f">ε ∉ First(A<sub>1</sub>)</span>; then the same for A<sub>2</sub>, …,
+								A<sub>n</sub>. If no step stops, add ε to First(X). Ignore A<sub>i</sub> if it is X.
+							</li>
+						</ol>
+					</div>
+					<div>
+						<h3>Computing Follow</h3>
+						<ol class="steps">
+							<li>Compute the First sets of all non-terminals.</li>
+							<li>Add <span class="f">$</span> to Follow(S).</li>
+							<li>
+								For every production <span class="f">Y → … X A<sub>1</sub> … A<sub>n</sub></span>:
+								add
+								<span class="f">First(A<sub>1</sub>) – &#123; ε &#125;</span> to Follow(X) and stop
+								if
+								<span class="f">ε ∉ First(A<sub>1</sub>)</span>; then the same for A<sub>2</sub>, …,
+								A<sub>n</sub>. If no step stops, add Follow(Y) to Follow(X).
+							</li>
+						</ol>
+					</div>
+				</div>
+				<p>The rules are applied until no set changes.</p>
+				<figure>
+					<div class="grammar-sets">
+						{@render grammar(ll1Grammar)}
+						<div class="table-wrap">
+							<table class="ref compact">
+								<thead>
+									<tr>
+										<th scope="col" class="notation-head">X</th>
+										<th scope="col" class="notation-head">First(X)</th>
+										<th scope="col" class="notation-head">Follow(X)</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each ll1Sets as row (row.nonterminal)}
+										<tr>
+											<td class="f">{row.nonterminal}</td>
+											<td class="f">{printSet(row.first)}</td>
+											<td class="f">{printSet(row.follow)}</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</div>
+					<figcaption>
+						<span>First and Follow of the left-factored expression grammar</span>
+						<CitationTag cite={{ deck: '12', slide: [21, 23] }} />
+					</figcaption>
+				</figure>
+			</section>
+
+			<!-- LL(1) parsing tables -->
+			<section aria-labelledby="ll1-tables">
+				{@render sectionHead('ll1-tables', 'LL(1) parsing tables')}
+				<p>
+					An <dfn>LL(1)</dfn> parser reads the input from <b>L</b>eft to right, builds a
+					<b>L</b>eftmost derivation, and predicts each production from <b>1</b> token of lookahead, without
+					backtracking. Its choices form a two-dimensional table:
+				</p>
+				<ul class="tree-rules">
+					<li>Rows are non-terminals; columns are terminals, then <span class="f">$</span>.</li>
+					<li>
+						A cell holds the right-hand side to expand the row’s non-terminal by (<span class="f"
+							>int Y</span
+						>, <span class="f">ε</span>), not the whole production.
+					</li>
+					<li>A blank cell is an error.</li>
+					<li>
+						A cell is named by its row and column, <span class="f">[E, int]</span>; the parser looks
+						up
+						<span class="f">T[N, a]</span>.
+					</li>
+				</ul>
+				<figure>
+					<div class="scroll">
+						<table class="tt" aria-label="LL(1) parsing table">
+							<thead>
+								<tr>
+									<th scope="col"><span class="visually-hidden">Non-terminal</span></th>
+									{#each ll1Columns as column (column)}<th scope="col">{column}</th>{/each}
+								</tr>
+							</thead>
+							<tbody>
+								{#each ll1Table as row (row.nonterminal)}
+									<tr>
+										<th scope="row">{row.nonterminal}</th>
+										{#each ll1Columns as column (column)}
+											{@const rhs = row.cells[column]}
+											<td>{rhs ? rhsText(rhs) : ''}</td>
+										{/each}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<figcaption>
+						<span>The table of the grammar above, with the rows in the slide’s order</span>
+						<CitationTag cite={{ deck: '12', slide: 7 }} />
+					</figcaption>
+				</figure>
+
+				<h3>Filling the table</h3>
+				<p>For each production <span class="f">A → α</span>:</p>
+				<ol class="tuple">
+					<li>
+						for each terminal <span class="f">b ∈ First(α)</span>, set
+						<span class="f">T[A, b] = α</span>;
+					</li>
+					<li>
+						if <span class="f">α →<sup>*</sup> ε</span>, for each
+						<span class="f">b ∈ Follow(A)</span>, set <span class="f">T[A, b] = α</span> (b may be $).
+					</li>
+				</ol>
+				<dl class="rules">
+					<dt><span class="f">Y → * T</span></dt>
+					<dd>goes in the columns of <span class="f">First( *T ) = &#123; * &#125;</span>.</dd>
+					<dt><span class="f">Y → ε</span></dt>
+					<dd>
+						goes in the columns of <span class="f">Follow( Y ) = &#123; +, ), $ &#125;</span>.
+					</dd>
+				</dl>
+				<p>
+					A grammar is LL(1) when no cell is multiply defined. An ambiguous, left-recursive, or not
+					left-factored grammar is not LL(1), and neither are most programming-language grammars.
+				</p>
+			</section>
+
+			<!-- LL(1) parse traces -->
+			<section aria-labelledby="ll1-traces">
+				{@render sectionHead('ll1-traces', 'LL(1) parse traces')}
+				<p>
+					The parser keeps the symbols it still has to match on a stack, which starts as
+					<span class="f">&lt; S $ &gt;</span>. It looks at the top of the stack and the next token:
+				</p>
+				<dl class="rules">
+					<dt>Non-terminal on top</dt>
+					<dd>
+						It is replaced by the right-hand side in its cell for the next token. A blank cell is an
+						error.
+					</dd>
+					<dt>Terminal on top</dt>
+					<dd>
+						It must be the next token: it is popped and the input advances. Otherwise it is an
+						error.
+					</dd>
+					<dt>Accept</dt>
+					<dd>At the end of the input, with the stack empty.</dd>
+				</dl>
+				<figure>
+					<pre class="code">{ll1Algorithm}</pre>
+					<figcaption><CitationTag cite={{ deck: '12', slide: 11 }} /></figcaption>
+				</figure>
+				<p>
+					A trace has three columns. <b>Stack</b> has its top on the left and $ at the bottom.
+					<b>Input</b> is the rest of the input, ending with $. <b>Action</b> is what is done to the
+					row’s stack and input: the right-hand side pushed (<span class="f">T X</span>),
+					<span class="f">terminal</span> when the top matches the next token,
+					<span class="f">ε</span> when an ε-production pops the top, and
+					<span class="f">ACCEPT</span> when both are down to $.
+				</p>
+				<figure>
+					<div class="table-wrap">
+						<table class="ref trace" aria-label="LL(1) trace of int * int $">
+							<thead>
+								<tr>
+									<th scope="col">Stack</th>
+									<th scope="col">Input</th>
+									<th scope="col">Action</th>
+								</tr>
+							</thead>
+							<tbody>
+								{#each ll1Trace as row, i (i)}
+									<tr>
+										<td class="f">{row.stack.join(' ')}</td>
+										<td class="f">{row.input.join(' ')}</td>
+										<td class="f">{row.action}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<figcaption>
+						<span><span class="f">int * int $</span> with the table above</span>
+						<CitationTag cite={{ deck: '12', slide: 12 }} />
+					</figcaption>
+				</figure>
+			</section>
+
+			<!-- Handles -->
+			<section aria-labelledby="handles">
+				{@render sectionHead('handles', 'Handles')}
+				<p>
+					A bottom-up parser builds the parse tree from the leaves up. Its most common form is
+					<dfn>LR</dfn> parsing: the tokens are read from <b>L</b>eft to right, and the parser
+					builds a <b>R</b>ightmost derivation, in reverse.
+				</p>
+				<p>
+					It reduces the input to the start symbol by inverting productions. Each step takes the
+					current sentential form <span class="f">sent</span> and the first β in it such that
+				</p>
+				<p class="display f">A → β and S →<sup>*</sup> α A γ → α β γ = sent</p>
+				<p>
+					and replaces β by A, so that α A γ is the next form. Such a β is a <dfn>handle</dfn>.
+					Right of a handle there are only terminals (γ), because α A γ → α β γ is a step of a
+					rightmost derivation.
+				</p>
+				<div class="bottom-up">
+					<figure>
+						<div class="example reverse">
+							<span class="up" aria-hidden="true"></span>
+							<ol class="forms" aria-label="Reductions of int + (int), each form with its handle">
+								{#each handleRows as row, i (i)}
+									<li class="f">
+										{@render pieces(
+											formPieces(row.form, row.handle?.[0] ?? 0, row.handle?.[1] ?? 0),
+											'handle'
+										)}
+									</li>
+								{/each}
+							</ol>
+						</div>
+						<figcaption>
+							<span>The handles in red. Read upward, the list is a rightmost derivation.</span>
+							<CitationTag cite={{ deck: '13', slide: 10 }} />
+						</figcaption>
+					</figure>
+					<figure>
+						<div class="example trees">
+							<ParseTreeView
+								tree={bottomUpTree}
+								layout="baseline"
+								ariaLabel="Bottom-up parse tree of int + ( int )"
+							/>
+						</div>
+						<figcaption>
+							<span
+								><span class="f">int + (int)</span> under
+								<span class="f">{bottomUpGrammar}</span></span
+							>
+							<CitationTag cite={{ deck: '13', slide: [5, 10] }} />
+						</figcaption>
+					</figure>
+				</div>
+				<p>Bottom-up trees are drawn differently from top-down ones:</p>
+				<ul class="tree-rules">
+					{#each bottomUpTreeRules as rule (rule)}<li>{rule}</li>{/each}
+				</ul>
+				<p>
+					The bottom-up decks write sentential forms with each parenthesis next to what it encloses:
+					<span class="f">{formText(['E', '+', '(', 'int', ')'])}</span>.
+				</p>
+			</section>
+
+			<!-- Shift-reduce parsing -->
+			<section aria-labelledby="shift-reduce">
+				{@render sectionHead('shift-reduce', 'Shift-reduce parsing')}
+				<p>
+					A shift-reduce parser splits the string in two at a divider, drawn as a red
+					{@render divider()}. Left of it are terminals and non-terminals; right of it are the
+					tokens not examined yet. The divider marks the end of the next potential handle. At the
+					start the whole input is right of it:
+					<span class="f">{@render divider()} x<sub>1</sub> x<sub>2</sub> … x<sub>n</sub></span>.
+				</p>
+				<dl class="rules">
+					<dt>Shift</dt>
+					<dd>
+						Move {@render divider()} one place to the right:
+						<span class="f"
+							>E + ( {@render divider()} int ) {@render becomes()} E + ( int {@render divider()} )</span
+						>
+					</dd>
+					<dt>Reduce</dt>
+					<dd>
+						Apply an inverse production at the handle, just left of the divider:
+						<span class="f"
+							>E + ( <span class="underline">E + ( E )</span>
+							{@render divider()} ) {@render becomes()} E + ( <span class="underline">E</span>
+							{@render divider()} )</span
+						>
+					</dd>
+				</dl>
+				<p>
+					Here {@render becomes()} is one move of the parser, not a derivation step. The left part is
+					a stack: a shift pushes a terminal, and a reduce by A → α pops the symbols of α (zero or more)
+					and pushes A.
+				</p>
+				<h3>Traces</h3>
+				<p>
+					One configuration per row, with its action on the right: <span class="f">shift</span>,
+					<span class="f">shift 3 times</span> (shifts in a row on one line),
+					<span class="f">red. E → int</span> (reduce by E → int), and
+					<span class="f">accept</span>. The symbols an action works on are colored: the handle left
+					of the divider before a reduce, the tokens right of it before a shift. The input ends with
+					$.
+				</p>
+				<figure>
+					<div class="table-wrap">
+						<table class="ref sr-trace" aria-label="Shift-reduce trace of int + (int) + (int)$">
+							<thead>
+								<tr><th scope="col">Configuration</th><th scope="col">Action</th></tr>
+							</thead>
+							<tbody>
+								{#each shiftReduceTrace as row, i (i)}
+									{@const parts = configurationPieces(row)}
+									<tr>
+										<td class="f config"
+											>{@render pieces(parts.left, 'next')}{parts.left.length
+												? ' '
+												: ''}{@render divider()}
+											{@render pieces(parts.right, 'next')}</td
+										>
+										<td class="f">{row.action}</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<figcaption>
+						<span>Under <span class="f">{bottomUpGrammar}</span></span>
+						<CitationTag cite={{ deck: '14', slide: 14 }} />
+					</figcaption>
+				</figure>
+				<p>
+					Beside a trace, the tree grows over the tokens: a subtree for each symbol on the stack,
+					the tokens still to come as bare leaves, and ↑ under the divider.
+				</p>
+				<figure>
+					<div class="example trees">
+						<ParseTreeView
+							forest={shiftReduceForest.roots}
+							marker={shiftReduceForest.marker}
+							ariaLabel="Partial parse tree of int + (int) at E + (int I )$"
+						/>
+					</div>
+					<figcaption>
+						<span
+							><span class="f">int + (int)</span> at
+							<span class="f"
+								>{@render pieces(srPieces.left, 'next')}
+								{@render divider()}
+								{@render pieces(srPieces.right, 'next')}</span
+							></span
+						>
+						<CitationTag cite={{ deck: '14', slide: [4, 14] }} />
+					</figcaption>
+				</figure>
+			</section>
+
+			<!-- LR(1) items -->
+			<section aria-labelledby="lr-items">
+				{@render sectionHead('lr-items', 'LR(1) items')}
+				<p>
+					An <dfn>LR(1) item</dfn> is a production with a dot in its right-hand side and one lookahead
+					terminal:
+				</p>
+				<p class="display f">[X → α<span class="item-dot">•</span>β, a]</p>
+				<p>
+					X → αβ is a production and a is a terminal. The item says that the parser is trying to
+					find an X followed by an a, has α on top of the stack, and next needs to see a prefix of
+					something derived from βa. The dot, in red, does the job of the divider
+					{@render divider()}: in both, the stack is on the left.
+				</p>
+				<div class="table-wrap">
+					<table class="ref">
+						<thead>
+							<tr>
+								<th scope="col">Form</th>
+								<th scope="col">Used</th>
+								<th scope="col">Example</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each itemForms as form (form.name)}
+								<tr>
+									<td>{form.name}</td>
+									<td>{form.used}</td>
+									<td><LrItem item={form.item} style={form.style} /></td>
+								</tr>
+							{/each}
+							<tr>
+								<td>Merged lookaheads</td>
+								<td>items that differ only in their lookahead, on one line</td>
+								<td>
+									<LrItem item={mergedItem} style="compact" /> stands for
+									<LrItem item={{ ...mergedItem, lookaheads: ['$'] }} style="compact" /> and
+									<LrItem item={{ ...mergedItem, lookaheads: ['+'] }} style="compact" />
+								</td>
+							</tr>
+						</tbody>
+					</table>
+				</div>
+
+				<h3>The parsing DFA</h3>
+				<p>
+					The grammar gets a new start symbol S and the production
+					<span class="f">S → E</span> (not needed when E has only one production); when the
+					grammar’s own start symbol is S, the new one is S’. The start state is
+					<span class="f">Closure(&#123; S → •E, $ &#125;)</span>. A state is a closed set of items,
+					and <span class="f">Transition(state, y)</span> is the state after the symbol y, a terminal
+					or a non-terminal.
+				</p>
+				<div class="code-pair even">
+					<figure>
+						<pre class="code">{closureCode}</pre>
+						<figcaption><CitationTag cite={{ deck: '15', slide: 10 }} /></figcaption>
+					</figure>
+					<figure>
+						<pre class="code">{transitionCode}</pre>
+						<figcaption><CitationTag cite={{ deck: '15', slide: 13 }} /></figcaption>
+					</figure>
+				</div>
+				<p>
+					A state with an item <span class="f">[X → α<span class="item-dot">•</span>, b]</span> is
+					labeled “reduce with X → α on b”, written beside the state as
+					<span class="f">E → int on $, +</span>. The state with
+					<span class="f">[S → E<span class="item-dot">•</span>, $]</span> is labeled
+					<span class="f">accept on $</span>. The start state is state 0.
+				</p>
+				<figure>
+					<div class="example states">
+						{#each lrStates as state (state.number)}
+							<LrState number={state.number} items={state.items} start="S" />
+						{/each}
+					</div>
+					<figcaption>
+						<span
+							>States 0–6 for <span class="f">{lrGrammar.replace('\n', ', ')}</span>, with the edges {#each lrEdges as [from, symbol, to], i (i)}{i
+									? ', '
+									: ''}<span class="f">{from} →<sup>{symbol}</sup> {to}</span>{/each}</span
+						>
+						<CitationTag cite={{ deck: '15', slide: 14 }} />
+					</figcaption>
+				</figure>
+			</section>
+
+			<!-- LR parsing tables -->
+			<section aria-labelledby="lr-tables">
+				{@render sectionHead('lr-tables', 'LR parsing tables')}
+				<p>
+					The parser chooses between shift and reduce with the DFA. It runs the DFA on the stack and
+					looks at the state X it ends in and the token tok after the divider: if X has a transition
+					on tok, it shifts; if X is labeled <span class="f">A → β on tok</span>, it reduces by A →
+					β; in a state labeled <span class="f">accept on $</span> with $ next, it accepts.
+				</p>
+				<p>
+					The DFA is stored as a table. Rows are states and columns are grammar symbols: the
+					terminals and $ make up the <dfn>action</dfn> table, and the non-terminals, after a
+					vertical rule, the <dfn>goto</dfn> table.
+				</p>
+				<div class="table-wrap">
+					<table class="ref compact">
+						<thead><tr><th scope="col">Entry</th><th scope="col">Meaning</th></tr></thead>
+						<tbody>
+							<tr><td class="f">s4</td><td>shift, and go to state 4</td></tr>
+							<tr><td class="f">g6</td><td>in a non-terminal column: go to state 6</td></tr>
+							<tr
+								><td class="f">r<sub>E→int</sub></td><td
+									>reduce by the production written under the r</td
+								></tr
+							>
+							<tr><td class="f">accept</td><td>accept</td></tr>
+							<tr><td>blank</td><td>error</td></tr>
+						</tbody>
+					</table>
+				</div>
+				<figure>
+					<div class="scroll">
+						<table class="tt lr" aria-label="Rows 3 to 7 of the LR parsing table">
+							<thead>
+								<tr>
+									<th scope="col"><span class="visually-hidden">State</span></th>
+									{#each lrColumns as column, k (column)}
+										<th scope="col" class:rule={k === lrTerminals.length}>{column}</th>
+									{/each}
+								</tr>
+							</thead>
+							<tbody>
+								{#each [null, ...lrTableRows, null] as row, i (i)}
+									<tr class:more={!row}>
+										<th scope="row">{row ? row.state : '…'}</th>
+										{#each lrColumns as column, k (column)}
+											{@const cell = row?.cells[column]}
+											{@const code = cell ? cellCode(cell) : null}
+											<td class:rule={k === lrTerminals.length}
+												>{#if code}{code.code}{#if code.production}<sub>{code.production}</sub
+														>{/if}{/if}</td
+											>
+										{/each}
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+					<figcaption>
+						<span
+							>Rows 3–7 for <span class="f">{bottomUpGrammar}</span>. The slide prints the two
+							entries of row 6 one column to the left; by the DFA they are under + and ).</span
+						>
+						<CitationTag cite={{ deck: '14', slide: 19 }} />
+					</figcaption>
+				</figure>
+
+				<h3>The LR stack</h3>
+				<p>
+					Running the DFA over the whole stack after every move repeats work. Instead each stack
+					element remembers the state it brings the DFA to: the stack holds pairs
+					<span class="f long"
+						>&lt; sym<sub>1</sub>, state<sub>1</sub> &gt; … &lt; sym<sub>n</sub>, state<sub>n</sub> &gt;</span
+					>, where state<sub>k</sub> is the state of the DFA after sym<sub>1</sub> … sym<sub>k</sub
+					>. It starts as <span class="f">&lt; dummy, 0 &gt;</span>, state 0 being the start state.
+				</p>
+				<figure>
+					<pre class="code">{lrAlgorithm}</pre>
+					<figcaption><CitationTag cite={{ deck: '14', slide: 21 }} /></figcaption>
+				</figure>
+			</section>
+
+			<!-- Conflicts -->
+			<section aria-labelledby="conflicts">
+				{@render sectionHead('conflicts', 'Conflicts')}
+				<p>
+					A parser generator reports a grammar it cannot build a table for in terms of the items of
+					a state. Two kinds of conflict:
+				</p>
+				<dl class="rules">
+					<dt>Shift/reduce</dt>
+					<dd>
+						The state contains
+						<span class="f">[X → α<span class="item-dot">•</span>aβ, b]</span> and
+						<span class="f">[Y → γ<span class="item-dot">•</span>, a]</span>. On a, the parser could
+						shift into <span class="f">[X → αa<span class="item-dot">•</span>β, b]</span> or reduce with
+						Y → γ.
+					</dd>
+					<dt>Reduce/reduce</dt>
+					<dd>
+						The state contains
+						<span class="f">[X → α<span class="item-dot">•</span>, a]</span> and
+						<span class="f">[Y → β<span class="item-dot">•</span>, a]</span>.
+					</dd>
+				</dl>
+				<p>
+					Shift/reduce conflicts usually come from an ambiguous grammar, such as the dangling else,
+					where a state contains
+					<LrItem item={lrItem('S', 'if E then S •', 'else')} /> and
+					<LrItem item={lrItem('S', 'if E then S • else S', 'x')} />. Reduce/reduce conflicts come
+					from gross ambiguity. The slides show part of a state and part of the state its transition
+					on a symbol leads to, joined by {@render becomes()} with the symbol on top; … stands for items
+					left out.
+				</p>
+				<div class="conflicts">
+					{#each conflictExamples as ex (ex.slide)}
+						<figure>
+							<div class="example transition">
+								{@render itemList(ex.from, ex.partial)}
+								<span class="f arrow">{@render becomes()}<sup>{ex.symbol}</sup></span>
+								{@render itemList(ex.to, ex.partial)}
+							</div>
+							<figcaption>
+								<span><span class="f">{ex.grammar}</span>: {ex.conflict}</span>
+								<CitationTag cite={{ deck: '15', slide: ex.slide }} />
+							</figcaption>
+						</figure>
+					{/each}
+				</div>
+				<p>
+					<span class="f">S → ε | id | id S</span> has two parse trees for
+					<span class="f">id</span>. Rewritten as <span class="f">S → ε | id S</span>, it has none
+					of these conflicts.
+				</p>
+			</section>
+
+			<!-- Precedence in bison -->
+			<section aria-labelledby="bison">
+				{@render sectionHead('bison', 'Precedence in bison')}
+				<p>
+					Bison settles shift/reduce conflicts with declarations of precedence and associativity:
+				</p>
+				<figure>
+					{@render grammar(bisonDeclarations)}
+					<figcaption><CitationTag cite={{ deck: '15', slide: 19 }} /></figcaption>
+				</figure>
+				<dl class="rules">
+					<dt>Order of the lines</dt>
+					<dd>
+						A later line binds tighter: here <span class="f">*</span> over <span class="f">+</span>.
+						Bison quotes a character terminal, so <span class="f">%left '+'</span> is the
+						declaration
+						<span class="f">%left +</span> of
+						<a href="#declarations">Disambiguating declarations</a>.
+					</dd>
+					<dt>Precedence of a rule</dt>
+					<dd>
+						That of its last terminal: <span class="f">E → E * E</span> has the precedence of
+						<span class="f">*</span>.
+					</dd>
+					<dt>Shift if</dt>
+					<dd>
+						<ul class="plain">
+							{#each shiftRules as rule (rule)}<li>{rule}</li>{/each}
+						</ul>
+					</dd>
+				</dl>
+				<p>
+					In the state with <LrItem item={conflictExamples[0].to[0]} /> and
+					<LrItem item={conflictExamples[0].to[1]} />, the rule E → E * E has a higher precedence
+					than the terminal +, so the parser reduces. The dangling-else conflict goes away when else
+					is declared with a higher precedence than then, or by the default shift.
+				</p>
+			</section>
+
+			<!-- Grammar classes -->
+			<section aria-labelledby="grammar-classes">
+				{@render sectionHead('grammar-classes', 'Grammar classes')}
+				<p>
+					Every LL(k) grammar is LR(k), every LL(1) grammar LR(1), and every LL(0) grammar LR(0). No
+					ambiguous grammar is in any of these classes.
+				</p>
+				<figure>
+					<div class="example">
+						<GrammarClasses />
+					</div>
+					<figcaption>
+						<span>Simple LR (SLR); Look-ahead LR (LALR)</span>
+						<CitationTag cite={{ deck: '15', slide: 26 }} />
+					</figcaption>
+				</figure>
+			</section>
 		</div>
 	</div>
 </div>
@@ -2054,6 +2846,190 @@
 	}
 	.messages dt {
 		font-style: italic;
+	}
+
+	/* LL(1) and bottom-up parsing */
+	.rule-pair {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--space-4) var(--space-6);
+	}
+	@media (min-width: 720px) {
+		.rule-pair {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	.rule-pair h3 {
+		margin: 0;
+	}
+	.steps {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		margin: var(--space-2) 0 0;
+		padding-left: 1.4em;
+		color: var(--text-2);
+	}
+	.grammar-sets {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		align-items: start;
+		gap: var(--space-4);
+	}
+	@media (min-width: 640px) {
+		.grammar-sets {
+			grid-template-columns: max-content minmax(0, 1fr);
+		}
+	}
+	.grammar-sets .code {
+		margin: 0;
+	}
+	.scroll {
+		max-width: 100%;
+		overflow-x: auto;
+	}
+	.scroll .tt {
+		margin: 1px;
+	}
+	.tt .rule {
+		border-left: 2px solid var(--border-strong);
+	}
+	.tt sub {
+		font-size: 0.72em;
+	}
+	.tt tr.more th {
+		background: none;
+		color: var(--text-3);
+		text-align: center;
+	}
+	.tt tr.more th,
+	.tt tr.more td {
+		padding-top: 2px;
+		padding-bottom: 2px;
+	}
+	.bottom-up {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--space-4);
+	}
+	@media (min-width: 720px) {
+		.bottom-up {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	.ref thead th.notation-head {
+		font-family: var(--font-mono);
+		letter-spacing: 0;
+		text-transform: none;
+	}
+	.becomes {
+		font-family: var(--font-sans);
+		font-size: 1.1em;
+	}
+	.reverse {
+		display: flex;
+		align-items: stretch;
+		gap: var(--space-4);
+	}
+	.up {
+		position: relative;
+		flex: none;
+		width: 2px;
+		margin: 9px 7px 4px;
+		background: var(--text);
+	}
+	.up::before {
+		position: absolute;
+		top: -9px;
+		left: -5px;
+		border: 6px solid transparent;
+		border-top: 0;
+		border-bottom: 10px solid var(--text);
+		content: '';
+	}
+	.forms {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		margin: 0;
+		padding: 0;
+		font-size: 1.05rem;
+		list-style: none;
+	}
+	.handle {
+		color: var(--reject);
+		font-weight: 600;
+	}
+	.divider {
+		color: var(--reject);
+		font-family: var(--font-sans);
+		font-weight: 600;
+	}
+	.underline {
+		text-decoration: underline;
+		text-underline-offset: 3px;
+	}
+	.next {
+		color: var(--tok-3);
+		font-weight: 600;
+	}
+	td.f.config {
+		white-space: nowrap;
+	}
+	.item-dot {
+		display: inline-block;
+		color: var(--reject);
+		font-weight: 700;
+		transform: scale(1.5);
+	}
+	.states {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: flex-start;
+		gap: var(--space-4) var(--space-5);
+	}
+	.code-pair.even {
+		align-items: start;
+	}
+	@media (min-width: 900px) {
+		.code-pair.even {
+			grid-template-columns: repeat(2, minmax(0, 1fr));
+		}
+	}
+	.conflicts {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--space-4);
+	}
+	.transition {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: var(--space-3) var(--space-5);
+		overflow-x: auto;
+	}
+	.item-list {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
+		margin: 0;
+		padding: 0;
+		font-size: var(--text-sm);
+		list-style: none;
+	}
+	.item-list .omitted {
+		padding-left: 2.5em;
+		color: var(--text-3);
+	}
+	.arrow {
+		font-size: 1.15rem;
+	}
+	.arrow sup {
+		font-size: 0.65em;
+	}
+	.plain {
+		margin: 0;
+		padding-left: 1.2em;
 	}
 	@media (min-width: 720px) {
 		.messages {
