@@ -33,7 +33,9 @@
 		await tick();
 		const el = box?.querySelector<HTMLElement>(`[data-state="${n}"]`);
 		if (!el || !box) return;
-		box.scrollTo({ top: el.offsetTop - box.offsetTop - 8, behavior: 'smooth' });
+		// The box is positioned, so a state's offsetTop is measured from it.
+		box.scrollTo({ top: el.offsetTop - 8, behavior: 'smooth' });
+		box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 		el.focus({ preventScroll: true });
 	}
 
@@ -141,6 +143,7 @@
 		min-width: 0;
 		margin: 0;
 		padding: 8px 12px;
+		position: relative;
 		overflow-x: auto;
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);
@@ -154,6 +157,7 @@
 	}
 	.file {
 		max-height: min(40rem, 70vh);
+		position: relative;
 		overflow: auto;
 		padding: var(--space-2) var(--space-3);
 		border: 1px solid var(--border);

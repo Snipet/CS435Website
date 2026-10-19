@@ -19,7 +19,8 @@
 	let { value = $bindable(), lines, diagnostics, oninput }: Props = $props();
 
 	const uid = $props.id();
-	const PLACEHOLDER = "%left '+'\n%left '*'";
+	/** Shown while there are no declarations: it must not read as declarations in force. */
+	const PLACEHOLDER = "No declarations. For example: %left '+'";
 	const levels = $derived(lines.filter((l) => l.on).length);
 
 	function toggle(line: PrecedenceLine, on: boolean) {

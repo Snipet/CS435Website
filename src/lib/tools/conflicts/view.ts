@@ -7,6 +7,7 @@
 import { classPoint, placeText, type GrammarPlace } from '$lib/components/grammar/grammar-classes';
 import { joinSymbols, symbolText } from '$lib/components/grammar/lr-item';
 import type { HighlightToken, Tone } from '$lib/components/ui/types';
+import type { Diagnostic } from '$lib/theory/diagnostics';
 import type { Precedence } from '$lib/theory/grammar/lr-table';
 import { END_MARKER } from '$lib/theory/grammar/types';
 import type { ConflictView, ParseView } from './analysis';
@@ -127,4 +128,39 @@ export function placeCaption(place: GrammarPlace): string {
 	if (!classPoint(place))
 		return 'The grammar is not LR(1), and no token string has shown it to be ambiguous: the diagram has no one place for it.';
 	return placeText(place).replace(/^Marked: /, 'The dot marks ');
+}
+
+/**
+ * Notes of one kind as one note: the grammar parser notes each non-terminal
+ * that does not start with a capital letter, which for C- is 29 notes. Notes
+ * whose text is the same up to `: ` become the first of them, naming the
+ * first `limit` and counting the rest. Errors and warnings are kept as they
+ * are.
+ */
+export function condenseNotes(diagnostics: readonly Diagnostic[], limit = 3): Diagnostic[] {
+	const out: Diagnostic[] = [];
+	const groups = new Map<string, { at: number; names: string[] }>();
+	for (const d of diagnostics) {
+		const colon = d.message.lastIndexOf(': ');
+		if (d.severity !== 'info' || colon < 0) {
+			out.push(d);
+			continue;
+		}
+		const head = d.message.slice(0, colon);
+		const name = d.message.slice(colon + 2);
+		const group = groups.get(head);
+		if (group) {
+			group.names.push(name);
+			continue;
+		}
+		groups.set(head, { at: out.length, names: [name] });
+		out.push(d);
+	}
+	for (const [head, { at, names }] of groups) {
+		if (names.length === 1) continue;
+		const shown = names.slice(0, limit).join(', ');
+		const rest = names.length - Math.min(limit, names.length);
+		out[at] = { ...out[at], message: `${head}: ${shown}${rest ? ` and ${rest} more` : ''}` };
+	}
+	return out;
 }

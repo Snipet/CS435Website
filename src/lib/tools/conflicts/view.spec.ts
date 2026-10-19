@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { CMINUS_BNF } from '$lib/theory/cminus/parser';
+import { parseGrammar } from '$lib/theory/grammar/parse';
 import { analyze } from './analysis';
 import { readPrecedenceText } from './precedence';
 import {
 	choiceOptions,
 	choiceValue,
 	configurationParts,
+	condenseNotes,
 	configurationText,
 	entryText,
 	highlightPrecedence,
@@ -119,6 +122,24 @@ describe('other text', () => {
 			["'+'", 'hl-string'],
 			['"=="', 'hl-string'],
 			['// note', 'hl-comment']
+		]);
+	});
+
+	it('condenses the notes of one kind into one', () => {
+		const notes = parseGrammar(CMINUS_BNF).diagnostics;
+		expect(notes.length).toBeGreaterThan(20);
+		const condensed = condenseNotes(notes);
+		expect(condensed).toEqual([
+			{
+				...notes[0],
+				message: `By convention, non-terminals start with a capital letter: program, declaration-list, declaration and ${notes.length - 3} more`
+			}
+		]);
+		const warning = { severity: 'warning' as const, message: 'x: y' };
+		const one = { severity: 'info' as const, message: 'A note: a' };
+		expect(condenseNotes([warning, one, warning])).toEqual([warning, one, warning]);
+		expect(condenseNotes([one, { ...one, message: 'A note: b' }])).toEqual([
+			{ ...one, message: 'A note: a, b' }
 		]);
 	});
 

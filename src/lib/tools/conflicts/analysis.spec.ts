@@ -111,6 +111,10 @@ describe('shift/reduce conflicts of E → E + E | E * E | int', () => {
 		// The parse as resolved stays as it was.
 		expect(bracketForm(other.parse!.tree!)).toBe('E( E(int) * E( E(int) + E(int) ) )');
 		expect(conflictOn(other, 6, '+').usedAlternative).toBe(true);
+		expect(other.comparison).toEqual({ same: false, lookedUp: true });
+		// An entry the parse never looks up leaves the tree as it is.
+		const unused = done({ grammar: E, input: 'int + int', choices: [[index, 1]] });
+		expect(unused.comparison).toEqual({ same: true, lookedUp: false });
 		// Choosing the action that won anyway changes nothing.
 		const same = done({ grammar: E, input: 'int * int + int', choices: [[index, 0]] });
 		expect(same.choices).toEqual([]);

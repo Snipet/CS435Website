@@ -46,7 +46,7 @@
 		type ConflictsState,
 		type ItemsView
 	} from '$lib/tools/conflicts/state';
-	import { choiceValue, entryText } from '$lib/tools/conflicts/view';
+	import { choiceValue, condenseNotes, entryText } from '$lib/tools/conflicts/view';
 	import { createAnalysisWorker } from '$lib/tools/conflicts/worker';
 	import { toolLink } from '$lib/tools/links';
 	import { toolBySlug } from '$lib/tools/registry';
@@ -78,6 +78,8 @@
 	// Reading the grammar, the declarations and the token string is cheap: it follows every keystroke.
 	const parsed = $derived(parseGrammar(form.grammar));
 	const grammar = $derived(parsed.grammar);
+	/** The capital-letter notes of a grammar such as C- as one note. */
+	const grammarNotes = $derived(condenseNotes(parsed.diagnostics));
 	const precedence = $derived(readPrecedenceText(form.precedence, grammar));
 	const inputRead = $derived(
 		grammar && form.input.trim() !== ''
@@ -189,7 +191,7 @@
 						label="Grammar"
 						bind:value={form.grammar}
 						oninput={edited}
-						diagnostics={parsed.diagnostics}
+						diagnostics={grammarNotes}
 						nonterminals={grammar?.nonterminals}
 						terminals={grammar?.terminals}
 						minRows={3}
@@ -317,6 +319,13 @@
 									<ul class="changes">
 										{#each changes as change (change)}<li>{change}</li>{/each}
 									</ul>
+									{#if done.comparison?.same}
+										<p class="same">
+											The same tree as resolved: {done.comparison.lookedUp
+												? 'the changed entries do not change it.'
+												: 'this parse never looks up the changed entries.'}
+										</p>
+									{/if}
 								</ParseCard>
 							{/if}
 						</div>
@@ -419,6 +428,7 @@
 		max-width: 100%;
 		margin: 0;
 		padding: 6px 12px;
+		position: relative;
 		overflow-x: auto;
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);
@@ -428,7 +438,7 @@
 	}
 	.cards {
 		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(min(100%, 34rem), 1fr));
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr));
 		gap: var(--space-4);
 		align-items: start;
 	}
@@ -441,6 +451,11 @@
 		.trees.pair {
 			grid-template-columns: repeat(2, minmax(0, 1fr));
 		}
+	}
+	.same {
+		margin: 0;
+		color: var(--text-2);
+		font-size: var(--text-sm);
 	}
 	.changes {
 		margin: 0;

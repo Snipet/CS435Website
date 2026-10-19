@@ -102,6 +102,7 @@ exp : exp '+' exp  { $$ = $1 + $3; }
 		max-height: 12rem;
 		margin: 0;
 		padding: 6px 10px;
+		position: relative;
 		overflow: auto;
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);

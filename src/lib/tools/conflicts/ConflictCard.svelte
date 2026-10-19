@@ -81,15 +81,17 @@
 	<ResolutionView explanation={conflict.explanation} {lines} />
 
 	<footer>
-		<SegmentedControl
-			label="{entry} in the other parse"
-			showLabel
-			size="sm"
-			mono
-			{options}
-			value={choice}
-			onchange={(v) => onchoose(v)}
-		/>
+		<div class="choice">
+			<SegmentedControl
+				label="{entry} in the other parse"
+				showLabel
+				size="sm"
+				mono
+				{options}
+				value={choice}
+				onchange={(v) => onchoose(v)}
+			/>
+		</div>
 		<p class="used">
 			{#if conflict.used === null}
 				Type a token string below to see whether its parse looks up {entry}.
@@ -142,6 +144,7 @@
 		align-items: baseline;
 		gap: 2px var(--space-2);
 		margin: 0;
+		position: relative;
 		overflow-x: auto;
 		font-size: var(--text-sm);
 		scrollbar-width: thin;
@@ -202,6 +205,13 @@
 		gap: var(--space-2) var(--space-4);
 		padding-top: var(--space-3);
 		border-top: 1px solid var(--border);
+	}
+	/* A long reduction (C-'s) scrolls rather than widening the card. */
+	.choice {
+		position: relative;
+		max-width: 100%;
+		overflow-x: auto;
+		scrollbar-width: thin;
 	}
 	.used {
 		flex: 1 1 14rem;

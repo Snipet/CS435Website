@@ -33,13 +33,15 @@
 	</header>
 	{@render children?.()}
 	{#if parse.tree}
-		<ParseTreeView
-			tree={parse.tree}
-			layout="baseline"
-			{tone}
-			ariaLabel="{title}: parse tree"
-			minLabelSize={10}
-		/>
+		<div class="tree-box">
+			<ParseTreeView
+				tree={parse.tree}
+				layout="baseline"
+				{tone}
+				ariaLabel="{title}: parse tree"
+				minLabelSize={10}
+			/>
+		</div>
 	{:else}
 		{#if parse.at !== null}
 			<TokenStream
@@ -76,6 +78,13 @@
 		font-size: var(--text-sm);
 		font-weight: 600;
 		letter-spacing: 0;
+	}
+	/* A tall tree (the C- grammar's) scrolls inside the card. */
+	.tree-box {
+		max-height: min(36rem, 70vh);
+		position: relative;
+		overflow: auto;
+		scrollbar-width: thin;
 	}
 	.detail {
 		margin: 0;

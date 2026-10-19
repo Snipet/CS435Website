@@ -119,6 +119,7 @@
 	}
 	.table-wrap {
 		max-width: 100%;
+		position: relative;
 		overflow-x: auto;
 	}
 	table {

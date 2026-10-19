@@ -9,6 +9,7 @@
  */
 import type { ItemView } from '$lib/components/grammar/lr-item';
 import { unproductive, unreachable } from '$lib/theory/grammar/analyze';
+import { treeEquals } from '$lib/theory/grammar/derive';
 import { lalr1Automaton, lr1Automaton, DEFAULT_MAX_STATES } from '$lib/theory/grammar/lr';
 import { grammarClasses } from '$lib/theory/grammar/lr-classes';
 import { lrParse, type LrParse } from '$lib/theory/grammar/lr-parse';
@@ -96,6 +97,11 @@ export type AnalysisResult =
 			parse: ParseView | null;
 			/** The parse with `choices`; null when no choice changes an entry. */
 			alternative: ParseView | null;
+			/**
+			 * How the other parse compares: `same` both accept with one tree;
+			 * `lookedUp` it looks up an entry the choices change.
+			 */
+			comparison: { same: boolean; lookedUp: boolean } | null;
 			/** The choices that change an entry. */
 			choices: [number, 0 | 1][];
 			report: BisonReport;
@@ -209,6 +215,16 @@ export function analyze(request: AnalysisRequest): AnalysisResult {
 		tokens,
 		parse: parse ? parseView(parse) : null,
 		alternative: alternative ? parseView(alternative) : null,
+		comparison:
+			parse && alternative
+				? {
+						same: !!parse.tree && !!alternative.tree && treeEquals(parse.tree, alternative.tree),
+						lookedUp: choices.some((c) => {
+							const conflict = table.conflicts[c.conflict];
+							return looksUp(alternative, conflict.state, conflict.terminal);
+						})
+					}
+				: null,
 		choices: choices.map((c) => [c.conflict, c.action]),
 		report,
 		classes,

@@ -26,17 +26,21 @@
 <div class="resolution">
 	{#if rule && token && explanation.shiftIf}
 		<dl class="precedences">
-			<dt>Rule <span class="f">{rule.text}</span></dt>
-			<dd>
-				{#if rule.last === null}
-					no terminal, so no precedence
-				{:else}
-					last terminal <span class="f">{printSymbols([rule.last])}</span>:
-					{precedenceText(rule.precedence, lines)}
-				{/if}
-			</dd>
-			<dt>Terminal <span class="f">{printSymbols([token.terminal])}</span></dt>
-			<dd>{precedenceText(token.precedence, lines)}</dd>
+			<div>
+				<dt>Rule <span class="f">{rule.text}</span></dt>
+				<dd>
+					{#if rule.last === null}
+						no terminal, so no precedence
+					{:else}
+						last terminal <span class="f">{printSymbols([rule.last])}</span>:
+						{precedenceText(rule.precedence, lines)}
+					{/if}
+				</dd>
+			</div>
+			<div>
+				<dt>Terminal <span class="f">{printSymbols([token.terminal])}</span></dt>
+				<dd>{precedenceText(token.precedence, lines)}</dd>
+			</div>
 		</dl>
 		<p class="lead">Resolve shift/reduce conflict with a <em>shift</em> if</p>
 		<ul class="conditions">
@@ -64,10 +68,17 @@
 		font-size: var(--text-sm);
 	}
 	.precedences {
-		display: grid;
-		grid-template-columns: auto minmax(0, 1fr);
-		gap: 2px var(--space-3);
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
 		margin: 0;
+	}
+	/* A pair on one line when it fits; the precedence wraps under a long rule. */
+	.precedences div {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: baseline;
+		gap: 0 var(--space-3);
 	}
 	.precedences dt {
 		color: var(--text-2);
@@ -109,13 +120,5 @@
 	}
 	.verdict {
 		font-weight: 600;
-	}
-	@media (max-width: 520px) {
-		.precedences {
-			grid-template-columns: minmax(0, 1fr);
-		}
-		.precedences dd {
-			margin-bottom: var(--space-1);
-		}
 	}
 </style>

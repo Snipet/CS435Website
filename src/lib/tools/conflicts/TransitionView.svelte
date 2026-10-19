@@ -102,6 +102,7 @@
 <style>
 	.transition {
 		max-width: 100%;
+		position: relative;
 		overflow-x: auto;
 		font-size: var(--text-sm);
 		scrollbar-width: thin;
