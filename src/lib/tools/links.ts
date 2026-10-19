@@ -39,6 +39,14 @@ export interface LinkStates {
 	ambiguity: { grammar: string; input?: string };
 	'rd-backtracking': { grammar: string; input?: string };
 	'rd-predictive': { grammar: string; input?: string };
+	ll1: { grammar: string; input?: string };
+	'shift-reduce': { grammar: string; input?: string };
+	lr1: { grammar: string; input?: string };
+	/**
+	 * `precedence` holds bison declarations, one per line (`%left '+'`); a
+	 * later line binds tighter.
+	 */
+	conflicts: { grammar: string; input?: string; precedence?: string };
 	/** `source` is C- program text; `input` is the program's input numbers, space-separated. */
 	cminus: { source: string; input?: string };
 	/** `program` is TM assembly text; `input` is the input queue, space-separated. */

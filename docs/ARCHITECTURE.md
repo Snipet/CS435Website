@@ -1417,6 +1417,11 @@ the tool saves in its own hash (`Partial<PhasesState>`, `TDiagramsHash`), and
 its spec holds each of these states against the tool's validator. A tool that
 other tools start to link to on a state gets a `LinkStates` entry.
 
+The parsing tools share one shape: `{ grammar, input? }`, where `grammar` is
+grammar text in lecture notation (§3.10) and `input` a space-separated token
+string. `conflicts` adds `precedence`, bison declarations one per line
+(`%left '+'`, later lines binding tighter, as in Bottom-up Parsing III).
+
 ### 5.2 Graph components (`$lib/components/graph/`)
 
 - `AutomatonView.svelte` — SVG renderer following §3.5. Props: `automaton`,
