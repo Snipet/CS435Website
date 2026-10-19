@@ -2,11 +2,12 @@
 	What the visitor holds after the current step: its member variables, and
 	what it has produced so far: PrintVisitor's out, SymbolTableVisitor's
 	open scopes and errors, ConstantFolder's folded values. What the step
-	itself added is marked; a line number selects its node in the source.
+	itself added is marked; a line number selects its node in the source
+	(the run stays at its step). A box that scrolls takes keyboard focus.
 -->
 <script lang="ts">
 	import type { VisitTrace } from '$lib/theory/cminus';
-	import { revealBlock } from './reveal';
+	import { revealBlock, watchOverflow } from './reveal';
 	import { plural, type SelectionMarks, type SourceRange } from './selection';
 	import { ROW_LIMIT } from './views';
 	import {
@@ -44,6 +45,8 @@
 	const errors = $derived(trace.visitor === 'symbols' ? errorsAt(trace, index, at) : []);
 	const folds = $derived(trace.visitor === 'fold' ? foldsAt(trace, index, source, at) : []);
 	const hiddenFolds = $derived(all ? 0 : Math.max(0, folds.length - ROW_LIMIT));
+	/** The run folds something at some step. */
+	const foldsSome = $derived(trace.output.some((r) => r.kind === 'fold'));
 
 	const pick = (node: number | null) => {
 		const range = rangeOfNode(index, node);
@@ -51,6 +54,9 @@
 	};
 
 	let box: HTMLElement | undefined = $state();
+	let scrolls = $state(false);
+	const watch = watchOverflow((value) => (scrolls = value));
+	const named = (label: string) => (scrolls ? `${label}, scrolls` : label);
 
 	// What the step added stays in view inside its box.
 	$effect(() => {
@@ -89,7 +95,15 @@
 				<button type="button" class="link" onclick={() => (all = true)}>List all</button>
 			</p>
 		{/if}
-		<div class="cm-box text" bind:this={box} role="group" aria-label="printer.out">
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<div
+			class="cm-box text"
+			bind:this={box}
+			{@attach watch}
+			role="group"
+			aria-label={named('printer.out')}
+			tabindex={scrolls ? 0 : undefined}
+		>
 			{#if lines.length}
 				<ol>
 					{#each lines.slice(hiddenLines) as line, i (i + hiddenLines)}
@@ -103,11 +117,14 @@
 			{/if}
 		</div>
 	{:else if trace.visitor === 'symbols'}
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 		<div
 			class="cm-box scopes"
 			bind:this={box}
+			{@attach watch}
 			role="group"
-			aria-label="Open scopes, the innermost last"
+			aria-label={named('Open scopes, the innermost last')}
+			tabindex={scrolls ? 0 : undefined}
 		>
 			{#each scopes as scope (scope.id)}
 				<section class="scope" style="--level: {scope.level}">
@@ -180,7 +197,15 @@
 				<button type="button" class="link" onclick={() => (all = true)}>List all</button>
 			</p>
 		{/if}
-		<div class="cm-box" bind:this={box} role="group" aria-label="folded">
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<div
+			class="cm-box"
+			bind:this={box}
+			{@attach watch}
+			role="group"
+			aria-label={named('folded')}
+			tabindex={scrolls ? 0 : undefined}
+		>
 			{#if folds.length}
 				<table class="cm-table">
 					<caption class="visually-hidden">Folded values</caption>
@@ -210,8 +235,13 @@
 						{/each}
 					</tbody>
 				</table>
-			{:else}
+			{:else if foldsSome}
 				<p class="empty">Nothing folded so far.</p>
+			{:else}
+				<p class="empty">
+					Nothing is folded in this program: none of its operators has two constant operands it can
+					fold. The preset “Constant expressions” has some.
+				</p>
 			{/if}
 		</div>
 	{/if}
@@ -287,7 +317,7 @@
 	.empty {
 		margin: 0;
 		padding: var(--space-2) var(--space-3);
-		color: var(--text-3);
+		color: var(--text-2);
 		font-size: var(--text-sm);
 	}
 	.scopes {

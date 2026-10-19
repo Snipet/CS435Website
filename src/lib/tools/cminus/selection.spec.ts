@@ -25,6 +25,7 @@ import {
 	rangeOfDiagnostic,
 	rangeOfUse,
 	sameRange,
+	selectionKey,
 	trimRange,
 	within,
 	type SourceRange
@@ -70,6 +71,9 @@ describe('ranges', () => {
 		expect(sameRange({ start: 1, end: 2 }, { start: 1, end: 3 })).toBe(false);
 		expect(sameRange(null, null)).toBe(true);
 		expect(sameRange(null, { start: 1, end: 2 })).toBe(false);
+		expect(selectionKey({ start: 3, end: 9 })).toBe('3:9');
+		expect(selectionKey({ start: 3, end: 3 })).toBe('');
+		expect(selectionKey(null)).toBe('');
 
 		expect(trimRange('  a = 1;\n', { start: 0, end: 9 })).toEqual({ start: 2, end: 8 });
 		expect(trimRange('  a = 1;\n', { start: 0, end: 2 })).toBeNull();

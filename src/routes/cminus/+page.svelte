@@ -31,6 +31,7 @@
 		marksFor,
 		rangeOfCaret,
 		sameRange,
+		selectionKey,
 		type SourceRange
 	} from '$lib/tools/cminus/selection';
 	import SelectionBar from '$lib/tools/cminus/SelectionBar.svelte';
@@ -159,7 +160,7 @@
 	const selection = $derived<SourceRange | null>(
 		model.sel ? { start: model.sel[0], end: model.sel[1] } : null
 	);
-	const selKey = $derived(model.sel ? `${model.sel[0]}:${model.sel[1]}` : '');
+	const selKey = $derived(selectionKey(selection));
 	const marks = $derived(c && sameText ? marksFor(c, selection) : NO_MARKS);
 	const summary = $derived(
 		c && sameText && selection ? describeSelection(c, selection, marks) : null
@@ -277,6 +278,7 @@
 		model.input = p.value.input;
 		model.sel = null;
 		if (p.value.tab) model.tab = p.value.tab;
+		if (p.value.visitor) model.visitor = p.value.visitor;
 	}
 
 	const identifierOptions: { value: IdentifierMode; label: string; title: string }[] = [

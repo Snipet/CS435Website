@@ -1227,10 +1227,15 @@ const FOLD: Implementation<FoldState> = {
 			case 'ParameterNode':
 				return;
 			case 'IntegerLiteralExpressionNode': {
-				const value = Number(str(node, 'value'));
+				// value is an int, as node->value is: a literal too large for one (the
+				// semantic analyzer reports it) wraps around at 32 bits.
+				const literal = str(node, 'value');
+				const value = Number(literal) | 0;
 				run.line(
 					[`${cls}.const`, `${cls}.value`],
-					`A literal: isConstant = true, value = ${value}.`,
+					String(value) === literal
+						? `A literal: isConstant = true, value = ${value}.`
+						: `A literal: isConstant = true. ${literal} does not fit in an int (32 bits): it wraps around to value = ${value}.`,
 					() => {
 						s.isConstant = true;
 						s.value = value;

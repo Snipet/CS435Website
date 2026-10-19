@@ -5,7 +5,7 @@
  * identifier rules.
  */
 import type { Preset } from '$lib/components/ui/types';
-import { UNDECLARED_SOURCE } from '$lib/theory/cminus';
+import { UNDECLARED_SOURCE, type VisitorId } from '$lib/theory/cminus';
 import type { TabId } from './state';
 
 export interface CminusPresetValue {
@@ -15,6 +15,8 @@ export interface CminusPresetValue {
 	input: string;
 	/** The tab to open with the program; absent: the tab stays. */
 	tab?: TabId;
+	/** The visitor the Visitor tab runs; absent: the visitor stays. */
+	visitor?: VisitorId;
 }
 
 export type CminusPreset = Preset<CminusPresetValue>;
@@ -208,6 +210,22 @@ void main(void)
 }
 `;
 
+const CONSTANTS = `/* n days in seconds, and the whole weeks in
+   them. The operands of 24 * 60 * 60 are
+   literals: its value is known before the
+   program runs. */
+
+void main(void)
+{
+  int days;
+  int seconds;
+  days = input();
+  seconds = days * (24 * 60 * 60);
+  output(seconds);
+  output(seconds / (7 * 24 * 60 * 60));
+}
+`;
+
 const MISSING_SEMICOLON = `/* The assignment to total is not followed
    by a semicolon. */
 
@@ -285,6 +303,14 @@ export const PRESETS: readonly CminusPreset[] = [
 		group: 'Programs',
 		description: 'Two for loops over a local array: ++i counts up, --i counts down.',
 		value: { source: REVERSE, input: '3 1 4 1 5' }
+	},
+	{
+		id: 'constants',
+		label: 'Constant expressions',
+		group: 'Programs',
+		description:
+			'Products of literals, such as 24 * 60 * 60: ConstantFolder and the optimizer work out their values.',
+		value: { source: CONSTANTS, input: '10', tab: 'visitor', visitor: 'fold' }
 	},
 	{
 		id: 'undeclared',

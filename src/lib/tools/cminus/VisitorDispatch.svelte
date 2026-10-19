@@ -46,6 +46,7 @@
 				current={acceptCurrent}
 				waiting={acceptWaiting}
 				follow={false}
+				wrap
 				ariaLabel="{view.nodeClass}::accept"
 			/>
 		</li>
@@ -66,7 +67,8 @@
 				lines={IVISITOR_CODE}
 				current={view.phase === 'visit' ? overload : NONE}
 				waiting={view.phase === 'visit' ? NONE : overload}
-				maxHeight="11rem"
+				maxHeight="13rem"
+				wrap
 				ariaLabel="IVisitor, the interface of the visitors"
 			/>
 		</li>

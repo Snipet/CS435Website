@@ -1962,7 +1962,10 @@ IVisitor`, `void visit (XNode* node) override`, `node->field->accept
   visited, keeps the left operand in the locals `leftConstant` and `left`
   while it visits the right one, and records `left op right = value` for an
   operator node whose operands are constants (32-bit wrap-around, as the
-  optimizer; a division by 0 is not folded). A trace has an event per accept
+  optimizer; a division by 0 is not folded). `value` is an `int`, as
+  `node->value` is: a literal too large for one (the semantic analyzer
+  reports it) is loaded wrapped around at 32 bits, and its step says so
+  (`4294967296 + 1` folds as `0 + 1 = 1`). A trace has an event per accept
   call, per visit call (the two dispatches: the accept event names the
   pointer type it calls through, the visit event the overload the type of
   `this` picks), per stretch of lines between calls, and per return; each
@@ -1974,7 +1977,16 @@ IVisitor`, `void visit (XNode* node) override`, `node->field->accept
   C- Compiler's Visitor tab computes it on the page, once per program and
   visitor, from the parser's tree (`courseAst` without the later phases).
   The tab needs a program the parser accepted; it shows the scanner's or the
-  parser's diagnostics otherwise.
+  parser's diagnostics otherwise. Its view helpers are in
+  `tools/cminus/visitor-view.ts`. A node picked in its tree moves the run to
+  the node's visit; a frame of its call stack or a line number of its output
+  selects the node in the source and leaves the run at its step
+  (`selectionKey` tells the tab's own selection from one made elsewhere,
+  which moves the run to the visit of its first node, `selectionStep`). A
+  tree of more than `ROW_LIMIT` nodes lists a window of `ROW_LIMIT` rows
+  around the current node (`rowWindow`, moving half the limit at a time)
+  until "List all". The preset "Constant expressions" opens the tab with
+  `ConstantFolder` (`CminusPresetValue.visitor`).
 - **Semantic analyzer.** Errors: undeclared name (once per use; the
   expression gets the type `error`, which is accepted everywhere, so one
   mistake gives one message); redeclaration in a scope (`input` and `output`

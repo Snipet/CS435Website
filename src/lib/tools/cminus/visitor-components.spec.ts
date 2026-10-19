@@ -75,6 +75,18 @@ describe('the Visitor tab', () => {
 		}
 	);
 
+	it('announces the kind of a step apart from its text, and not the lines of code it shows', () => {
+		const html = render(VisitorView, {
+			props: { c: GCD, marks: NO_MARKS, visitor: 'print', onselect }
+		}).body;
+		expect(html).toMatch(
+			/<span class="kind[^"]*">accept<\/span><span class="visually-hidden">:<\/span> printTree calls/
+		);
+		expect(html).toMatch(
+			/<span class="code[^"]*" aria-hidden="true">(<!--[^>]*-->)?<code[^>]*>program->accept \(&amp;printer\);<\/code>/
+		);
+	});
+
 	it('keeps a step from before and marks what belongs to the selection', () => {
 		const whole = { start: 0, end: GCD.source.length };
 		const html = render(VisitorView, {
@@ -142,7 +154,8 @@ describe('the parts', () => {
 		const html = render(VisitorTree, {
 			props: {
 				rows,
-				shown: rows.length,
+				start: 0,
+				end: rows.length,
 				status: (id: number) => visitStatus(trace, index, at, id),
 				current: trace.events[at].node,
 				marked: new Set([0]),
@@ -158,7 +171,8 @@ describe('the parts', () => {
 		const few = render(VisitorTree, {
 			props: {
 				rows,
-				shown: 5,
+				start: 0,
+				end: 5,
 				status: () => 'pending' as const,
 				current: null,
 				marked: new Set<number>(),
@@ -168,6 +182,37 @@ describe('the parts', () => {
 		}).body;
 		expect(few.match(/role="treeitem"/g)).toHaveLength(5);
 		expect(text(few)).toContain(`The first 5 of ${rows.length} nodes are listed.`);
+		// A window further down: those rows, and which they are.
+		const later = render(VisitorTree, {
+			props: {
+				rows,
+				start: 10,
+				end: 15,
+				status: () => 'pending' as const,
+				current: rows[12].id,
+				marked: new Set<number>(),
+				onpick: () => {},
+				onshowall: () => {}
+			}
+		}).body;
+		expect(later.match(/role="treeitem"/g)).toHaveLength(5);
+		expect(later).toContain(`data-id="${rows[10].id}"`);
+		expect(later).not.toContain(`data-id="${rows[9].id}"`);
+		expect(text(later)).toContain(`5 of ${rows.length} nodes are listed, 11 to 15.`);
+		// The roving tab stop is the current node.
+		expect(later).toMatch(new RegExp(`data-id="${rows[12].id}"[^>]*tabindex="0"`));
+	});
+
+	it('the dispatch listings wrap their lines', () => {
+		const accept = trace.events.findIndex((e) => e.kind === 'accept');
+		const html = render(VisitorDispatch, { props: { view: dispatchAt(trace, accept) } }).body;
+		expect(html.match(/class="listing wrap/g)).toHaveLength(2);
+		expect(html).toContain('--indent: 2');
+		const plain = render(VisitorCode, {
+			props: { lines: VISITORS.print.code, ariaLabel: 'Code' }
+		}).body;
+		expect(plain).not.toContain('wrap');
+		expect(plain).not.toContain('--indent');
 	});
 
 	it('the output of each visitor', () => {
@@ -199,5 +244,26 @@ describe('the parts', () => {
 		const folded = output('fold', 'void main(void) { output(2 * 3 + 1); }');
 		expect(folded).toContain('2 * 3 + 1 6 + 1 = 7');
 		expect(folded).toContain('folded.size () 2');
+		expect(folded).not.toContain('Nothing is folded');
+		// A program without a constant operator says so, and names the preset that has some.
+		const none = output('fold', GCD.source);
+		expect(none).toContain('Nothing is folded in this program');
+		expect(none).toContain('“Constant expressions”');
+		expect(presetById('constants')!.label).toBe('Constant expressions');
+	});
+
+	it('the output names its boxes (a box that scrolls says so in the browser)', () => {
+		const html = render(VisitorOutput, {
+			props: {
+				trace,
+				index,
+				at: trace.events.length - 1,
+				source: GCD.source,
+				marks: NO_MARKS,
+				onselect
+			}
+		}).body;
+		expect(html).toContain('aria-label="printer.out"');
+		expect(html).not.toContain('tabindex');
 	});
 });

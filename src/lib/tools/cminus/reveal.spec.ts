@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { centered, scrollDelta, sideDelta } from './reveal';
+import { centered, overflows, scrollDelta, sideDelta } from './reveal';
 
 describe('scrollDelta', () => {
 	const view = { height: 400, head: 30 };
@@ -50,5 +50,16 @@ describe('centered', () => {
 		expect(centered(500, 560, 300)).toBe(380);
 		expect(centered(100, 140, 300)).toBe(0);
 		expect(centered(0, 2000, 400)).toBe(800);
+	});
+});
+
+describe('overflows', () => {
+	it('tells a box that scrolls, down or across, from one that shows all its content', () => {
+		const box = { scrollHeight: 300, clientHeight: 300, scrollWidth: 500, clientWidth: 500 };
+		expect(overflows(box)).toBe(false);
+		// A pixel of rounding is not a scroll.
+		expect(overflows({ ...box, scrollHeight: 301 })).toBe(false);
+		expect(overflows({ ...box, scrollHeight: 340 })).toBe(true);
+		expect(overflows({ ...box, scrollWidth: 620 })).toBe(true);
 	});
 });

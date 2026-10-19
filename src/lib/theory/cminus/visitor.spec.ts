@@ -591,6 +591,37 @@ describe('ConstantFolder', () => {
 	it('finds nothing to fold in a program without constant operators', () => {
 		expect(trace(SAMPLES[0].source, 'fold').output).toEqual([]);
 	});
+
+	it('wraps a literal too large for an int around at 32 bits, as its int value holds it', () => {
+		const t = trace(
+			'void main(void) { output(4294967296 + 1); output(99999999999 * 1); output(2147483647 + 0); }',
+			'fold'
+		);
+		const folds = t.output.flatMap((r) =>
+			r.kind === 'fold' ? [`${r.left} ${r.op} ${r.right} = ${r.value}`] : []
+		);
+		expect(folds).toEqual([
+			'0 + 1 = 1',
+			'1215752191 * 1 = 1215752191',
+			'2147483647 + 0 = 2147483647'
+		]);
+		const literals = t.events.filter(
+			(e) => e.kind === 'line' && e.nodeClass === 'IntegerLiteralExpressionNode'
+		);
+		expect(literals.map((e) => e.text)).toEqual([
+			'A literal: isConstant = true. 4294967296 does not fit in an int (32 bits): it wraps around to value = 0.',
+			'A literal: isConstant = true, value = 1.',
+			'A literal: isConstant = true. 99999999999 does not fit in an int (32 bits): it wraps around to value = 1215752191.',
+			'A literal: isConstant = true, value = 1.',
+			'A literal: isConstant = true, value = 2147483647.',
+			'A literal: isConstant = true, value = 0.'
+		]);
+		// The member value is an int after every step.
+		for (const e of t.events) {
+			const value = Number(e.members[1]);
+			expect(value, e.text).toBe(value | 0);
+		}
+	});
 });
 
 describe('every class', () => {

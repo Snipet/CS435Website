@@ -3,7 +3,8 @@
 	class and key fields, and its line. The node of the current step is
 	marked, the nodes whose visit is in progress are marked lightly, and the
 	nodes not visited yet are dimmed. A row goes to the step that visits its
-	node and selects the node in the source.
+	node and selects the node in the source. A long tree lists a stretch of
+	its rows (around the current node, chosen by the caller).
 
 	Keys, as in a tree view: Up and Down move, Left moves to the parent, Right
 	to the first child, Home and End jump, Enter or Space picks the node.
@@ -15,8 +16,9 @@
 
 	interface Props {
 		rows: readonly VisitRow[];
-		/** How many rows are listed. */
-		shown: number;
+		/** The rows listed: `rows.slice(start, end)`. */
+		start: number;
+		end: number;
 		status: (id: number) => VisitStatus;
 		/** The node of the current step. */
 		current: number | null;
@@ -26,10 +28,10 @@
 		onshowall: () => void;
 	}
 
-	let { rows, shown, status, current, marked, onpick, onshowall }: Props = $props();
+	let { rows, start, end, status, current, marked, onpick, onshowall }: Props = $props();
 
 	const uid = $props.id();
-	const listed = $derived(rows.slice(0, shown));
+	const listed = $derived(rows.slice(start, end));
 	let focusId = $state<number | null>(null);
 	const tabStop = $derived(
 		focusId !== null && listed.some((r) => r.id === focusId)
@@ -134,7 +136,7 @@
 			</div>
 		{/each}
 	</div>
-	<MoreRows shown={listed.length} total={rows.length} noun="nodes" {onshowall} />
+	<MoreRows shown={listed.length} total={rows.length} from={start} noun="nodes" {onshowall} />
 </div>
 
 <style>
@@ -174,9 +176,9 @@
 		outline-offset: -2px;
 		border-radius: var(--radius-sm);
 	}
-	.item.pending .label,
-	.item.pending .field {
-		color: var(--text-3);
+	/* Dimmed, and still at 4.5:1 or more (the field names are --text-3 on every row). */
+	.item.pending .label {
+		color: color-mix(in srgb, var(--text-2) 40%, var(--text-3));
 	}
 	.item.open {
 		border-left-color: color-mix(in srgb, var(--info) 45%, transparent);

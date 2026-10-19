@@ -141,6 +141,23 @@ export function stepOfSelection(index: TraceIndex, nodes: ReadonlySet<number>): 
 	return first === null ? null : index.visitAt[first];
 }
 
+/**
+ * Where a new selection made outside the tab moves the run: to the visit of
+ * its first node, unless the step is at a node of the selection already
+ * (null: the run stays).
+ */
+export function selectionStep(
+	trace: VisitTrace,
+	index: TraceIndex,
+	at: number,
+	nodes: ReadonlySet<number>
+): number | null {
+	if (!nodes.size) return null;
+	const now = trace.events[at];
+	if (now && nodes.has(now.node)) return null;
+	return stepOfSelection(index, nodes);
+}
+
 /** The step to show for a node picked in the tree: its visit (or its accept when that is the step shown). */
 export function stepOfNode(trace: VisitTrace, index: TraceIndex, id: number, at: number): number {
 	const visit = index.visitAt[id] ?? -1;
@@ -172,12 +189,6 @@ export function codeMarks(trace: VisitTrace, at: number): CodeMarks {
 		if (frame.kind === 'accept' && f !== at) waiting.add(frame.lines[0]);
 	}
 	return { current: new Set(event.lines), helper: new Set(event.helper), waiting };
-}
-
-/** IVisitor's line to mark: the overload the step's call picks (on accept and visit steps). */
-export function overloadAt(trace: VisitTrace, at: number): CourseClass | null {
-	const event = trace.events[at];
-	return event && event.kind === 'visit' ? event.nodeClass : null;
 }
 
 /**
@@ -396,15 +407,34 @@ export function visitStatus(
 	return back >= 0 && back <= at ? 'done' : 'open';
 }
 
-/** The number of rows to list: the row limit, or more so the current node is listed. */
-export function rowsShown(
+/** The rows listed: `rows.slice(start, end)`. */
+export interface RowWindow {
+	start: number;
+	end: number;
+}
+
+/**
+ * The rows to list: all of them when there are at most `limit`; otherwise
+ * `limit` rows that hold the current node with at least a quarter of the
+ * limit above it and below it (where the tree has them), or the first
+ * `limit` rows when no node is current. The window moves half the limit at
+ * a time, so most steps keep the rows that are listed.
+ */
+export function rowWindow(
 	rows: readonly VisitRow[],
 	current: number | null,
 	limit: number
-): number {
-	if (rows.length <= limit) return rows.length;
+): RowWindow {
+	const total = rows.length;
+	if (total <= limit) return { start: 0, end: total };
 	const at = current === null ? -1 : rows.findIndex((r) => r.id === current);
-	return Math.min(rows.length, Math.max(limit, at + 1 + Math.floor(limit / 8)));
+	if (at < 0) return { start: 0, end: limit };
+	const half = Math.max(1, Math.floor(limit / 2));
+	const start = Math.max(
+		0,
+		Math.min(total - limit, Math.floor(at / half) * half - Math.floor(half / 2))
+	);
+	return { start, end: start + limit };
 }
 
 // ---------------------------------------------------------------------------

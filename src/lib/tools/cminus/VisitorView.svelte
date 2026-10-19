@@ -4,15 +4,17 @@
 	the lines between calls, returns) to play forward and back: the visitor's
 	code with the lines that run, the call stack, the two dispatches of the
 	innermost call, the tree with the node of the step, and what the visitor
-	has produced. The node of the step is marked in the source too; a node
-	picked here is selected there, and a selection made elsewhere moves the
-	run to the visit of its first node.
+	has produced. The node of the step is marked in the source too. A node
+	picked in the tree moves the run to its visit and selects it in the
+	source; a frame of the stack or a line number of the output only selects
+	it there. A selection made outside the tab moves the run to the visit of
+	its first node.
 -->
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { SegmentedControl, StepControls, Stepper } from '$lib/components/ui';
 	import { VISITORS, type Compilation, type VisitorId } from '$lib/theory/cminus';
-	import { plural, type SelectionMarks, type SourceRange } from './selection';
+	import { plural, selectionKey, type SelectionMarks, type SourceRange } from './selection';
 	import { ROW_LIMIT } from './views';
 	import VisitorCode from './VisitorCode.svelte';
 	import VisitorDispatch from './VisitorDispatch.svelte';
@@ -26,10 +28,10 @@
 		codeMarks,
 		dispatchAt,
 		rangeOfNode,
-		rowsShown,
+		rowWindow,
+		selectionStep,
 		stepCode,
 		stepOfNode,
-		stepOfSelection,
 		traceIndex,
 		visitRows,
 		visitStatus,
@@ -82,30 +84,38 @@
 		oncurrent?.(event ? rangeOfNode(index, event.node) : null);
 	});
 
-	// A new selection moves the run to the visit of its first node, unless the
-	// step is at a node inside it already. A step kept from before is kept.
+	// A new selection made outside the tab moves the run to the visit of its
+	// first node, unless the step is at a node inside it already. A step kept
+	// from before is kept.
 	let handled = untrack(() => (step > 0 ? selKey : ''));
 	$effect(() => {
 		const key = selKey;
 		untrack(() => {
 			if (key === handled) return;
 			handled = key;
-			const nodes = marks.nodes;
-			if (!key || !nodes.size) return;
-			const now = trace.events[stepper.index];
-			if (now && nodes.has(now.node)) return;
-			const to = stepOfSelection(index, nodes);
+			if (!key) return;
+			const to = selectionStep(trace, index, stepper.index, marks.nodes);
 			if (to === null) return;
 			stepper.pause();
 			stepper.set(to);
 		});
 	});
 
+	/**
+	 * Selects a range in the source and leaves the run where it is: the
+	 * selection is the tab's own, so the effect above lets it be (a line number
+	 * of the output stays, with the keyboard focus on it).
+	 */
+	function selectInSource(range: SourceRange) {
+		handled = selectionKey(range);
+		onselect(range);
+	}
+
 	function pick(id: number) {
 		stepper.pause();
 		stepper.set(stepOfNode(trace, index, id, stepper.index));
 		const range = rangeOfNode(index, id);
-		if (range) onselect(range);
+		if (range) selectInSource(range);
 	}
 
 	function choose() {
@@ -115,7 +125,10 @@
 
 	const rows = $derived(visitRows(tree));
 	let allRows = $state(false);
-	const shown = $derived(rowsShown(rows, event?.node ?? null, allRows ? Infinity : ROW_LIMIT));
+	const rowsListed = $derived(rowWindow(rows, event?.node ?? null, allRows ? Infinity : ROW_LIMIT));
+	// Numbers, so the tree lists its rows again only when the window moves.
+	const firstRow = $derived(rowsListed.start);
+	const endRow = $derived(rowsListed.end);
 	const status = $derived.by(() => {
 		const t = trace;
 		const i = index;
@@ -146,8 +159,12 @@
 			{@const e = trace.events[i]}
 			{#if e}
 				<span class="caption">
-					<span class="what"><span class="kind">{KIND_LABEL[e.kind]}</span>{e.text}</span>
-					<span class="code">
+					<span class="what"
+						><span class="kind">{KIND_LABEL[e.kind]}</span><span class="visually-hidden">:</span>
+						{e.text}</span
+					>
+					<!-- The listing marks these lines (aria-current); the caption shows them, unannounced. -->
+					<span class="code" aria-hidden="true">
 						{#each stepCode(trace, i).slice(0, 3) as line, k (k)}<code>{line}</code>{/each}
 					</span>
 				</span>
@@ -175,7 +192,7 @@
 			<h3 class="cm-heading" id="{uid}-stack">
 				Call stack <span class="cm-sub">innermost call first</span>
 			</h3>
-			<VisitorStack rows={stack} {onselect} />
+			<VisitorStack rows={stack} onselect={selectInSource} />
 		</section>
 		<section class="cm-section" aria-labelledby="{uid}-dispatch">
 			<h3 class="cm-heading" id="{uid}-dispatch">
@@ -192,7 +209,8 @@
 			</h3>
 			<VisitorTree
 				{rows}
-				{shown}
+				start={firstRow}
+				end={endRow}
 				{status}
 				current={event?.node ?? null}
 				marked={marks.nodes}
@@ -208,7 +226,7 @@
 			<h3 class="cm-heading" id="{uid}-output">
 				{info.instance} <span class="cm-sub">its members and what it holds after the step</span>
 			</h3>
-			<VisitorOutput {trace} {index} {at} source={c.source} {marks} {onselect} />
+			<VisitorOutput {trace} {index} {at} source={c.source} {marks} onselect={selectInSource} />
 		</section>
 	</div>
 </div>
@@ -230,11 +248,11 @@
 	}
 	.kind {
 		display: inline-block;
-		margin-right: var(--space-2);
+		margin-right: var(--space-1);
 		padding: 0 6px;
 		border-radius: 999px;
 		background: var(--info-soft);
-		color: var(--info);
+		color: var(--text);
 		font-size: var(--text-xs);
 		font-weight: 600;
 		letter-spacing: 0.02em;

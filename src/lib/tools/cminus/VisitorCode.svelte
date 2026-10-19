@@ -2,11 +2,12 @@
 	C++ code with line numbers: the lines a step runs marked, the lines of a
 	helper it runs marked lightly, and the lines where calls in progress wait
 	marked as waiting. A long listing scrolls inside its own box, which
-	follows the marked lines.
+	follows the marked lines; a box that scrolls takes keyboard focus. With
+	`wrap`, a line too long for the box wraps under itself, indented.
 -->
 <script lang="ts">
 	import type { CodeLine } from '$lib/theory/cminus';
-	import { revealBlock } from './reveal';
+	import { revealBlock, watchOverflow } from './reveal';
 
 	interface Props {
 		lines: readonly CodeLine[];
@@ -17,6 +18,8 @@
 		follow?: boolean;
 		/** Any CSS length; `none` lets the listing grow. */
 		maxHeight?: string;
+		/** Wrap long lines instead of scrolling sideways. */
+		wrap?: boolean;
 		ariaLabel: string;
 	}
 
@@ -29,6 +32,7 @@
 		waiting = NONE,
 		follow = true,
 		maxHeight = 'none',
+		wrap = false,
 		ariaLabel
 	}: Props = $props();
 
@@ -51,24 +55,14 @@
 		return () => cancelAnimationFrame(frame);
 	});
 
-	// A box that scrolls takes keyboard focus, so it can be scrolled without a mouse.
-	$effect(() => {
-		const el = box;
-		if (!el || typeof ResizeObserver === 'undefined') return;
-		const check = () =>
-			(scrolls = el.scrollHeight > el.clientHeight + 1 || el.scrollWidth > el.clientWidth + 1);
-		const observer = new ResizeObserver(check);
-		observer.observe(el);
-		if (el.firstElementChild) observer.observe(el.firstElementChild);
-		check();
-		return () => observer.disconnect();
-	});
+	const watch = watchOverflow((value) => (scrolls = value));
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
-	class="listing"
+	class={['listing', { wrap }]}
 	bind:this={box}
+	{@attach watch}
 	style:max-height={maxHeight}
 	style:--digits={digits}
 	role="group"
@@ -81,6 +75,7 @@
 			{@const help = !on && row.id !== null && helper.has(row.id)}
 			{@const wait = !on && !help && row.id !== null && waiting.has(row.id)}
 			<li
+				style:--indent={wrap ? row.text.length - row.text.trimStart().length : undefined}
 				class={{
 					current: on,
 					helper: help,
@@ -166,5 +161,19 @@
 	}
 	li.current .number {
 		color: var(--text);
+	}
+	/* A wrapped line continues two characters further in than its text starts. */
+	.wrap ol {
+		min-width: 0;
+	}
+	.wrap li {
+		white-space: pre-wrap;
+	}
+	.wrap code {
+		--hang: calc((var(--indent, 0) + 2) * 1ch);
+		min-width: 0;
+		padding-left: var(--hang);
+		text-indent: calc(-1 * var(--hang));
+		overflow-wrap: anywhere;
 	}
 </style>

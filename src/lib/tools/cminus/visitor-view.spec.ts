@@ -11,11 +11,11 @@ import {
 	errorsAt,
 	foldsAt,
 	membersAt,
-	overloadAt,
 	printedLines,
 	rangeOfNode,
-	rowsShown,
+	rowWindow,
 	scopeTables,
+	selectionStep,
 	stepCode,
 	stepOfNode,
 	stepOfSelection,
@@ -126,6 +126,20 @@ describe('the picker and the step', () => {
 		expect(stepOfNode(trace, index, 5, accept)).toBe(accept);
 		expect(stepOfNode(trace, index, 9999, 7)).toBe(7);
 	});
+
+	it('moves the run for a selection made outside the tab, unless the step is at one of its nodes', () => {
+		const trace = visitorTrace(program, 'print');
+		const index = traceIndex(trace, tree);
+		expect(selectionStep(trace, index, 0, new Set([12, 9, 10]))).toBe(index.visitAt[9]);
+		expect(selectionStep(trace, index, 0, new Set())).toBeNull();
+		expect(selectionStep(trace, index, 0, new Set([9999]))).toBeNull();
+		// At a node of the selection: the run stays (a frame or the node of the step).
+		expect(selectionStep(trace, index, index.visitAt[10], new Set([9, 10]))).toBeNull();
+		// Later in the run, a selection of an earlier node goes back to its visit.
+		expect(selectionStep(trace, index, trace.events.length - 2, new Set([5]))).toBe(
+			index.visitAt[5]
+		);
+	});
 });
 
 describe('the code marks', () => {
@@ -151,12 +165,6 @@ describe('the code marks', () => {
 			helper: new Set(),
 			waiting: new Set()
 		});
-	});
-
-	it('mark the overload a visit step calls', () => {
-		const trace = visitorTrace(program, 'print');
-		expect(overloadAt(trace, 1)).toBe('ProgramNode');
-		expect(overloadAt(trace, 0)).toBeNull();
 	});
 });
 
@@ -297,13 +305,45 @@ describe('the tree', () => {
 		expect(visitStatus(trace, index, trace.events.length - 1, 5)).toBe('done');
 	});
 
-	it('lists the first rows, and as many more as the current node needs', () => {
+	it('lists every row of a short tree, and a window of the limit around the current node of a long one', () => {
 		const rows = visitRows(tree);
-		expect(rowsShown(rows, null, 800)).toBe(rows.length);
-		expect(rowsShown(rows, null, 10)).toBe(10);
-		expect(rowsShown(rows, 3, 10)).toBe(10);
-		expect(rowsShown(rows, 20, 10)).toBe(22);
-		expect(rowsShown(rows, rows.at(-1)!.id, 10)).toBe(rows.length);
+		expect(rows.length).toBeGreaterThan(30);
+		expect(rowWindow(rows, null, 800)).toEqual({ start: 0, end: rows.length });
+		expect(rowWindow(rows, 30, Infinity)).toEqual({ start: 0, end: rows.length });
+		expect(rowWindow(rows, null, 10)).toEqual({ start: 0, end: 10 });
+		expect(rowWindow(rows, 9999, 10)).toEqual({ start: 0, end: 10 });
+		expect(rowWindow(rows, 3, 10)).toEqual({ start: 0, end: 10 });
+		expect(rowWindow(rows, 20, 10)).toEqual({ start: 18, end: 28 });
+		expect(rowWindow(rows, rows.at(-1)!.id, 10)).toEqual({
+			start: rows.length - 10,
+			end: rows.length
+		});
+		for (let at = 0; at < rows.length; at++) {
+			const { start, end } = rowWindow(rows, rows[at].id, 10);
+			// Never more than the limit; the current node with room on both sides where the tree has it.
+			expect(end - start).toBe(10);
+			expect(at - start).toBeGreaterThanOrEqual(Math.min(2, at));
+			expect(end - 1 - at).toBeGreaterThanOrEqual(Math.min(2, rows.length - 1 - at));
+		}
+		// The window moves half the limit at a time.
+		const starts = new Set(rows.map((r) => rowWindow(rows, r.id, 10).start));
+		expect(starts.size).toBeLessThanOrEqual(Math.ceil(rows.length / 5) + 1);
+	});
+
+	it('keeps a long program at the limit wherever the run is', () => {
+		const long = Array.from({ length: 300 }, (_, i) => `  x = x + ${i};`).join('\n');
+		const p = compile(`void main(void)\n{\n  int x;\n${long}\n}`).parse!.program;
+		const rows = visitRows(visitorTree(p));
+		expect(rows.length).toBeGreaterThan(1000);
+		const trace = visitorTrace(p, 'print');
+		for (const at of [0, trace.events.length >> 1, trace.events.length - 2]) {
+			const node = trace.events[at].node;
+			const { start, end } = rowWindow(rows, node, 800);
+			expect(end - start).toBe(800);
+			const i = rows.findIndex((r) => r.id === node);
+			expect(i).toBeGreaterThanOrEqual(start);
+			expect(i).toBeLessThan(end);
+		}
 	});
 });
 
