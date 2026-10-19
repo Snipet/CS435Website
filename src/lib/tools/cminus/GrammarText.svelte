@@ -1,7 +1,7 @@
 <!--
-	The grammar of C-: the 29 rules of the language definition in BNF, and the
-	EBNF the parser follows, with a link that opens the BNF in Context-Free
-	Grammars.
+	The grammar of C-: the 29 rules of the language definition in BNF (rules 16
+	and 26 with the for loop and the prefix operators ++ and --), and the EBNF
+	the parser follows, with a link that opens the BNF in Context-Free Grammars.
 -->
 <script lang="ts">
 	import { Icon } from '$lib/components/ui';
@@ -32,6 +32,11 @@
 				{/each}
 			</ol>
 		</div>
+		<p class="cm-note">
+			Rules 16 and 26 include two extensions: <code>for</code> loops, whose three parts are written
+			with <code>expression-stmt</code>, and the prefix operators <code>++</code> and
+			<code>--</code>.
+		</p>
 		{#if href}
 			<p class="cm-note">
 				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path and adds the hash -->

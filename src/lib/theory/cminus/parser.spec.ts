@@ -45,6 +45,8 @@ function shape(e: Expr): string {
 			return `(${shape(e.target)} = ${shape(e.value)})`;
 		case 'Binary':
 			return `(${shape(e.left)} ${e.op} ${shape(e.right)})`;
+		case 'Unary':
+			return `(${e.op}${shape(e.target)})`;
 	}
 }
 
@@ -374,6 +376,161 @@ describe('expressions (rules 18–29)', () => {
 		expect(round('x = (y = 3)')).toBe('x = y = 3');
 		expect(round('(x = 1) + 2')).toBe('(x = 1) + 2');
 		expect(round('f(a[i + 1], (b = 2))')).toBe('f(a[i + 1], b = 2)');
+	});
+});
+
+describe('the extensions: for loops (rule 16) and ++, -- (rule 26)', () => {
+	it('for ( init ; test ; update ) statement', () => {
+		const [f] = statements('for (i = 0; i < 10; ++i) { x = x + i; }');
+		expect(f).toMatchObject({
+			kind: 'For',
+			init: { kind: 'Assign' },
+			test: { kind: 'Binary', op: '<' },
+			update: { kind: 'Unary', op: '++', target: { kind: 'Var', name: 'i' } },
+			body: { kind: 'Compound' },
+			headSpan: { start: 18, end: 42 }
+		});
+		const text = inMain('for (i = 0; i < 10; ++i) { x = x + i; }');
+		expect(text.slice(f.span.start, f.span.end)).toBe('for (i = 0; i < 10; ++i) { x = x + i; }');
+		if (f.kind !== 'For') throw new Error('a for loop');
+		expect(text.slice(f.headSpan.start, f.headSpan.end)).toBe('for (i = 0; i < 10; ++i)');
+	});
+
+	it('each of the three expressions may be left out', () => {
+		const parts = ['i = 0', 'i < 10', 'i = i + 1'];
+		for (let mask = 0; mask < 8; mask++) {
+			const [a, b, c] = parts.map((p, k) => (mask & (1 << k) ? p : ''));
+			const [f] = statements(`for (${a}; ${b}; ${c}) x = 1;`);
+			expect(f).toMatchObject({
+				kind: 'For',
+				init: a ? { kind: 'Assign' } : null,
+				test: b ? { kind: 'Binary' } : null,
+				update: c ? { kind: 'Assign' } : null,
+				body: { kind: 'ExprStmt' }
+			});
+		}
+		expect(statements('for (;;) ;')[0]).toMatchObject({
+			kind: 'For',
+			init: null,
+			test: null,
+			update: null,
+			body: { kind: 'ExprStmt', expr: null }
+		});
+	});
+
+	it('a for loop prints its parts and its body as children', () => {
+		const r = parseSource(inMain('for (; i < n; --i) for (j = 0; ; ) ;'));
+		expect(printAst(r.program).split('\n').slice(3)).toEqual([
+			'      For',
+			'        Binary <',
+			'          Var i',
+			'          Var n',
+			'        Unary --',
+			'          Var i',
+			'        For',
+			'          Assign =',
+			'            Var j',
+			'            Num 0',
+			'          ExprStmt ;'
+		]);
+	});
+
+	it('++ and -- are prefix operators on a variable or an array element', () => {
+		expect(expr('++i')).toBe('(++i)');
+		expect(expr('--a[i + 1]')).toBe('(--a[(i + 1)])');
+		expect(expr('x = ++i * 2')).toBe('(x = ((++i) * 2))');
+		expect(expr('a[++i] = --j')).toBe('(a[(++i)] = (--j))');
+		expect(expr('++i < --j')).toBe('((++i) < (--j))');
+		expect(expr('f(++i, ++a[0])')).toBe('f((++i), (++a[0]))');
+		expect(expr('a + ++b')).toBe('(a + (++b))');
+		const [s] = statements('++count[k];');
+		expect(s).toMatchObject({
+			expr: {
+				kind: 'Unary',
+				op: '++',
+				opSpan: { start: 18, end: 20 },
+				span: { start: 18, end: 28 },
+				target: { kind: 'Index', name: 'count' }
+			}
+		});
+	});
+
+	it('the postfix form is a syntax error that suggests the prefix form', () => {
+		expect(messages(inMain('i++;'))).toEqual([
+			'C- has only the prefix form of ++: write ++i, not i++.'
+		]);
+		expect(messages(inMain('x = a[i + 1]--;'))).toEqual([
+			'C- has only the prefix form of --: write --a[i + 1], not a[i + 1]--.'
+		]);
+		expect(messages(inMain('for (i = 0; i < 9; i++) ;'))).toEqual([
+			'C- has only the prefix form of ++: write ++i, not i++.'
+		]);
+		expect(messages(inMain('a[f(1, 2, 3) + g(4, 5, 6)]++;'))).toEqual([
+			'C- has only the prefix form of ++: write ++a[…], not a[…]++.'
+		]);
+		const r = parseSource(inMain('n++;'));
+		expect(r.diagnostics[0].span).toMatchObject({ start: 19, end: 21 });
+	});
+
+	it('only a variable or an element can be incremented', () => {
+		expect(messages(inMain('++3;'))).toEqual(['Expected a variable after "++", found "3".']);
+		expect(messages(inMain('--(i);'))).toEqual(['Expected a variable after "--", found "(".']);
+		expect(messages(inMain('++f(x);'))).toEqual([
+			'++ needs a variable or an array element: f(…) is a call.'
+		]);
+		expect(messages(inMain('++ ++i;'))).toEqual(['Expected a variable after "++", found "++".']);
+		expect(messages(inMain('++i = 3;'))).toEqual([
+			'The left side of "=" must be a variable or an array element.'
+		]);
+	});
+
+	it('+ + and - - are two operators, and C- has no unary plus or minus', () => {
+		expect(messages(inMain('x = a + +b;'))).toEqual(['Expected an expression, found "+".']);
+		expect(messages(inMain('x = a - -b;'))).toEqual(['C- has no unary minus: write 0 - x.']);
+	});
+
+	it('says what is missing in a for head, and goes on after it', () => {
+		expect(messages(inMain('for (i = 0, i < 9; ++i) ;'))).toEqual([
+			'Expected ";" after the initializer of "for", found ",".'
+		]);
+		expect(messages(inMain('for (i = 0; i < 9) ;'))).toEqual([
+			'Expected ";" after the condition of "for", found ")".'
+		]);
+		expect(messages(inMain('for (;; ++i ;'))).toEqual([
+			'Expected ")" after the update of "for", found ";".'
+		]);
+		expect(messages(inMain('for i = 0; i < 9; ++i) ;'))).toEqual([
+			'Expected "(" after "for", found "i".'
+		]);
+		// One message for a broken head: the rest of the head is skipped, then its statement.
+		const r = parseSource(inMain('x = 1; for (i = ; i < f(n); ++i) x = 2; y = 3;'));
+		expect(r.diagnostics.map((d) => d.message)).toEqual(['Expected an expression, found ";".']);
+		const body = (r.program.decls[0] as FunDecl).body.body;
+		expect(body.map((s) => s.kind === 'ExprStmt' && s.expr && shape(s.expr))).toEqual([
+			'(x = 1)',
+			'(y = 3)'
+		]);
+		// A block after a broken head is parsed on its own.
+		const block = parseSource(inMain('for (i = 0; i < ; ++i) { x = 2; } y = 3;'));
+		expect(block.diagnostics).toHaveLength(1);
+		expect((block.program.decls[0] as FunDecl).body.body.map((s) => s.kind)).toEqual([
+			'Compound',
+			'ExprStmt'
+		]);
+	});
+
+	it('for loops nest as deeply as other statements', () => {
+		const r = parseSource(inMain(`${'for (;;) '.repeat(5000)};`));
+		expect(r.diagnostics.at(-1)?.message).toBe(
+			`This is nested more than ${MAX_NESTING} levels deep.`
+		);
+		expect(parseSource(inMain(`${'for (;;) '.repeat(MAX_NESTING - 10)};`)).ok).toBe(true);
+	});
+
+	it('printExpr writes the prefix operators', () => {
+		const [s] = statements('x = ++a[i] * --y + f(++z);');
+		if (s.kind !== 'ExprStmt' || !s.expr) throw new Error('not an expression');
+		expect(printExpr(s.expr)).toBe('x = ++a[i] * --y + f(++z)');
 	});
 });
 
@@ -745,9 +902,21 @@ describe('the grammar texts', () => {
 				'if',
 				'else',
 				'while',
+				'for',
 				'return',
-				...'+ - * / < <= > >= == != = ; , ( ) [ ] { }'.split(' ')
+				...'+ - * / < <= > >= == != = ; , ( ) [ ] { } ++ --'.split(' ')
 			].sort()
+		);
+	});
+
+	it('the extensions are in rule 16 (iteration-stmt) and rule 26 (factor)', () => {
+		const rules = CMINUS_BNF.split('\n');
+		expect(rules[15]).toBe(
+			'iteration-stmt → while ( expression ) statement | for ( expression-stmt expression-stmt ) statement | for ( expression-stmt expression-stmt expression ) statement'
+		);
+		expect(rules[25]).toBe('factor → ( expression ) | var | call | NUM | "++" var | "--" var');
+		expect(CMINUS_EBNF).toContain(
+			'iteration-stmt → while ( expression ) statement | for ( [ expression ] ; [ expression ] ; [ expression ] ) statement'
 		);
 	});
 
@@ -823,6 +992,58 @@ describe('the grammar texts', () => {
 			expect(printAst(result.program).split('\n')).toHaveLength(allNodes(result.program).length);
 		}
 		expect(errors).toBeGreaterThan(400);
+	});
+
+	it('with for, ++ and --: accepts exactly the token strings the BNF derives', () => {
+		const g = bnf.grammar!;
+		const e = ebnfToGrammar(ebnf.grammar!);
+		const pieces = [...PIECES, 'for', '++', '--', '++', 'for'];
+		const base = scan(
+			'int a[3]; void main(void) { int i; for (i = 0; i < 3; ++i) a[i] = --i; for (;;) ; for (; i;) ++a[i]; }'
+		).tokens.filter((t) => t.type !== 'ENDFILE');
+		const rnd = random(1435);
+		let accepted = 0;
+		let rejected = 0;
+		for (let round = 0; round < 300; round++) {
+			const words = base.map((t) => t.lexeme);
+			for (let edits = 1 + Math.floor(rnd() * 3); edits > 0; edits--) {
+				const at = Math.floor(rnd() * words.length);
+				const piece = pieces[Math.floor(rnd() * pieces.length)];
+				const kind = rnd();
+				if (kind < 0.34) words.splice(at, 1);
+				else if (kind < 0.67) words[at] = piece;
+				else words.splice(at, 0, piece);
+			}
+			const tokens = scan(words.join(' ')).tokens;
+			const expected = recognizes(g, terminals(tokens));
+			expect(recognizes(e, terminals(tokens))).toBe(expected);
+			const result = parse(tokens);
+			if (result.ok !== expected) {
+				throw new Error(`parser says ${result.ok}, grammar says ${expected}: ${words.join(' ')}`);
+			}
+			if (expected) accepted++;
+			else rejected++;
+		}
+		expect(accepted).toBeGreaterThan(5);
+		expect(rejected).toBeGreaterThan(100);
+		// Random soups of the new tokens as well.
+		for (let round = 0; round < 300; round++) {
+			const length = Math.floor(rnd() * 40);
+			const words: string[] = [];
+			for (let i = 0; i < length; i++) words.push(pieces[Math.floor(rnd() * pieces.length)]);
+			const tokens = scan(words.join(' ')).tokens;
+			expect(parse(tokens).ok).toBe(recognizes(g, terminals(tokens)));
+		}
+	});
+
+	it('both grammars derive the sample program with for, ++ and --', () => {
+		const source = SAMPLES.find((s) => s.id === 'counting-sort')!.source;
+		const tokens = terminals(scan(source).tokens);
+		expect(tokens).toContain('for');
+		expect(tokens).toContain('++');
+		expect(tokens).toContain('--');
+		expect(recognizes(bnf.grammar!, tokens)).toBe(true);
+		expect(recognizes(ebnfToGrammar(ebnf.grammar!), tokens)).toBe(true);
 	});
 
 	it('long soups of one token end too', () => {

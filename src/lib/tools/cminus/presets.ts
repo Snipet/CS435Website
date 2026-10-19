@@ -187,6 +187,27 @@ void main(void)
 }
 `;
 
+const REVERSE = `/* Reads five numbers into an array, then
+   prints them in reverse order and their
+   sum. The for loops step the index with
+   ++ and --. */
+
+void main(void)
+{
+  int numbers[5];
+  int i;
+  int sum;
+  for (i = 0; i < 5; ++i)
+    numbers[i] = input();
+  sum = 0;
+  for (i = 4; i >= 0; --i) {
+    output(numbers[i]);
+    sum = sum + numbers[i];
+  }
+  output(sum);
+}
+`;
+
 const MISSING_SEMICOLON = `/* The assignment to total is not followed
    by a semicolon. */
 
@@ -257,6 +278,13 @@ export const PRESETS: readonly CminusPreset[] = [
 		group: 'Programs',
 		description: 'The while test uses the value of an assignment: (n = input()) != 0.',
 		value: { source: SUM, input: '4 8 15 16 23 42 0' }
+	},
+	{
+		id: 'reverse',
+		label: 'Reverse with for loops',
+		group: 'Programs',
+		description: 'Two for loops over a local array: ++i counts up, --i counts down.',
+		value: { source: REVERSE, input: '3 1 4 1 5' }
 	},
 	{
 		id: 'undeclared',

@@ -15,9 +15,15 @@
  *   without one, what it read is the first factor of the simple-expression.
  *   The token stream is never rewound.
  *
+ * Two extensions of the language: `for ( [expression] ; [expression] ;
+ * [expression] ) statement` and the prefix operators `++ var` and `-- var`.
+ * In the BNF the three parts of the for head are written with
+ * `expression-stmt`, so the grammar keeps its 29 rules.
+ *
  * A syntax error is a diagnostic. Recovery is panic mode: the statement (or
  * declaration) in progress is dropped and tokens are skipped to the next `;`
- * or to a `}`, so one program can report several errors.
+ * or to a `}`, so one program can report several errors. An error in the
+ * head of a for loop skips to the end of the head first.
  *
  * Limits of this parser, not of the grammar: statements and expressions nest
  * at most MAX_NESTING deep and the tree is at most MAX_TREE_DEPTH levels deep,
@@ -34,7 +40,9 @@ import {
 	type Decl,
 	type Expr,
 	type FunDecl,
+	type For,
 	type If,
+	type IncOp,
 	type Index,
 	type AstNode,
 	type Param,
@@ -42,8 +50,10 @@ import {
 	type RelOp,
 	type Stmt,
 	type TypeSpec,
+	type Unary,
 	type Var,
-	type VarDecl
+	type VarDecl,
+	printExpr
 } from './ast';
 import { scan, type ScanOptions } from './scanner';
 import {
@@ -55,7 +65,10 @@ import {
 	type TokenType
 } from './tokens';
 
-/** The grammar of the language definition (29 rules), in the site's notation. */
+/**
+ * The grammar of the language definition (29 rules), in the site's notation,
+ * with the two extensions in rules 16 (`for`) and 26 (`++ var`, `-- var`).
+ */
 export const CMINUS_BNF = `program → declaration-list
 declaration-list → declaration-list declaration | declaration
 declaration → var-declaration | fun-declaration
@@ -71,7 +84,7 @@ statement-list → statement-list statement | ε
 statement → expression-stmt | compound-stmt | selection-stmt | iteration-stmt | return-stmt
 expression-stmt → expression ; | ;
 selection-stmt → if ( expression ) statement | if ( expression ) statement else statement
-iteration-stmt → while ( expression ) statement
+iteration-stmt → while ( expression ) statement | for ( expression-stmt expression-stmt ) statement | for ( expression-stmt expression-stmt expression ) statement
 return-stmt → return ; | return expression ;
 expression → var = expression | simple-expression
 var → ID | ID [ expression ]
@@ -81,7 +94,7 @@ additive-expression → additive-expression addop term | term
 addop → + | -
 term → term mulop factor | factor
 mulop → * | /
-factor → ( expression ) | var | call | NUM
+factor → ( expression ) | var | call | NUM | "++" var | "--" var
 call → ID ( args )
 args → arg-list | ε
 arg-list → arg-list , expression | expression`;
@@ -102,7 +115,7 @@ compound-stmt → "{" { var-declaration } { statement } "}"
 statement → expression-stmt | compound-stmt | selection-stmt | iteration-stmt | return-stmt
 expression-stmt → [ expression ] ;
 selection-stmt → if ( expression ) statement [ else statement ]
-iteration-stmt → while ( expression ) statement
+iteration-stmt → while ( expression ) statement | for ( [ expression ] ; [ expression ] ; [ expression ] ) statement
 return-stmt → return [ expression ] ;
 expression → var = expression | simple-expression
 var → ID [ "[" expression "]" ]
@@ -112,7 +125,7 @@ additive-expression → term { addop term }
 addop → + | -
 term → factor { mulop factor }
 mulop → * | /
-factor → ( expression ) | var | call | NUM
+factor → ( expression ) | var | call | NUM | "++" var | "--" var
 call → ID ( args )
 args → [ expression { , expression } ]`;
 
@@ -487,7 +500,9 @@ class Parser {
 				case 'IF':
 					return this.selection();
 				case 'WHILE':
-					return this.iteration();
+					return this.whileStmt();
+				case 'FOR':
+					return this.forStmt();
 				case 'RETURN':
 					return this.returnStmt();
 				case 'ELSE':
@@ -546,7 +561,7 @@ class Parser {
 	}
 
 	/** iteration-stmt → while ( expression ) statement */
-	private iteration(): Stmt {
+	private whileStmt(): Stmt {
 		const keyword = this.advance();
 		this.expect('LPAREN', 'after "while"');
 		const test = this.expression();
@@ -562,6 +577,46 @@ class Parser {
 				headSpan: joinSpans(keyword.span, close.span)
 			},
 			test,
+			body
+		);
+	}
+
+	/** iteration-stmt → for ( [ expression ] ; [ expression ] ; [ expression ] ) statement */
+	private forStmt(): For {
+		const keyword = this.advance();
+		let open = this.pos;
+		let init: Expr | null = null;
+		let test: Expr | null = null;
+		let update: Expr | null = null;
+		let close: Token;
+		try {
+			this.expect('LPAREN', 'after "for"');
+			open = this.pos;
+			if (!this.at('SEMI')) init = this.expression();
+			this.expect('SEMI', 'after the initializer of "for"');
+			if (!this.at('SEMI')) test = this.expression();
+			this.expect('SEMI', 'after the condition of "for"');
+			if (!this.at('RPAREN')) update = this.expression();
+			close = this.expect('RPAREN', 'after the update of "for"');
+		} catch (e) {
+			if (e instanceof SyntaxFailure) this.skipForHead(open);
+			throw e;
+		}
+		const body = this.statement();
+		return this.built(
+			{
+				kind: 'For',
+				id: 0,
+				span: joinSpans(keyword.span, body.span),
+				init,
+				test,
+				update,
+				body,
+				headSpan: joinSpans(keyword.span, close.span)
+			},
+			init,
+			test,
+			update,
 			body
 		);
 	}
@@ -703,11 +758,49 @@ class Parser {
 					value: t.value ?? 0,
 					text: t.lexeme
 				});
+			case 'INCREMENT':
+			case 'DECREMENT':
+				return this.unary();
 			case 'MINUS':
 				return this.fail('C- has no unary minus: write 0 - x.');
 			default:
 				return this.fail(`Expected an expression, found ${describeToken(t)}.`);
 		}
+	}
+
+	/** factor → "++" var | "--" var */
+	private unary(): Unary {
+		const opToken = this.advance();
+		const op = opToken.lexeme as IncOp;
+		if (!this.at('ID')) {
+			this.fail(`Expected a variable after "${op}", found ${describeToken(this.peek())}.`);
+		}
+		const target = this.varOrCall();
+		if (target.kind === 'Call') {
+			this.fail(
+				`${op} needs a variable or an array element: ${target.name}(…) is a call.`,
+				target.span
+			);
+		}
+		return this.built(
+			{
+				kind: 'Unary',
+				id: 0,
+				span: joinSpans(opToken.span, target.span),
+				op,
+				opSpan: opToken.span,
+				target
+			},
+			target
+		);
+	}
+
+	/** A var followed by `++` or `--`: C- has the prefix form only. */
+	private postfix(target: Var | Index): never {
+		const op = this.peek().lexeme;
+		const full = printExpr(target);
+		const text = full.length > 24 && target.kind === 'Index' ? `${target.name}[…]` : full;
+		return this.fail(`C- has only the prefix form of ${op}: write ${op}${text}, not ${text}${op}.`);
 	}
 
 	/**
@@ -739,11 +832,12 @@ class Parser {
 				...args
 			);
 		}
+		let target: Var | Index;
 		if (this.at('LBRACKET')) {
 			this.advance();
 			const index = this.expression();
 			const close = this.expect('RBRACKET', 'after the subscript');
-			return this.built(
+			target = this.built(
 				{
 					kind: 'Index',
 					id: 0,
@@ -754,8 +848,11 @@ class Parser {
 				},
 				index
 			);
+		} else {
+			target = this.built({ kind: 'Var', id: 0, span: name.span, name: name.lexeme });
 		}
-		return this.built({ kind: 'Var', id: 0, span: name.span, name: name.lexeme });
+		if (this.at('INCREMENT') || this.at('DECREMENT')) this.postfix(target);
+		return target;
 	}
 
 	// --- Recovery -----------------------------------------------------------
@@ -771,11 +868,31 @@ class Parser {
 				case 'LBRACE':
 				case 'IF':
 				case 'WHILE':
+				case 'FOR':
 				case 'RETURN':
 					return;
 				default:
 					this.advance();
 			}
+		}
+	}
+
+	/**
+	 * Skips the rest of a for head that starts at `open` (after its `(`, or
+	 * where the missing `(` should be): through its `)`, or up to a brace or
+	 * the end of the program.
+	 */
+	private skipForHead(open: number): void {
+		let depth = 1;
+		for (let k = open; k < this.pos; k++) {
+			const type = this.tokens[k].type;
+			if (type === 'LPAREN') depth++;
+			else if (type === 'RPAREN') depth--;
+		}
+		while (depth > 0 && !this.at('ENDFILE') && !this.at('LBRACE') && !this.at('RBRACE')) {
+			const type = this.advance().type;
+			if (type === 'LPAREN') depth++;
+			else if (type === 'RPAREN') depth--;
 		}
 	}
 

@@ -1,7 +1,8 @@
 <!--
 	A compact reference for C- as this compiler implements it: lexical
 	conventions, the token table, the grammar, the semantic rules and the
-	run-time conventions of the generated code.
+	run-time conventions of the generated code. Two extensions of the language
+	definition are included: for loops and the prefix operators ++ and --.
 -->
 <script lang="ts">
 	import {
@@ -109,7 +110,14 @@
 			</dd>
 			<dt>Longest match</dt>
 			<dd>
-				The longest token wins: <code>&lt;=</code> is LTE, <code>&lt; =</code> is LT ASSIGN.
+				The longest token wins: <code>&lt;=</code> is LTE, <code>&lt; =</code> is LT ASSIGN;
+				<code>++</code> is INCREMENT, <code>+ +</code> is PLUS PLUS.
+			</dd>
+			<dt>Extensions</dt>
+			<dd>
+				The keyword <code>for</code> and the symbols <code>++</code> and <code>--</code> are
+				additions to the language definition, for the <code>for</code> loop (BNF rule 16) and the prefix
+				operators (rule 26).
 			</dd>
 		</dl>
 	</section>
@@ -174,6 +182,18 @@
 				when its value is 0.
 			</li>
 			<li>An assignment is an expression: its value is the value assigned.</li>
+			<li>
+				<code>for (e1; e2; e3) s</code> evaluates <code>e1</code> once, then runs <code>s</code>
+				followed by <code>e3</code> as long as <code>e2</code> is not 0. Each of the three
+				expressions may be left out; without <code>e2</code> the loop ends only by
+				<code>return</code>.
+			</li>
+			<li>
+				<code>++v</code> and <code>--v</code> add or subtract 1, store the result back in
+				<code>v</code> and have it as their value. <code>v</code> is an <code>int</code> variable or
+				an array element, as on the left side of <code>=</code>. Only the prefix form exists:
+				<code>i++</code> is a syntax error.
+			</li>
 			<li>An <code>else</code> belongs to the nearest <code>if</code> that has none yet.</li>
 			<li>
 				A function declared <code>int</code> returns with <code>return expression;</code>, a

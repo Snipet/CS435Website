@@ -20,8 +20,14 @@
  *
  *   if (e) s1 else s2      e → t · if_false t _ L1 · s1 · goto _ _ L2 · label L1 · s2 · label L2
  *   while (e) s            label L1 · e → t · if_false t _ L2 · s · goto _ _ L1 · label L2
+ *   for (e1; e2; e3) s     e1 · label L1 · e2 → t · if_false t _ L2 · s · e3 · goto _ _ L1 · label L2
  *
- * (an if without else has the same shape with nothing between the labels).
+ * (an if without else has the same shape with nothing between the labels; a
+ * for loop without e2 has no if_false and no L2, without e1 or e3 nothing in
+ * their place). The prefix operators store back and have the new value:
+ *
+ *   ++x                    + x #1 x                                 x := x + 1, its value is x
+ *   --a[i]                 =[] a i t1 · - t1 #1 t2 · []= t2 i a     its value is t2
  * Temporaries are numbered from t1 in each function; labels are numbered
  * through the whole program.
  *
@@ -271,11 +277,14 @@ export function generateIr(program: Program, semantic: SemanticResult): IrProgra
 	const last = new Map<number, number>();
 	/** Ids of the Call nodes, ascending. */
 	const calls: number[] = [];
-	/** Symbol id → ids of the Assign nodes that assign to it as a whole variable, ascending. */
+	/**
+	 * Symbol id → ids of the Assign and Unary nodes that change it as a whole
+	 * variable, ascending.
+	 */
 	const assigns = new Map<number, number[]>();
 	const index = (node: AstNode): number => {
 		if (node.kind === 'Call') calls.push(node.id);
-		if (node.kind === 'Assign' && node.target.kind === 'Var') {
+		if ((node.kind === 'Assign' || node.kind === 'Unary') && node.target.kind === 'Var') {
 			const symbol = semantic.refs.get(node.target.id);
 			if (symbol !== undefined) {
 				const list = assigns.get(symbol);
@@ -402,7 +411,29 @@ export function generateIr(program: Program, semantic: SemanticResult): IrProgra
 					emit('[]=', value, i, variable(symbolOf(e.target)), e.id, e.span);
 					return value;
 				}
+				case 'Unary': {
+					const op = e.op === '++' ? '+' : '-';
+					const target = variable(symbolOf(e.target));
+					if (e.target.kind === 'Var') {
+						emit(op, target, constant(1), target, e.id, e.span);
+						return target;
+					}
+					// The subscript is computed once: the element is read and stored through it.
+					const i = expr(e.target.index);
+					const old = temp();
+					emit('=[]', target, i, old, e.target.id, e.target.span);
+					const t = temp();
+					emit(op, old, constant(1), t, e.id, e.span);
+					emit('[]=', t, i, target, e.id, e.span);
+					return t;
+				}
 			}
+		};
+
+		/** An expression evaluated for its effect only (a statement, a for initializer or update). */
+		const effect = (e: Expr): void => {
+			if (e.kind === 'Call') call(e, false);
+			else expr(e);
 		};
 
 		const stmt = (s: Stmt): void => {
@@ -411,8 +442,7 @@ export function generateIr(program: Program, semantic: SemanticResult): IrProgra
 					s.body.forEach(stmt);
 					return;
 				case 'ExprStmt':
-					if (s.expr?.kind === 'Call') call(s.expr, false);
-					else if (s.expr) expr(s.expr);
+					if (s.expr) effect(s.expr);
 					return;
 				case 'Return':
 					emit('return', s.value ? expr(s.value) : null, null, null, s.id, s.span);
@@ -438,6 +468,19 @@ export function generateIr(program: Program, semantic: SemanticResult): IrProgra
 					stmt(s.body);
 					emit('goto', null, null, l1, s.id, s.headSpan);
 					emit('label', null, null, l2, s.id, s.headSpan);
+					return;
+				}
+				case 'For': {
+					if (s.init) effect(s.init);
+					const l1 = label(++labels);
+					// Without a condition the loop never ends by itself: no exit label.
+					const l2 = s.test ? label(++labels) : null;
+					emit('label', null, null, l1, s.id, s.headSpan);
+					if (s.test && l2) emit('if_false', expr(s.test), null, l2, s.id, s.headSpan);
+					stmt(s.body);
+					if (s.update) effect(s.update);
+					emit('goto', null, null, l1, s.id, s.headSpan);
+					if (l2) emit('label', null, null, l2, s.id, s.headSpan);
 					return;
 				}
 			}

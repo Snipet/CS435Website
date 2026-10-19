@@ -302,6 +302,34 @@ void main(void)
 }
 `;
 
+const COUNTING_SORT = `/* Counting sort of digits: reads numbers up to the first
+   negative one, counts each digit 0 to 9 (larger numbers
+   are skipped), prints how many digits it read, then the
+   digits in ascending order. Uses for loops and the prefix
+   operators ++ and --. */
+
+int count[10];
+
+void main(void)
+{
+  int value;
+  int digit;
+  int read;
+  for (digit = 0; digit < 10; ++digit)
+    count[digit] = 0;
+  read = 0;
+  for (value = input(); value >= 0; value = input())
+    if (value < 10) {
+      ++count[value];
+      ++read;
+    }
+  output(read);
+  for (digit = 0; digit < 10; ++digit)
+    for (; count[digit] > 0; --count[digit])
+      output(digit);
+}
+`;
+
 export const SAMPLES: readonly SampleProgram[] = [
 	{
 		id: 'gcd',
@@ -394,6 +422,18 @@ export const SAMPLES: readonly SampleProgram[] = [
 		title: 'A negative subscript',
 		source: NEGATIVE_SUBSCRIPT,
 		inputs: [[-1], [0], [3], [-100]]
+	},
+	{
+		id: 'counting-sort',
+		title: 'Counting sort of digits with for loops, ++ and --',
+		source: COUNTING_SORT,
+		inputs: [
+			[3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, -1],
+			[-1],
+			[7, 7, 7, 12, 0, 100, -5],
+			[9, 8, 7, 6, 5, 4, 3, 2, 1, 0, -1],
+			[1, 2, 3]
+		]
 	}
 ];
 
