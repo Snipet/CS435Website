@@ -231,6 +231,11 @@
 		border-collapse: collapse;
 		font-size: 1rem;
 	}
+	@media (max-width: 600px) {
+		.trace {
+			font-size: 0.875rem;
+		}
+	}
 	th {
 		position: sticky;
 		top: 0;

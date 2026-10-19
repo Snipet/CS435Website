@@ -71,7 +71,7 @@
 	}
 	.next.empty {
 		display: inline-block;
-		margin-left: 0.1em;
+		margin-left: 0.35em;
 		font-size: 0.8em;
 		transform: translateY(-0.35em);
 	}

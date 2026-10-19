@@ -175,6 +175,28 @@ describe('TracePanel', () => {
 			'The forest is drawn for token strings of up to 5 tokens; this one has 9.'
 		);
 	});
+
+	it('draws the last 200 rows of a long trace, with the earlier ones a click away', () => {
+		const input = ['int', ...Array.from({ length: 100 }, () => '+ ( int )')].join(' ');
+		const r = computeParse({ grammar: 'E → E + ( E ) | int', input });
+		if (r.kind !== 'parse') throw new Error(r.message);
+		const rows = traceRows(r.parse, true);
+		expect(rows.length).toBe(403);
+		const { body } = render(TracePanel, {
+			props: {
+				result: r,
+				rows,
+				stepper: stepperAt(rows.length, rows.length - 1),
+				collapse: true,
+				stacks: false,
+				treeRows: 1,
+				maxTreeTokens: 150,
+				oncollapse: () => {}
+			}
+		});
+		expect(body.match(/<tr class=/g)).toHaveLength(200);
+		expect(text(body)).toContain('203 earlier rows not shown. Show 200 more');
+	});
 });
 
 describe('HandlesPanel', () => {

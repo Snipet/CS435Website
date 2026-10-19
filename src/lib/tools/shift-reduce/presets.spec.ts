@@ -191,6 +191,10 @@ describe('the other presets', () => {
 		expect(r.states).toBe(12);
 		const visited = new Set(r.parse.rows.flatMap((row) => row.stack.map((e) => e.state)));
 		for (const s of [8, 9, 10, 11]) expect(visited.has(s)).toBe(true);
+		// The slide input never gets there.
+		const slide = load('slide-14');
+		const before = new Set(slide.parse.rows.flatMap((row) => row.stack.map((e) => e.state)));
+		for (const s of [8, 9, 10, 11]) expect(before.has(s)).toBe(false);
 		expect(presetState(preset('nested')).stacks).toBe(true);
 		// The states under the stack of the row that reduces E + (E) inside the parentheses.
 		const rows = traceRows(r.parse, true);

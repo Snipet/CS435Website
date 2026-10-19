@@ -15,7 +15,7 @@
 		type Preset
 	} from '$lib/components/ui';
 	import { tool } from '$lib/tools/catalog/shift-reduce';
-	import { toolLink, type LinkSlug } from '$lib/tools/links';
+	import { toolLink } from '$lib/tools/links';
 	import { toolBySlug } from '$lib/tools/registry';
 	import ConflictNote from '$lib/tools/shift-reduce/ConflictNote.svelte';
 	import HandlesPanel from '$lib/tools/shift-reduce/HandlesPanel.svelte';
@@ -165,7 +165,7 @@
 			? { grammar: form.grammar, input: form.input }
 			: { grammar: form.grammar }
 	);
-	function linkTo(slug: LinkSlug & ('ll1' | 'lr1' | 'conflicts')) {
+	function linkTo(slug: 'll1' | 'lr1' | 'conflicts') {
 		const title = toolBySlug(slug)?.title;
 		const href = toolLink(slug, linkState);
 		return title && href ? { title, href } : null;
@@ -294,9 +294,8 @@
 								</p>
 							{:else}
 								<p class="empty">
-									The token string is not in the language of the grammar: the parse stops with an
-									error before it reaches the start symbol, so there is no rightmost derivation to
-									list. The trace shows where it stops.
+									The parse stops before it reaches the start symbol, so there is no reverse
+									rightmost derivation to list. The trace shows where it stops.
 								</p>
 							{/if}
 						{:else}
@@ -320,6 +319,10 @@
 		<Callout tone="info">
 			<p>The parse runs when the grammar and the token string have no errors.</p>
 		</Callout>
+	{:else if task.status === 'timed-out'}
+		<Callout tone="warn"><p>This grammar and token string take too long to parse.</p></Callout>
+	{:else if task.status === 'error'}
+		<Callout tone="error"><p>The parse failed: {task.error}</p></Callout>
 	{:else}
 		<Updating standalone label="Parsing…" />
 	{/if}

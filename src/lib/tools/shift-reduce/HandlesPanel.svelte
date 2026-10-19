@@ -246,7 +246,9 @@
 		text-align: left;
 		white-space: nowrap;
 	}
+	/* Rows keep their height while their forms are still blank. */
 	td.form {
+		height: 2em;
 		padding: 3px var(--space-5) 3px 0;
 		font-family: var(--font-mono);
 		font-variant-ligatures: none;
@@ -285,7 +287,7 @@
 	.handle.empty,
 	.made.empty {
 		display: inline-block;
-		margin: 0 0.1em;
+		margin: 0 0.15em 0 0.35em;
 		font-size: 0.8em;
 		transform: translateY(-0.35em);
 	}
