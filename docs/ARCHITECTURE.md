@@ -48,10 +48,12 @@ src/
       catalog/<slug>.ts       one file per tool: `export const tool: ToolMeta`
     url-state.ts              share-link state in the URL hash (re-exports url-state.svelte.ts,
                               which holds the code because syncToHash uses runes)
+    checklist.ts              checklists kept in the browser (localStorage, versioned keys)
   routes/
     +page.svelte              home: tools grouped by compiler stage
     notation/+page.svelte     notation reference
-    midterm/+page.svelte      midterm review list; topics.ts holds the list and its links
+    midterm/+page.svelte      midterm review list; topics.ts holds the list and its links,
+                              checklist.ts the line ids and views of its checklist
     <slug>/+page.svelte       one route per tool
 docs/ARCHITECTURE.md          this file
 ```
@@ -71,6 +73,14 @@ types of a tool's `state.ts`. It imports no tool's components or engine code,
 and a tool never imports from the page. Its spec checks every linked state
 against the tool's own hash validator and loader, every tool slug against the
 registry and `LinkStates`, and every notation anchor against the notation page.
+
+Every line of the review list has a checkbox. A line's id is its text and the
+texts of the lines above it (`midterm/checklist.ts`), so an edit of the list
+keeps the checks of the lines it leaves alone. The checks and the view options
+are kept in `localStorage` through `$lib/checklist.ts`, which guards every
+access (a blocked or full storage leaves the checks in memory, and the page
+says so). The page reads them once it is mounted: the prerendered page shows
+nothing checked. A `storage` event brings in checks made in another tab.
 
 ## 3. Notation canon
 
