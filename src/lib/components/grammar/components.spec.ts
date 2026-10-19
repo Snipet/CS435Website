@@ -145,4 +145,30 @@ describe('LrState', () => {
 		expect(body).toContain('current');
 		expect(text(body).startsWith('[E → E + ( • E ), $] [E → E + ( • E ), +]')).toBe(true);
 	});
+
+	it('names the current state and the marked lines for screen readers', () => {
+		const label = (props: Record<string, unknown>) =>
+			ariaLabels(render(LrState, { props: { number: 4, items, ...props } }).body)[0];
+		expect(label({ current: true, highlight: [1, 2] })).toBe(
+			'State 4, current; E → E+(•E), $/+; marked: E → •E+(E), )/+; marked: E → •int, )/+'
+		);
+		expect(label({ highlight: [0], highlightName: 'new' })).toBe(
+			'State 4; new: E → E+(•E), $/+; E → •E+(E), )/+; E → •int, )/+'
+		);
+		// Indices past the last line mark nothing.
+		expect(label({ highlight: [7] })).toBe(
+			'State 4; E → E+(•E), $/+; E → •E+(E), )/+; E → •int, )/+'
+		);
+	});
+
+	it('accepts only on $ for the start symbol', () => {
+		const { body } = render(LrState, {
+			props: {
+				number: 3,
+				start: 'S',
+				items: [{ lhs: 'S', rhs: ['A'], dot: 1, lookaheads: [')', '$'] }]
+			}
+		});
+		expect(text(body)).toBe('S → A•, )/$ 3 accept on $ S → A on )');
+	});
 });

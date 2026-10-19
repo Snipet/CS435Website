@@ -27,12 +27,17 @@
 		style?: ItemStyle;
 		/** Merge items that differ only in their lookahead into one line (`$/+`). Default true. */
 		merge?: boolean;
-		/** The augmented start symbol: its item with the dot at the end reads "accept on $". */
+		/**
+		 * The augmented start symbol (`S` of `S → E`, never on a right-hand side):
+		 * its complete item reads "accept on $" (see `stateAnnotations`).
+		 */
 		start?: string;
 		/** The labels beside the state; by default worked out from the items (`stateAnnotations`). */
 		annotations?: readonly StateAnnotation[];
 		/** Lines to mark (indices after merging), e.g. the items a closure step just added. */
 		highlight?: readonly number[];
+		/** What a marked line is called in the accessible name (`marked: E → •int, )/+`). */
+		highlightName?: string;
 		/** Color of the marked lines. */
 		tone?: Tone;
 		/** Marks the whole state, e.g. the state the parser is in. */
@@ -49,6 +54,7 @@
 		start,
 		annotations,
 		highlight = [],
+		highlightName = 'marked',
 		tone = 'active',
 		current = false,
 		numberSide = 'right'
@@ -58,8 +64,13 @@
 	const notes = $derived((annotations ?? stateAnnotations(items, { start })).map(annotationText));
 	const marked = $derived(new Set(highlight));
 	const colors = $derived(toneColors(tone));
+	// The marks are spoken too: the state's number with ", current", each marked line with its name.
 	const label = $derived(
-		[`State ${number}`, ...lines.map((it) => formatItem(it, style)), ...notes].join('; ')
+		[
+			`State ${number}${current ? ', current' : ''}`,
+			...lines.map((it, i) => (marked.has(i) ? `${highlightName}: ` : '') + formatItem(it, style)),
+			...notes
+		].join('; ')
 	);
 </script>
 

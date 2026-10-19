@@ -216,6 +216,36 @@ describe('stateAnnotations and annotationText', () => {
 		expect(stateAnnotations([item('S', 'E •', '$')]).map(annotationText)).toEqual(['S → E on $']);
 		expect(annotationText({ kind: 'accept', lookaheads: [] })).toBe('accept');
 	});
+
+	it('accepts on $ only, and reduces a complete start item on any other lookahead', () => {
+		// S → A, A → ( S ) | x: no augmentation, so the start symbol also occurs inside parentheses.
+		const notes = (...items: ItemView[]) =>
+			stateAnnotations(items, { start: 'S' }).map(annotationText);
+		expect(notes(item('S', 'A •', ')'))).toEqual(['S → A on )']);
+		expect(notes(item('S', 'A •', '$'))).toEqual(['accept on $']);
+		expect(notes(item('S', 'A •', ')', '$', '+'))).toEqual(['accept on $', 'S → A on ), +']);
+		expect(notes(item('S', 'A •', ')'), item('S', 'A •', '$'))).toEqual([
+			'accept on $',
+			'S → A on )'
+		]);
+		expect(stateAnnotations([item('S', 'A •', ')', '$')], { start: 'S' })).toEqual([
+			{ kind: 'accept', lookaheads: ['$'] },
+			{ kind: 'reduce', lhs: 'S', rhs: ['A'], lookaheads: [')'] }
+		]);
+		// Other complete items keep their place around it.
+		expect(notes(item('A', 'x •', '$'), item('S', 'A •', '$', ')'), item('B', '•', '$'))).toEqual([
+			'A → x on $',
+			'accept on $',
+			'S → A on )',
+			'B → ε on $'
+		]);
+	});
+
+	it('accepts an LR(0) start item without a lookahead', () => {
+		const lr0 = { lhs: 'S', rhs: ['E'], dot: 1, lookaheads: [] };
+		expect(stateAnnotations([lr0], { start: 'S' }).map(annotationText)).toEqual(['accept']);
+		expect(stateAnnotations([lr0]).map(annotationText)).toEqual(['S → E']);
+	});
 });
 
 describe('joinSymbols and productionText', () => {

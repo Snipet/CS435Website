@@ -313,9 +313,14 @@ The notation page ("LL(1) and bottom-up parsing") shows each item below.
   in one row), `red. E → int`, `red. E → E + (E)` and `accept`. `$` follows
   the input without a space (`+ (int)$`), and after the divider when the input
   is used up (`E I $`). The symbols the row's action works on (the handle
-  before a reduce, the tokens before a shift) are purple (`--tok-3`).
+  before a reduce, the tokens before a shift) are purple (`--tok-3`). Marks
+  that are color only are also spoken: the divider's `I` is `aria-hidden`
+  beside visually hidden text "divider", and visually hidden text frames a
+  handle ("handle: …, end of handle") and the tokens of a shift ("to shift:
+  …, end of shift").
 - **LR(1) items** (Bottom-up Parsing III, slides 5–14): `[X → α•β, a]`, the
-  dot a red bullet (`--reject`). Three forms (`formatItem`): bracketed, every
+  dot a red bullet (`--reject`) wherever an item is written, pseudocode
+  included (`Closure`, `Transition`). Three forms (`formatItem`): bracketed, every
   symbol spaced, for definitions, algorithms and conflicts
   (`[E → E + • ( E ), +]`, `[S → •, $]`); the same without brackets in
   running text; compact inside a state box (`E → E+(•E), $/+`), where items
@@ -328,8 +333,11 @@ The notation page ("LL(1) and bottom-up parsing") shows each item below.
   then the non-terminal edges. A state box lists its items in a rectangle with
   the number in a small box beside it; a state with `[X → α•, b]` is labeled
   `E → int on $, +` (production spaced as above, lookaheads joined by `, `)
-  and the state of `[S → E•, $]` is labeled `accept on $`. DFA edges carry one
-  grammar symbol each.
+  and the state of `[S → E•, $]` is labeled `accept on $`. Only the complete
+  item of a start symbol that never occurs on a right-hand side (the
+  augmented `S`) accepts, and only on `$`; a start symbol that also occurs on
+  a right-hand side is reduced like any other non-terminal (`S → id on $`,
+  slide 25). DFA edges carry one grammar symbol each.
 - **LR tables** (Bottom-up Parsing II, slides 16–21): rows are states; the
   terminal columns and `$` form the _action_ table, then a vertical rule and
   the non-terminal columns, the _goto_ table. Cells: `sN` (shift, go to state
@@ -1492,7 +1500,10 @@ startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
   (the same text in pieces, the dot its own piece); `mergeLookaheads`
   (`$/+`; `opts.order` fixes the order of the lookaheads) and
   `splitLookaheads`; `stateAnnotations` (`opts.start` names the augmented
-  start symbol) and `annotationText` (`E → int on $, +`, `accept on $`);
+  start symbol, which must not occur on a right-hand side: its complete item
+  gives `accept on $` for the `$` lookahead and a reduction for any other,
+  and an LR(0) item of it gives `accept`) and `annotationText`
+  (`E → int on $, +`, `accept on $`);
   `joinSymbols(symbols, 'spaced' | 'compact' | 'hug')`, `symbolSeparators`,
   `productionText` (`E → E + (E)` with `'hug'`), `lookaheadText`.
 - `LrItem.svelte` — one item inline (`item`, `style?` default `'bracketed'`),
@@ -1502,8 +1513,10 @@ startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
   one line per item core, lookaheads `$/+`), `start?` (the augmented start
   symbol, whose complete item reads `accept on $`), `annotations?` (default:
   `stateAnnotations(items, { start })`), `highlight?` (line indices after
-  merging) with `tone?`, `current?` (marks the whole state), `numberSide?`.
-  Its accessible name lists the state, its items and its labels.
+  merging) with `tone?` and `highlightName?` (default `'marked'`), `current?`
+  (marks the whole state), `numberSide?`. Its accessible name lists the
+  state, its items and its labels, and speaks the marks:
+  `State 4, current; E → E+(•E), $/+; marked: E → •int, )/+; …`.
 - `GrammarEditor.svelte` — `CodeEditor` for grammar text with a `→ | ε` palette,
   highlighting of non-terminals / terminals / metasymbols, and diagnostics.
 - `TokenStream.svelte` — a token string with an input pointer (`↑` under the

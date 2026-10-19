@@ -10,6 +10,7 @@
 	import type { HighlightRange, TokenPair } from '$lib/components/ui/types';
 	import {
 		DerivationChain,
+		ITEM_DOT,
 		LrItem,
 		LrState,
 		ParseTreeView,
@@ -291,6 +292,19 @@
 	const lrColumns = [...lrTerminals, ...lrNonterminals];
 	const srPieces = configurationPieces(shiftReduceForestRow);
 
+	/**
+	 * What a screen reader hears around a piece that is marked by color only:
+	 * the handle before a reduce, the tokens before a shift.
+	 */
+	interface Spoken {
+		before: string;
+		after: string;
+	}
+	const HANDLE: Spoken = { before: 'handle: ', after: ', end of handle' };
+	const TO_SHIFT: Spoken = { before: 'to shift: ', after: ', end of shift' };
+	/** Before the symbol a reduce leaves in place of the handle. */
+	const REDUCED_TO = 'handle reduced to ';
+
 	// Top-Down Parsing, slide 20 numbers the instances E0, T1, T2.
 	const instanceLabel = (_: unknown, path: number[]) => instanceLabels[pathKey(path)];
 
@@ -372,13 +386,24 @@
 				>{:else}{seg.text}{/if}{/each}</pre>
 {/snippet}
 
-{#snippet divider()}<span class="divider" title="divider">I</span>{/snippet}
+{#snippet divider()}<span class="divider"
+		><span aria-hidden="true">I</span><span class="visually-hidden">divider</span></span
+	>{/snippet}
 
 {#snippet becomes()}<span class="becomes">⇒</span>{/snippet}
 
-{#snippet pieces(list: FormPiece[], mark: string)}{#each list as piece, j (j)}{#if piece.mark}<span
-				class={mark}>{piece.text}</span
+{#snippet pieces(
+	list: FormPiece[],
+	mark: string,
+	spoken: Spoken
+)}{#each list as piece, j (j)}{#if piece.mark}<span class="visually-hidden">{spoken.before}</span
+			><span class={mark}>{piece.text}</span><span class="visually-hidden">{spoken.after}</span
 			>{:else}{piece.text}{/if}{/each}{/snippet}
+
+<!-- Text with each item dot drawn as the red bullet. -->
+{#snippet dotted(text: string)}{#each text.split(ITEM_DOT) as part, i (i)}{#if i}<span
+				class="item-dot">{ITEM_DOT}</span
+			>{/if}{part}{/each}{/snippet}
 
 {#snippet itemList(items: readonly ItemView[], partial: boolean)}
 	<ul class="item-list">
@@ -1885,7 +1910,8 @@
 									<li class="f">
 										{@render pieces(
 											formPieces(row.form, row.handle?.[0] ?? 0, row.handle?.[1] ?? 0),
-											'handle'
+											'handle',
+											HANDLE
 										)}
 									</li>
 								{/each}
@@ -1945,8 +1971,11 @@
 					<dd>
 						Apply an inverse production at the handle, just left of the divider:
 						<span class="f"
-							>E + ( <span class="underline">E + ( E )</span>
-							{@render divider()} ) {@render becomes()} E + ( <span class="underline">E</span>
+							>E + ( <span class="visually-hidden">{HANDLE.before}</span><span class="underline"
+								>E + ( E )</span
+							><span class="visually-hidden">{HANDLE.after}</span>
+							{@render divider()} ) {@render becomes()} E + (
+							<span class="visually-hidden">{REDUCED_TO}</span><span class="underline">E</span>
 							{@render divider()} )</span
 						>
 					</dd>
@@ -1976,10 +2005,10 @@
 									{@const parts = configurationPieces(row)}
 									<tr>
 										<td class="f config"
-											>{@render pieces(parts.left, 'next')}{parts.left.length
+											>{@render pieces(parts.left, 'next', HANDLE)}{parts.left.length
 												? ' '
 												: ''}{@render divider()}
-											{@render pieces(parts.right, 'next')}</td
+											{@render pieces(parts.right, 'next', TO_SHIFT)}</td
 										>
 										<td class="f">{row.action}</td>
 									</tr>
@@ -2001,16 +2030,16 @@
 						<ParseTreeView
 							forest={shiftReduceForest.roots}
 							marker={shiftReduceForest.marker}
-							ariaLabel="Partial parse tree of int + (int) at E + (int I )$"
+							ariaLabel="Partial parse tree of int + (int) at E + (int, divider, )$"
 						/>
 					</div>
 					<figcaption>
 						<span
 							><span class="f">int + (int)</span> at
 							<span class="f"
-								>{@render pieces(srPieces.left, 'next')}
+								>{@render pieces(srPieces.left, 'next', HANDLE)}
 								{@render divider()}
-								{@render pieces(srPieces.right, 'next')}</span
+								{@render pieces(srPieces.right, 'next', TO_SHIFT)}</span
 							></span
 						>
 						<CitationTag cite={{ deck: '14', slide: [4, 14] }} />
@@ -2067,17 +2096,17 @@
 					The grammar gets a new start symbol S and the production
 					<span class="f">S → E</span> (not needed when E has only one production); when the
 					grammar’s own start symbol is S, the new one is S’. The start state is
-					<span class="f">Closure(&#123; S → •E, $ &#125;)</span>. A state is a closed set of items,
-					and <span class="f">Transition(state, y)</span> is the state after the symbol y, a terminal
-					or a non-terminal.
+					<span class="f">Closure(&#123; S → <span class="item-dot">•</span>E, $ &#125;)</span>. A
+					state is a closed set of items, and <span class="f">Transition(state, y)</span> is the state
+					after the symbol y, a terminal or a non-terminal.
 				</p>
 				<div class="code-pair even">
 					<figure>
-						<pre class="code">{closureCode}</pre>
+						<pre class="code">{@render dotted(closureCode)}</pre>
 						<figcaption><CitationTag cite={{ deck: '15', slide: 10 }} /></figcaption>
 					</figure>
 					<figure>
-						<pre class="code">{transitionCode}</pre>
+						<pre class="code">{@render dotted(transitionCode)}</pre>
 						<figcaption><CitationTag cite={{ deck: '15', slide: 13 }} /></figcaption>
 					</figure>
 				</div>

@@ -205,20 +205,39 @@ export type StateAnnotation =
 
 /**
  * The labels of a state: for every item with the dot at the end, "reduce with
- * X → α on b" (merged over lookaheads, in order of appearance); for such an
- * item of `start` (the augmented start symbol, e.g. `S` of `S → E`), accept.
+ * X → α on b" (merged over lookaheads, in order of appearance).
+ *
+ * `start` names a start symbol that never occurs on a right-hand side: the
+ * augmented `S` of `S → E` (Bottom-up Parsing III, slide 7). Its complete item
+ * accepts, and only on `$` (accept is an entry of the `$` column): it reads
+ * `accept on $`, followed by a reduction for any other lookahead it carries
+ * (`S → A on )`). An LR(0) item of `start` (no lookaheads) reads `accept`.
+ * Leave `start` out for a start symbol that occurs on a right-hand side
+ * (`S → id S`, slide 25): its complete items can stand above other symbols on
+ * the stack, so they are reductions like any other, also on `$`.
  */
 export function stateAnnotations(
 	items: readonly ItemView[],
 	opts: { start?: string } = {}
 ): StateAnnotation[] {
 	const out: StateAnnotation[] = [];
+	const reduce = (item: ItemView, lookaheads: readonly string[]) =>
+		out.push({ kind: 'reduce', lhs: item.lhs, rhs: item.rhs, lookaheads });
 	for (const item of mergeLookaheads(items.filter((it) => it.dot >= it.rhs.length))) {
-		if (opts.start !== undefined && item.lhs === opts.start) {
-			out.push({ kind: 'accept', lookaheads: item.lookaheads });
-		} else {
-			out.push({ kind: 'reduce', lhs: item.lhs, rhs: item.rhs, lookaheads: item.lookaheads });
+		if (opts.start === undefined || item.lhs !== opts.start) {
+			reduce(item, item.lookaheads);
+			continue;
 		}
+		if (!item.lookaheads.length) {
+			out.push({ kind: 'accept', lookaheads: [] });
+			continue;
+		}
+		// `accept on $` first, then the other lookaheads as one reduction.
+		const others = item.lookaheads.filter((a) => a !== END_MARKER);
+		if (others.length < item.lookaheads.length) {
+			out.push({ kind: 'accept', lookaheads: [END_MARKER] });
+		}
+		if (others.length) reduce(item, others);
 	}
 	return out;
 }
