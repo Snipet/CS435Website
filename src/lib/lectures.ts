@@ -3,7 +3,22 @@
  * slide number, e.g. "Lexical Analysis III · slide 8".
  */
 export type DeckId =
-	'00' | '01' | '02' | '03' | '04' | '05' | '06' | '07' | '08' | '09' | '10' | '11';
+	| '00'
+	| '01'
+	| '02'
+	| '03'
+	| '04'
+	| '05'
+	| '06'
+	| '07'
+	| '08'
+	| '09'
+	| '10'
+	| '11'
+	| '12'
+	| '13'
+	| '14'
+	| '15';
 
 export interface Deck {
 	id: DeckId;
@@ -28,7 +43,15 @@ export const decks: Record<DeckId, Deck> = {
 		title: 'Ambiguity, Precedence, Associativity & Top-Down Parsing',
 		topic: 'Ambiguity and how to resolve it'
 	},
-	'11': { id: '11', title: 'Top-Down Parsing', topic: 'Recursive descent' }
+	'11': { id: '11', title: 'Top-Down Parsing', topic: 'Recursive descent' },
+	'12': { id: '12', title: 'Table-based Predictive Parsing', topic: 'LL(1) parsing tables' },
+	'13': { id: '13', title: 'Bottom-Up Parsing', topic: 'Handles and reductions' },
+	'14': {
+		id: '14',
+		title: 'Bottom-up Parsing II',
+		topic: 'Shift-reduce parsing and LR tables'
+	},
+	'15': { id: '15', title: 'Bottom-up Parsing III', topic: 'LR(1) items, conflicts, precedence' }
 };
 
 export interface Citation {

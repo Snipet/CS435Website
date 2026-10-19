@@ -1,14 +1,18 @@
 // Grammar components. See docs/ARCHITECTURE.md §5.2a.
 export { default as DerivationChain } from './DerivationChain.svelte';
 export { default as GrammarEditor } from './GrammarEditor.svelte';
+export { default as LrItem } from './LrItem.svelte';
+export { default as LrState } from './LrState.svelte';
 export { default as ParseTreeView } from './ParseTreeView.svelte';
 export { default as TokenStream } from './TokenStream.svelte';
 
 export {
 	boxWidth,
+	describeForest,
 	describeTree,
 	isEpsilonNode,
 	labelWidth,
+	layoutForest,
 	layoutTree,
 	neighborOf,
 	nodeAtPath,
@@ -20,11 +24,34 @@ export {
 	type TreeLabeler,
 	type TreeLayout,
 	type TreeLayoutEdge,
+	type TreeLayoutKind,
 	type TreeLayoutNode,
 	type TreeLayoutOptions,
+	type TreeMarker,
 	type TreePath,
 	type TreeSizing
 } from './tree-layout';
+export {
+	ITEM_DOT,
+	annotationText,
+	formatItem,
+	itemParts,
+	joinSymbols,
+	lookaheadSymbol,
+	lookaheadText,
+	mergeLookaheads,
+	productionText,
+	splitLookaheads,
+	stateAnnotations,
+	symbolSeparators,
+	symbolText,
+	type ItemPart,
+	type ItemPartKind,
+	type ItemStyle,
+	type ItemView,
+	type StateAnnotation,
+	type SymbolSpacing
+} from './lr-item';
 export {
 	createGrammarInput,
 	type EditInfo,
