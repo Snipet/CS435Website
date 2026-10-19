@@ -96,7 +96,7 @@
 		{#snippet label(i: number)}
 			{@const row = rows[i]}
 			{#if row}
-				<p class="why">{explain(result.grammar, row, result.decisions)}</p>
+				<p class="why">{explain(result, row)}</p>
 			{/if}
 		{/snippet}
 	</StepControls>

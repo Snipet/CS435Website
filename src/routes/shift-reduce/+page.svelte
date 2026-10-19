@@ -44,8 +44,9 @@
 		type ShiftReduceState,
 		type ViewId
 	} from '$lib/tools/shift-reduce/state';
+	import { linkStep, stepperIndex } from '$lib/tools/shift-reduce/steps';
 	import TracePanel from '$lib/tools/shift-reduce/TracePanel.svelte';
-	import { convertStep, finalRows, traceRows } from '$lib/tools/shift-reduce/view';
+	import { convertStep, finalRows, stopReason, traceRows } from '$lib/tools/shift-reduce/view';
 	import { createParseWorker } from '$lib/tools/shift-reduce/worker';
 	import { syncToHash } from '$lib/url-state';
 
@@ -88,6 +89,8 @@
 	const result = $derived<ParseView | null>(outcome?.kind === 'parse' ? outcome : null);
 	/** The result shown is for other inputs: these have errors, or the newer result is coming. */
 	const stale = $derived(outcome !== null && !sameRequest(task.input, request));
+	/** The parse shown is the parse of the grammar and token string on the page. */
+	const current = $derived(result !== null && sameRequest(task.input, request));
 
 	const rows = $derived(result ? traceRows(result.parse, form.collapse) : []);
 	const treeRows = $derived(result ? finalRows(result.parse) : 1);
@@ -100,34 +103,28 @@
 		index: untrack(() => form.handleStep ?? Math.max(0, handleCount - 1))
 	});
 
-	// form.step and form.handleStep (null = the last) drive the steppers…
+	// form.step and form.handleStep (null = the last) drive the steppers… Both ways wait for
+	// the parse of the page's own grammar and token string: a link's step can be past the end
+	// of the parse shown until then (steps.ts).
 	$effect(() => {
-		const n = rows.length;
-		const step = form.step;
-		untrack(() => traceStepper.set(step === null ? n - 1 : step));
+		const at = stepperIndex(form.step, rows.length, current);
+		if (at !== null) untrack(() => traceStepper.set(at));
 	});
 	$effect(() => {
-		const n = handleCount;
-		const step = form.handleStep;
-		untrack(() => handleStepper.set(step === null ? n - 1 : step));
+		const at = stepperIndex(form.handleStep, handleCount, current);
+		if (at !== null) untrack(() => handleStepper.set(at));
 	});
 	// …and the steppers write back where they are, for the share link.
 	$effect(() => {
-		const i = traceStepper.index;
-		const n = rows.length;
+		const next = linkStep(traceStepper.index, rows.length, current);
 		untrack(() => {
-			if (n === 0) return;
-			const next = i >= n - 1 ? null : i;
-			if (form.step !== next) form.step = next;
+			if (next !== undefined && form.step !== next) form.step = next;
 		});
 	});
 	$effect(() => {
-		const i = handleStepper.index;
-		const n = handleCount;
+		const next = linkStep(handleStepper.index, handleCount, current);
 		untrack(() => {
-			if (n === 0) return;
-			const next = i >= n - 1 ? null : i;
-			if (form.handleStep !== next) form.handleStep = next;
+			if (next !== undefined && form.handleStep !== next) form.handleStep = next;
 		});
 	});
 
@@ -193,7 +190,8 @@
 		const what = `${tokens} ${tokens === 1 ? 'token' : 'tokens'}, ${result.states} LR(1) states`;
 		if (p.outcome === 'accept') return `Accepted: ${what}.`;
 		if (p.outcome === 'error') return `Rejected: ${what}.`;
-		return `Stopped: ${what}.`;
+		const reason = stopReason(p);
+		return reason ? `Stopped: ${what}; ${reason}.` : `Stopped: ${what}.`;
 	});
 </script>
 

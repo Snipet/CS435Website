@@ -17,7 +17,7 @@ import {
 	type ParseNode,
 	type ShiftReduceRow
 } from '$lib/theory/grammar';
-import type { RowDecision } from './model';
+import type { ParseView, RowDecision } from './model';
 
 // ───────────────────────────── trace rows ─────────────────────────────
 
@@ -254,17 +254,28 @@ const alsoLabeled = (g: Grammar, d: RowDecision, subject: string): string =>
 		: '';
 
 /**
+ * Why a parse stopped before accepting or rejecting its input, from the
+ * engine's text for its last row: "the parse tree would be more than 500
+ * levels deep", "after 20000 steps". Null for a parse that did not stop.
+ */
+export function stopReason(parse: LrParse): string | null {
+	if (parse.outcome !== 'limit') return null;
+	const text = parse.rows[parse.rows.length - 1]?.text ?? '';
+	return text.replace(/^stopped:?\s*/, '') || null;
+}
+
+/**
  * Why the parser takes the action of a row, in the words of Bottom-up Parsing
  * II, slide 16: the DFA run on the stack ends in a state X; with the token
  * tok after the divider, a transition on tok means shift and a label
  * “A → β on tok” means reduce. A conflict and how the table settles it are
- * named.
+ * named, and so is the reason a parse stopped.
  */
 export function explain(
-	g: Grammar,
-	row: ShiftReduceRow,
-	decisions: readonly RowDecision[]
+	result: Pick<ParseView, 'grammar' | 'decisions' | 'parse'>,
+	row: ShiftReduceRow
 ): string {
+	const { grammar: g, decisions } = result;
 	const ds = row.rows.map((k) => decisions[k]).filter((d) => d !== undefined);
 	const d = ds[0];
 	if (!d) return '';
@@ -302,8 +313,13 @@ export function explain(
 			}`;
 		case 'error':
 			return `${X} has no transition on ${tok} and no label on ${tok}: the input is rejected.`;
-		case 'limit':
-			return 'The parse stopped here: it is too long to follow further.';
+		case 'limit': {
+			const reason = stopReason(result.parse);
+			if (!reason) return 'The parse stopped here: it is too long to follow further.';
+			return /^after\b/.test(reason)
+				? `The parse stopped here, ${reason}: it is too long to follow further.`
+				: `The parse stopped here: ${reason}.`;
+		}
 	}
 }
 
@@ -384,4 +400,14 @@ export function derivationRows(g: Grammar, d: Derivation): FormView[] {
 		const length = g.productions[step.production].rhs.length;
 		return formView(form, { start: step.index, end: step.index + length });
 	});
+}
+
+/**
+ * The rightmost derivation listed bottom-up, to stand beside the reductions:
+ * entry i is the form on row i of the reduction list, read upward the list is
+ * the derivation, and the symbols marked in a form are what the step to it
+ * put in, the handle of that form.
+ */
+export function derivationUpward(g: Grammar, d: Derivation): FormView[] {
+	return derivationRows(g, d).reverse();
 }

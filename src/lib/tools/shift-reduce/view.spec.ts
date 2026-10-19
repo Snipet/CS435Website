@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { layoutForest } from '$lib/components/grammar/tree-layout';
-import type { ShiftReduceRow } from '$lib/theory/grammar';
+import {
+	MAX_TREE_DEPTH,
+	lr1Automaton,
+	lrParse,
+	lrTable,
+	type ShiftReduceRow
+} from '$lib/theory/grammar';
 import { computeParse, type ParseView } from './model';
 import { AMBIGUOUS, LEFT_FACTORED } from './presets';
 import { SLIDE_GRAMMAR, SLIDE_INPUT } from './state';
@@ -9,6 +15,7 @@ import {
 	configurationText,
 	convertStep,
 	derivationRows,
+	derivationUpward,
 	explain,
 	finalRows,
 	forestAfter,
@@ -19,6 +26,7 @@ import {
 	reductionRows,
 	rowOfRaw,
 	stackStates,
+	stopReason,
 	traceRows
 } from './view';
 
@@ -110,7 +118,7 @@ describe('configurations', () => {
 		const last = rows[rows.length - 1];
 		expect(last.action).toBe('error');
 		expect(configurationText(configuration(last, r.grammar), true)).toBe('E + I int$');
-		expect(explain(r.grammar, last, r.decisions)).toBe(
+		expect(explain(r, last)).toBe(
 			'State 3 has no transition on int and no label on int: the input is rejected.'
 		);
 	});
@@ -157,7 +165,7 @@ describe('forests', () => {
 
 describe('why each action (slide 16)', () => {
 	const rows = traceRows(slide.parse, true);
-	const why = (row: ShiftReduceRow, r: ParseView = slide) => explain(r.grammar, row, r.decisions);
+	const why = (row: ShiftReduceRow, r: ParseView = slide) => explain(r, row);
 
 	it('names the state, the token and the transition or label', () => {
 		expect(why(rows[0])).toBe('State 0 has a transition on int: shift.');
@@ -186,6 +194,36 @@ describe('why each action (slide 16)', () => {
 			(row) => row.count > 1 && why(row, r).includes('conflict')
 		)!;
 		expect(why(collapsed, r)).toContain('is also labeled “E → E * E on');
+	});
+
+	it("gives the engine's reason when a parse stops", () => {
+		// 500 ints: E → int + E nests one level deeper for each, past MAX_TREE_DEPTH.
+		const input = Array.from({ length: 500 }, () => 'int').join(' + ');
+		const r = parse('E → int + E | int', input);
+		expect(r.parse.outcome).toBe('limit');
+		expect(stopReason(r.parse)).toBe(
+			`the parse tree would be more than ${MAX_TREE_DEPTH} levels deep`
+		);
+		const rows = traceRows(r.parse, true);
+		const last = rows[rows.length - 1];
+		expect(last.action).toBe('limit');
+		expect(why(last, r)).toBe(
+			`The parse stopped here: the parse tree would be more than ${MAX_TREE_DEPTH} levels deep.`
+		);
+		expect(stopReason(slide.parse)).toBeNull();
+	});
+
+	it('gives the step limit as the reason when a parse stops there', () => {
+		const table = lrTable(lr1Automaton(slide.grammar, { trace: false }));
+		const tokens = slide.parse.input.slice(0, -1);
+		// The first rows, and so their decisions, are the slide's.
+		const stopped: ParseView = { ...slide, parse: lrParse(table, tokens, { maxSteps: 5 }) };
+		expect(stopped.parse.outcome).toBe('limit');
+		expect(stopReason(stopped.parse)).toBe('after 4 steps');
+		const rows = traceRows(stopped.parse, false);
+		expect(why(rows[rows.length - 1], stopped)).toBe(
+			'The parse stopped here, after 4 steps: it is too long to follow further.'
+		);
 	});
 
 	it('names a reduce/reduce conflict', () => {
@@ -219,6 +257,28 @@ describe('handles', () => {
 		]);
 		expect(formView([]).text).toBe('ε');
 		expect(formView(['E', '+', '(', 'E', ')']).text).toBe('E + (E)');
+	});
+
+	it('lists the derivation upward beside the reductions: the same form on every row', () => {
+		const presets = [
+			[SLIDE_GRAMMAR, SLIDE_INPUT],
+			[SLIDE_GRAMMAR, 'int + ( int + ( int ) )'],
+			[LEFT_FACTORED, 'int * ( int + int )'],
+			['S → a S b S | ε', 'a a b b a b'],
+			[AMBIGUOUS, 'int * int + int']
+		];
+		for (const [grammar, input] of presets) {
+			const r = parse(grammar, input);
+			const rows = handleRows(r.handles!);
+			const upward = derivationUpward(r.grammar, r.derivation!);
+			expect(upward).toHaveLength(rows.length);
+			upward.forEach((form, i) => {
+				expect(form.text).toBe(rows[i].plain.text);
+				// What the step to the form put in is the form's handle; the start symbol has neither.
+				expect(form.pieces).toEqual(rows[i].marked.pieces);
+				expect(form.empty).toBe(rows[i].marked.empty);
+			});
+		}
 	});
 
 	it('marks in each derivation step what the reduction in its mirrored row takes out', () => {

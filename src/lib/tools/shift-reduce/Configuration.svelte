@@ -43,7 +43,7 @@
 
 <span class={['configuration', { stacks }]}
 	>{#if stacks}<span class="unit bottom" aria-hidden="true"
-			><span class="sym"> </span><span class="state">{view.bottom}</span></span
+			><span class="sym">&#8203;</span><span class="state">{view.bottom}</span></span
 		>{/if}{@render part(view.left, HANDLE)}{#if view.emptyHandle}<span class="visually-hidden"
 			>{HANDLE.before}ε{HANDLE.after}</span
 		><span class="next empty" aria-hidden="true" title="Empty handle">ε</span>{/if}{view.left
@@ -80,17 +80,19 @@
 		font-family: var(--font-sans);
 		font-weight: 600;
 	}
+	/* Units line up on their symbols' baseline; the bottom pair's symbol is a zero-width space. */
 	.unit {
 		display: inline-flex;
 		flex-direction: column;
 		align-items: center;
 		vertical-align: baseline;
 	}
-	/* Numbers under neighboring symbols (`(int`) keep a gap between them. */
+	/* Numbers under neighboring symbols (`(E)`, `( E )`) keep a clear gap between them. */
 	.state {
-		padding: 0 0.25em;
-		color: var(--text-3);
+		padding: 0 0.4em;
+		color: var(--text-2);
 		font-size: 0.72em;
+		font-variant-numeric: tabular-nums;
 		font-weight: 400;
 		line-height: 1.2;
 	}

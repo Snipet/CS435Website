@@ -3,9 +3,11 @@
 	them: the sentential forms from the input down to the start symbol, the
 	handle of the last reduction in red, and the tree growing over the tokens.
 	Once complete, the upward arrow: read upward, the list is a rightmost
-	derivation, which stands beside it read top-down.
+	derivation. Beside it, row for row, the same forms as the steps of that
+	derivation, read upward, each with what its step put in tinted.
 -->
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { ParseTreeView } from '$lib/components/grammar';
 	import { productionText } from '$lib/components/grammar/lr-item';
 	import { StepControls, Toggle, type Stepper } from '$lib/components/ui';
@@ -13,7 +15,7 @@
 	import FindHandle from './FindHandle.svelte';
 	import { MAX_PICK_FORM } from './handle-check';
 	import type { ParseView } from './model';
-	import { derivationRows, forestAfter, handleRows, type FormView } from './view';
+	import { derivationUpward, forestAfter, handleRows, type FormView } from './view';
 
 	interface Props {
 		result: ParseView;
@@ -28,9 +30,13 @@
 
 	let finding = $state(false);
 
+	/** Said before a marked part; the space after the colon is part of it. */
+	const SPOKEN = { handle: 'handle: ', made: 'put in by the step: ' };
+
 	const g = $derived(result.grammar);
 	const rows = $derived(handleRows(handles));
-	const derivation = $derived(result.derivation ? derivationRows(g, result.derivation) : []);
+	/** Row i: the form on row i of the reductions, as a step of the derivation read upward. */
+	const derivation = $derived(result.derivation ? derivationUpward(g, result.derivation) : []);
 	/** Reductions: the last form is the start symbol. */
 	const n = $derived(handles.length - 1);
 	const s = $derived(stepper.index);
@@ -62,26 +68,40 @@
 	const canFind = $derived(
 		!complete && current !== undefined && current.form.length <= MAX_PICK_FORM
 	);
+
+	let finder: HTMLElement | undefined = $state();
+	/**
+	 * Goes on to the next form once its handle is found. The button pressed goes
+	 * away with the answer, so focus moves to the symbols of the new form, or to
+	 * the note that the start symbol is reached.
+	 */
+	async function reduceFound() {
+		stepper.next();
+		await tick();
+		finder?.querySelector<HTMLElement>('[data-at][tabindex="0"], [data-after-reduce]')?.focus();
+	}
 </script>
 
 {#snippet form(
 	view: FormView,
 	spoken: boolean
 )}{#each view.pieces as piece, k (k)}{#if piece.mark}{#if spoken}<span class="visually-hidden"
-					>handle:
-				</span>{/if}{#if piece.text}<span class="handle">{piece.text}</span>{:else}<span
+					>{SPOKEN.handle}</span
+				>{/if}{#if piece.text}<span class="handle">{piece.text}</span>{:else}<span
 					class="handle empty"
 					aria-hidden="true">ε</span
 				>{#if spoken}<span class="visually-hidden">ε</span>{/if}{/if}{#if spoken}<span
 					class="visually-hidden">, end of handle</span
 				>{/if}{:else}{piece.text}{/if}{/each}{/snippet}
 
-{#snippet made(
-	view: FormView
-)}{#each view.pieces as piece, k (k)}{#if piece.mark}{#if piece.text}<span class="made"
-					>{piece.text}</span
-				>{:else}<span class="made empty" aria-hidden="true">ε</span
-				>{/if}{:else}{piece.text}{/if}{/each}{/snippet}
+{#snippet made(view: FormView)}{#each view.pieces as piece, k (k)}{#if piece.mark}<span
+				class="visually-hidden">{SPOKEN.made}</span
+			>{#if piece.text}<span class="made">{piece.text}</span>{:else}<span
+					class="made empty"
+					aria-hidden="true">ε</span
+				><span class="visually-hidden">ε</span>{/if}<span class="visually-hidden"
+				>, end of step</span
+			>{:else}{piece.text}{/if}{/each}{/snippet}
 
 <div class="handles-tab">
 	<StepControls
@@ -107,19 +127,19 @@
 			>
 				<table class="forms">
 					<caption class="visually-hidden"
-						>The reductions, from the input to the start symbol, beside the rightmost derivation
-						read top-down</caption
+						>The reductions, from the input to the start symbol, beside the same forms as the steps
+						of the rightmost derivation, read upward</caption
 					>
 					<thead>
 						<tr>
 							<td class="arrow-col"></td>
 							<th scope="col">Reductions</th>
-							<th scope="col">Rightmost derivation</th>
+							<td class="arrow-col"></td>
+							<th scope="col">Rightmost derivation, read upward</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each rows as row, i (i)}
-							{@const twin = n - i}
 							<tr>
 								{#if i === 0}
 									<td class="arrow-col" rowspan={rows.length}>
@@ -131,11 +151,17 @@
 										{#if i === s - 1}{@render form(row.marked, true)}{:else}{row.plain.text}{/if}
 									{/if}
 								</td>
+								<!-- The derivation's arrow runs up the rows listed so far. -->
+								{#if i === 0}
+									<td class="arrow-col" rowspan={s >= 1 ? s + 1 : 1}>
+										{#if s >= 1}<span class="up derive" aria-hidden="true"></span>{/if}
+									</td>
+								{:else if i > s}
+									<td class="arrow-col"></td>
+								{/if}
 								<td class="form derived">
-									{#if twin <= s && derivation[i]}
-										{#if i > 0}<span class="arrow" aria-hidden="true">→</span>{/if}{@render made(
-											derivation[i]
-										)}
+									{#if i <= s && derivation[i]}
+										{#if i < s}{@render made(derivation[i])}{:else}{derivation[i].text}{/if}
 									{/if}
 								</td>
 							</tr>
@@ -144,11 +170,11 @@
 				</table>
 			</div>
 			{#if complete}
-				<p class="reverse">A <em>reverse rightmost</em> derivation</p>
+				<p class="reverse">A <em>reverse rightmost</em> derivation!</p>
 			{/if}
 			<p class="note">
-				The derivation is the list of reductions read upward. Tinted: what each of its steps puts
-				in, the handle of that form among the reductions.
+				Read upward, the forms are a rightmost derivation. Tinted: what each of its steps puts in,
+				the handle of that form among the reductions.
 			</p>
 		</div>
 
@@ -169,7 +195,7 @@
 		</div>
 	</div>
 
-	<section class="finder" aria-label="Find the handle">
+	<section class="finder" aria-label="Find the handle" bind:this={finder}>
 		<Toggle
 			bind:checked={finding}
 			label="Find the handle"
@@ -177,7 +203,9 @@
 		/>
 		{#if finding}
 			{#if complete}
-				<p class="note">The form is the start symbol: there is no handle left.</p>
+				<p class="note" tabindex="-1" data-after-reduce>
+					The form is the start symbol: there is no handle left.
+				</p>
 			{:else if canFind && current}
 				<p class="definition">
 					β is a handle of <span class="mono">{rows[s].plain.text}</span> when A → β and S →<sup
@@ -185,7 +213,7 @@
 					>
 					α A γ → α β γ = <span class="mono">{rows[s].plain.text}</span>.
 				</p>
-				<FindHandle grammar={g} step={current} onreduce={() => stepper.next()} />
+				<FindHandle grammar={g} step={current} onreduce={reduceFound} />
 			{:else}
 				<p class="note">This form is too long to pick from.</p>
 			{/if}
@@ -234,9 +262,16 @@
 		outline: 2px solid var(--focus);
 		outline-offset: 2px;
 	}
+	/* As wide as its forms: a narrow box scrolls rather than squeeze the arrow columns. */
 	.forms {
+		width: max-content;
 		border-collapse: collapse;
 		font-size: 1.05rem;
+	}
+	@media (max-width: 600px) {
+		.forms {
+			font-size: 0.9375rem;
+		}
 	}
 	th {
 		padding: 0 var(--space-4) var(--space-2) 0;
@@ -264,12 +299,13 @@
 		padding: 0;
 	}
 	.up {
+		--arrow: var(--text);
 		position: absolute;
 		top: 12px;
 		bottom: 6px;
 		left: 9px;
 		width: 2px;
-		background: var(--text);
+		background: var(--arrow);
 	}
 	.up::before {
 		position: absolute;
@@ -277,8 +313,11 @@
 		left: -5px;
 		border: 6px solid transparent;
 		border-top: 0;
-		border-bottom: 10px solid var(--text);
+		border-bottom: 10px solid var(--arrow);
 		content: '';
+	}
+	.up.derive {
+		--arrow: var(--text-2);
 	}
 	.handle {
 		color: var(--reject);
@@ -296,10 +335,6 @@
 		background: var(--accent-soft);
 		box-shadow: 0 0 0 2px var(--accent-soft);
 	}
-	.arrow {
-		margin-right: 0.45em;
-		color: var(--text-3);
-	}
 	.reverse {
 		margin: var(--space-1) 0 0;
 		font-family: var(--font-serif);
@@ -313,6 +348,11 @@
 		color: var(--text-3);
 		font-size: var(--text-sm);
 		line-height: 1.5;
+	}
+	.note[data-after-reduce]:focus-visible {
+		border-radius: var(--radius-sm);
+		outline: 2px solid var(--focus);
+		outline-offset: 2px;
 	}
 	.tree-box {
 		min-width: 0;

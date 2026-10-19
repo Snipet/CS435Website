@@ -64,7 +64,10 @@
 		padding-left: 1.2em;
 		line-height: 1.6;
 	}
+	/* An item breaks onto the next line whole; only one wider than the line wraps inside. */
 	.conflicts :global(.lr-item) {
+		display: inline-block;
+		max-width: 100%;
 		white-space: normal;
 	}
 	.mono {

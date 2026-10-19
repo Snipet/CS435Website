@@ -57,8 +57,7 @@ describe('every preset', () => {
 		expect(r.parse.outcome).toBe('accept');
 		expect(r.handles).not.toBeNull();
 		// Every row has its reason.
-		for (const row of traceRows(r.parse, true))
-			expect(explain(r.grammar, row, r.decisions).length).toBeGreaterThan(20);
+		for (const row of traceRows(r.parse, true)) expect(explain(r, row).length).toBeGreaterThan(20);
 	});
 
 	it('has a unique id, a group, a description and a valid citation', () => {

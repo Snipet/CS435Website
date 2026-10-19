@@ -79,6 +79,8 @@ describe('Configuration', () => {
 		const { body } = render(Configuration, { props: { view, stacks: true } });
 		expect(text(body)).toContain('states of the stack: 0, 2, 3, 4, 6, 7');
 		expect(body.match(/class="state/g)).toHaveLength(6);
+		// The bottom pair's symbol line holds a zero-width space, so its 0 lines up with the others.
+		expect(body).toMatch(/<span class="unit bottom[^>]*><span class="sym[^>]*">\u200b<\/span>/);
 	});
 
 	it('marks an empty handle', () => {
@@ -212,33 +214,75 @@ describe('HandlesPanel', () => {
 			}
 		}).body;
 
+	/** The cells of a column, as a sighted reader sees them, the marked symbols in brackets. */
+	const column = (body: string, cls: string) =>
+		[...body.matchAll(new RegExp(`<td class="form ${cls}[^"]*">(.*?)</td>`, 'g'))].map((m) =>
+			visible(
+				m[1]
+					.replace(/<!--.*?-->/g, '')
+					.replace(/<span class="(?:handle|made)[ "][^>]*>([^<]*)<\/span>/g, '[$1]')
+			).trim()
+		);
+	/** The slide 10 arrow beside the reductions; the derivation's has the class `derive` too. */
+	const slideArrow = /class="up svelte/;
+
 	it('shows the reductions of slide 10 with the arrow and the caption', () => {
 		const body = panel(5);
-		expect(body).toContain('class="up');
-		expect(text(body)).toContain('A reverse rightmost derivation');
+		expect(body).toMatch(slideArrow);
+		expect(text(body)).toContain('A reverse rightmost derivation!');
+		expect(body).toMatch(/A <em[^>]*>reverse rightmost<\/em> derivation!/);
 		expect(text(body)).toContain('handle: E + (E) , end of handle');
 		expect(text(body)).toContain('5 of 5 reductions');
-		// The derivation, read top-down: E → E + (E) → … → int + (int) + (int).
-		const derived = [...body.matchAll(/<td class="form derived[^"]*">(.*?)<\/td>/g)].map((m) =>
-			inline(m[1]).trim()
-		);
-		expect(derived).toEqual([
-			'E',
-			'→E + (E)',
-			'→E + (int)',
-			'→E + (E) + (int)',
-			'→E + (int) + (int)',
-			'→int + (int) + (int)'
+		// Row for row the same forms. Read upward, the derivation E → E + (E) → … →
+		// int + (int) + (int), each form with what its step put in marked: that form's handle.
+		expect(column(body, '(?:last )?svelte')).toEqual([
+			'int + (int) + (int)',
+			'E + (int) + (int)',
+			'E + (E) + (int)',
+			'E + (int)',
+			'[E + (E)]',
+			'E'
 		]);
+		expect(column(body, 'derived')).toEqual([
+			'[int] + (int) + (int)',
+			'E + ([int]) + (int)',
+			'[E + (E)] + (int)',
+			'E + ([int])',
+			'[E + (E)]',
+			'E'
+		]);
+		expect(inline(body)).toContain('E + (put in by the step: int, end of step)');
+		// The derivation's arrow runs up all six rows.
+		expect(body).toMatch(/<td class="arrow-col[^"]*" rowspan="6"><!--\[0--><span class="up derive/);
 	});
 
 	it('shows slide 6: two forms, the first handle in red', () => {
 		const body = panel(1);
-		expect(body).not.toContain('class="up');
+		expect(body).not.toMatch(slideArrow);
 		expect(text(body)).not.toContain('A reverse rightmost derivation');
 		expect(text(body)).toContain('handle: int , end of handle');
 		expect(body.match(/class="handle[ "]/g)).toHaveLength(1);
 		expect(text(body)).toContain('1 of 5: the handle int of the form above is reduced by E → int.');
+		// The rows listed so far, on the same rows in both columns, with no blank rows between them.
+		const blank = ['', '', '', ''];
+		expect(column(body, '(?:last )?svelte')).toEqual([
+			'[int] + (int) + (int)',
+			'E + (int) + (int)',
+			...blank
+		]);
+		expect(column(body, 'derived')).toEqual([
+			'[int] + (int) + (int)',
+			'E + (int) + (int)',
+			...blank
+		]);
+		expect(body).toMatch(/<td class="arrow-col[^"]*" rowspan="2"><!--\[0--><span class="up derive/);
+	});
+
+	it('marks nothing in the derivation before the first reduction', () => {
+		const body = panel(0);
+		expect(column(body, 'derived')).toEqual(['int + (int) + (int)', '', '', '', '', '']);
+		expect(body).not.toContain('up derive');
+		expect(body).not.toContain('class="made');
 	});
 });
 
