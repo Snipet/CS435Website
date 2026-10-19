@@ -6,6 +6,7 @@ import { readPrecedenceText } from './precedence';
 import {
 	choiceOptions,
 	choiceValue,
+	defaultsText,
 	configurationParts,
 	condenseNotes,
 	configurationText,
@@ -16,7 +17,8 @@ import {
 	outcomeText,
 	placeCaption,
 	precedenceText,
-	resolutionLabel
+	resolutionLabel,
+	summaryText
 } from './view';
 
 function conflicts(grammar: string, precedence = '', input = '') {
@@ -143,6 +145,18 @@ describe('other text', () => {
 		]);
 	});
 
+	it('writes the summary for LR(1) states, and names only the defaults that apply', () => {
+		expect(summaryText({ state: 5, sr: 2, rr: 0 })).toBe('LR(1) state 5 conflicts: 2 shift/reduce');
+		expect(summaryText({ state: 1, sr: 1, rr: 2 })).toBe(
+			'LR(1) state 1 conflicts: 1 shift/reduce, 2 reduce/reduce'
+		);
+		expect(defaultsText({ sr: 1, rr: 0 })).toBe('shift');
+		expect(defaultsText({ sr: 0, rr: 1 })).toBe('the earlier rule');
+		expect(defaultsText({ sr: 2, rr: 1 })).toBe(
+			'shift; the earlier rule of a reduce/reduce conflict'
+		);
+	});
+
 	it('joins lists and captions the grammar classes diagram', () => {
 		expect([listText([]), listText([4]), listText([4, 9]), listText([3, 8, 11])]).toEqual([
 			'',
@@ -151,7 +165,21 @@ describe('other text', () => {
 			'3, 8 and 11'
 		]);
 		expect(placeCaption({ lr: 'lalr1', ll: null, ambiguous: false })).toBe(
-			'The dot marks a grammar that is LALR(1) but not SLR, and not LL(1).'
+			'The bar marks a grammar that is LALR(1) but not SLR, and not LL(1); whether it is LL(k) is not decided. This page tests LL(1) only, so the bar spans the LL(k) border.'
+		);
+		expect(
+			placeCaption(
+				{ lr: 'slr', ll: 'none', ambiguous: false },
+				{ kind: 'left-recursive', nonterminal: 'E' }
+			)
+		).toBe(
+			'The dot marks a grammar that is SLR but not LR(0), and not LL(k). E is left-recursive, and no left-recursive grammar is LL(k).'
+		);
+		expect(placeCaption({ lr: 'lr1', ll: 'llk', ambiguous: false }, { kind: 'finite', k: 3 })).toBe(
+			'The dot marks a grammar that is LR(1) but not LALR(1), and LL(k) but not LL(1). Its sentences have at most 3 tokens and it is not ambiguous, so it is LL(3).'
+		);
+		expect(placeCaption({ lr: 'slr', ll: 'll1', ambiguous: false })).toBe(
+			'The dot marks a grammar that is SLR but not LR(0), and LL(1) but not LL(0).'
 		);
 		expect(placeCaption({ lr: null, ll: null, ambiguous: false })).toContain(
 			'the diagram has no one place for it'

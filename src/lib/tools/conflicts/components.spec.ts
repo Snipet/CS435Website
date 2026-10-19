@@ -225,6 +225,21 @@ describe('ParseCard', () => {
 		expect(text(rejected)).toContain('Rejected');
 		expect(text(rejected)).toContain('error: action[5, <] is an error entry');
 	});
+
+	it('marks the conflict node in one box that scrolls the tree both ways', () => {
+		const { result } = run('cminus');
+		const html = render(ParseCard, {
+			props: { title: 'As resolved', parse: result.parse!, tokens: result.tokens!, tone: 0 }
+		}).body;
+		// One scroller: the tree's own box, bounded in height.
+		expect(html).not.toContain('tree-box');
+		expect(html).toMatch(/class="parse-tree bounded/);
+		expect(html.match(/class="mark[" ]/g)).toHaveLength(1);
+		const c = result.conflicts[0];
+		expect(text(html)).toContain(
+			`Marked: the node where the parse used a conflict’s entry: action[${c.state}, else] = shift.`
+		);
+	});
 });
 
 describe('BisonReportView', () => {

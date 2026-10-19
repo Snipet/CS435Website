@@ -123,7 +123,7 @@ export const presets: readonly ConflictsPreset[] = [
 	},
 	{
 		id: 'dangling-else-precedence',
-		label: 'Dangling else, else above then',
+		label: 'Dangling else, else higher than then',
 		group: SHIFT_REDUCE,
 		description:
 			'else is declared with higher precedence than then, the last terminal of S → if E then S. The terminal has the higher precedence, so the conflict is resolved with a shift by precedence, and bison no longer reports it. The parse is the same as with the default shift.',
@@ -213,7 +213,7 @@ export const presets: readonly ConflictsPreset[] = [
 			'The 29 rules of C-. The LR(1) automaton has 372 states and one conflict, the dangling else of selection-stmt, which bison resolves with a shift. bison’s LALR(1) automaton has 115 states.',
 		value: {
 			grammar: CMINUS_BNF,
-			input: 'void ID ( void ) { if ( ID ) if ( ID ) ID = NUM ; else ID = NUM ; }'
+			input: 'void ID ( void ) { if ( ID ) if ( ID ) ; else ; }'
 		}
 	}
 ];

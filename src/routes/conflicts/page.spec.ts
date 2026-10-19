@@ -34,7 +34,12 @@ describe('the prerendered page', () => {
 
 	it('parses the token string and shows Parser.output and the grammar classes', () => {
 		expect(t).toContain('As resolved Accepted');
-		expect(t).toContain("Conflict between rule 1 and token '+' resolved as reduce (%left '+').");
+		expect(t).toContain(
+			'Marked: the node where the parse used a conflict’s entry: action[5, *] = shift.'
+		);
+		// As `bison -v` writes it: the conflicts precedence settles are not listed.
+		expect(t).toContain("State 6 LR(1) state 5 1 E: E • '+' E");
+		expect(t).not.toContain('Conflict between rule');
 		expect(t).toContain('Grammar classes');
 		expect(t).toContain('The dot marks an ambiguous grammar.');
 	});

@@ -22,7 +22,10 @@
 
 	const uid = $props.id();
 	let box: HTMLDivElement | undefined = $state();
-	let copied = $state(false);
+	let manual: HTMLTextAreaElement | undefined = $state();
+	/** `manual`: the clipboard refused, so the text is shown to copy by hand. */
+	let status = $state<'idle' | 'copied' | 'manual'>('idle');
+	let timer: ReturnType<typeof setTimeout> | undefined;
 
 	const mergedCount = $derived(report.states.filter((s) => s.merged.length > 1).length);
 	/** The command of slide 28 and what bison prints. */
@@ -33,20 +36,49 @@
 		await tick();
 		const el = box?.querySelector<HTMLElement>(`[data-state="${n}"]`);
 		if (!el || !box) return;
+		const behavior = matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 		// The box is positioned, so a state's offsetTop is measured from it.
-		box.scrollTo({ top: el.offsetTop - 8, behavior: 'smooth' });
-		box.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+		box.scrollTo({ top: el.offsetTop - 8, behavior });
+		box.scrollIntoView({ block: 'nearest', behavior });
 		el.focus({ preventScroll: true });
 	}
 
+	/** Copies with the selection of a hidden text area, where the Clipboard API is refused. */
+	function legacyCopy(text: string): boolean {
+		const area = document.createElement('textarea');
+		area.value = text;
+		area.setAttribute('readonly', '');
+		area.style.position = 'fixed';
+		area.style.opacity = '0';
+		document.body.appendChild(area);
+		area.select();
+		try {
+			return document.execCommand('copy');
+		} catch {
+			return false;
+		} finally {
+			area.remove();
+		}
+	}
+
 	async function copy() {
+		clearTimeout(timer);
+		let done: boolean;
 		try {
 			await navigator.clipboard.writeText(report.text);
-			copied = true;
-			setTimeout(() => (copied = false), 1600);
+			done = true;
 		} catch {
-			copied = false;
+			done = legacyCopy(report.text);
 		}
+		if (done) {
+			status = 'copied';
+			timer = setTimeout(() => (status = 'idle'), 2000);
+			return;
+		}
+		status = 'manual';
+		await tick();
+		manual?.focus();
+		manual?.select();
 	}
 </script>
 
@@ -79,10 +111,32 @@
 	<div class="run">
 		<pre class="terminal"><span class="prompt" aria-hidden="true">$ </span>{run}</pre>
 		<Button size="sm" onclick={copy}>
-			{#snippet icon()}<Icon name={copied ? 'check' : 'copy'} size={14} />{/snippet}
-			{copied ? 'Copied' : 'Copy Parser.output'}
+			{#snippet icon()}<Icon name={status === 'copied' ? 'check' : 'copy'} size={14} />{/snippet}
+			{status === 'copied' ? 'Copied' : 'Copy Parser.output'}
 		</Button>
+		<span class="visually-hidden" role="status">
+			{status === 'copied' ? 'Parser.output copied' : ''}
+		</span>
 	</div>
+	{#if status === 'manual'}
+		<div class="manual">
+			<label for="{uid}-manual">
+				The clipboard is not available here: the text below is selected, to copy by hand.
+			</label>
+			<textarea
+				id="{uid}-manual"
+				bind:this={manual}
+				readonly
+				rows="6"
+				value={report.text}
+				onkeydown={(e) => {
+					if (e.key === 'Escape') status = 'idle';
+				}}></textarea>
+			<div>
+				<Button size="sm" variant="ghost" onclick={() => (status = 'idle')}>Close</Button>
+			</div>
+		</div>
+	{/if}
 
 	<!-- Focusable so that the keyboard can scroll the report. -->
 	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -138,19 +192,41 @@
 		align-items: flex-start;
 		gap: var(--space-3);
 	}
+	/* The command and bison's messages wrap rather than scroll. */
 	.terminal {
 		flex: 1 1 22rem;
 		min-width: 0;
 		margin: 0;
 		padding: 8px 12px;
-		position: relative;
-		overflow-x: auto;
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);
 		font-family: var(--font-mono);
 		font-size: var(--text-xs);
 		font-variant-ligatures: none;
 		line-height: 1.6;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.manual {
+		display: flex;
+		flex-direction: column;
+		gap: var(--space-2);
+		font-size: var(--text-sm);
+	}
+	.manual label {
+		color: var(--text-2);
+	}
+	.manual textarea {
+		width: 100%;
+		padding: 6px 8px;
+		border: 1px solid var(--border-strong);
+		border-radius: var(--radius-sm);
+		background: var(--surface-2);
+		color: var(--text);
+		font-family: var(--font-mono);
+		font-size: var(--text-xs);
+		font-variant-ligatures: none;
+		resize: vertical;
 	}
 	.prompt {
 		color: var(--text-3);
@@ -177,6 +253,15 @@
 		font-variant-ligatures: none;
 		line-height: 1.55;
 		white-space: pre;
+	}
+	/* The file box is the one scroller of the report, both ways (each pre would scroll alone). */
+	.file pre {
+		overflow: visible;
+	}
+	.file .section,
+	.file .state {
+		width: max-content;
+		min-width: 100%;
 	}
 	/* The head sections and the states line up, as in the file; a state with conflicts is marked. */
 	.section,

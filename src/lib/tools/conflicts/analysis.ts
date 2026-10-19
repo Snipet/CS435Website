@@ -10,7 +10,12 @@
 import type { ItemView } from '$lib/components/grammar/lr-item';
 import { unproductive, unreachable } from '$lib/theory/grammar/analyze';
 import { treeEquals } from '$lib/theory/grammar/derive';
-import { lalr1Automaton, lr1Automaton, DEFAULT_MAX_STATES } from '$lib/theory/grammar/lr';
+import {
+	lalr1Automaton,
+	lr1Automaton,
+	DEFAULT_MAX_STATES,
+	type Augmented
+} from '$lib/theory/grammar/lr';
 import { grammarClasses } from '$lib/theory/grammar/lr-classes';
 import { lrParse, type LrParse } from '$lib/theory/grammar/lr-parse';
 import { lrTable, readPrecedence } from '$lib/theory/grammar/lr-table';
@@ -63,6 +68,26 @@ export interface ConflictView {
 	usedAlternative: boolean | null;
 }
 
+/** A line of the conflict summary: LR(1) state 5 conflicts: 2 shift/reduce. */
+export interface SummaryLine {
+	/** The LR(1) state. */
+	state: number;
+	/** Its state in Parser.output (bison's LALR(1) numbering). */
+	bisonState: number;
+	sr: number;
+	rr: number;
+}
+
+/** A node of a parse tree built by the action the parse took at a conflict's entry. */
+export interface ParseMark {
+	/** Its path in the tree: the node a reduce made, or the parent of the token a shift moved. */
+	path: number[];
+	state: number;
+	terminal: string;
+	/** `shift`, or the reduction: `red. E → E * E`. */
+	action: string;
+}
+
 export interface ParseView {
 	outcome: LrParse['outcome'];
 	tree: ParseNode | null;
@@ -72,7 +97,12 @@ export interface ParseView {
 	text: string;
 	/** Index (into the input with its $) of the token the parse stopped at; null when accepted. */
 	at: number | null;
+	/** Where the tree took a conflict's entry, in the order of the parse (at most MAX_MARKS). */
+	marks: ParseMark[];
 }
+
+/** Marks kept per tree. */
+export const MAX_MARKS = 20;
 
 export type AnalysisResult =
 	/** The grammar has errors. */
@@ -87,8 +117,11 @@ export type AnalysisResult =
 			conflicts: ConflictView[];
 			/** All of the table's conflicts, also those beyond MAX_CONFLICTS. */
 			conflictCount: number;
-			/** bison's summary of the LR(1) table: "State 5 conflicts: 2 shift/reduce". */
-			summary: string[];
+			/**
+			 * bison's summary for the LR(1) table: per LR(1) state, the conflicts no
+			 * declaration settles, with the state's number in Parser.output.
+			 */
+			summary: SummaryLine[];
 			/** Conflicts no declaration settles, as bison counts them, and those precedence settles. */
 			unresolved: { sr: number; rr: number };
 			resolved: number;
@@ -110,14 +143,52 @@ export type AnalysisResult =
 			useless: string[];
 	  };
 
-function parseView(p: LrParse): ParseView {
+/**
+ * The nodes of an accepted parse's tree that the actions at conflict entries
+ * (`entries`: `state terminal`) built: a reduce makes its node; a shift moves
+ * a token that the production of its item later takes, the token's parent.
+ */
+export function conflictMarks(
+	p: LrParse,
+	aug: Augmented,
+	entries: ReadonlySet<string>
+): ParseMark[] {
+	if (!p.tree || entries.size === 0) return [];
+	// The rows' trees are the very nodes of the finished tree.
+	const paths = new Map<ParseNode, number[]>();
+	const walk = (n: ParseNode, path: number[]) => {
+		paths.set(n, path);
+		n.children.forEach((c, i) => walk(c, [...path, i]));
+	};
+	walk(p.tree, []);
+	const marks: ParseMark[] = [];
+	for (const row of p.rows) {
+		const { state, terminal } = row.lookup;
+		const a = row.action;
+		if (!a || (a.kind !== 'shift' && a.kind !== 'reduce')) continue;
+		if (!entries.has(`${state} ${terminal}`)) continue;
+		const path = paths.get(row.forest[row.forest.length - 1]);
+		if (!path) continue;
+		marks.push({
+			path: a.kind === 'shift' ? path.slice(0, -1) : path,
+			state,
+			terminal,
+			action: moveOf(aug, [], terminal, a).text
+		});
+		if (marks.length === MAX_MARKS) break;
+	}
+	return marks;
+}
+
+function parseView(p: LrParse, aug: Augmented, entries: ReadonlySet<string>): ParseView {
 	const last = p.rows[p.rows.length - 1];
 	return {
 		outcome: p.outcome,
 		tree: p.tree,
 		steps: p.rows.length,
 		text: last?.text ?? 'error: the input does not read',
-		at: p.outcome === 'accept' ? null : (last?.j ?? null)
+		at: p.outcome === 'accept' ? null : (last?.j ?? null),
+		marks: conflictMarks(p, aug, entries)
 	};
 }
 
@@ -189,17 +260,18 @@ export function analyze(request: AnalysisRequest): AnalysisResult {
 		};
 	});
 
+	// The table's conflict entries, for the marks in the trees.
+	const entries = new Set(table.conflicts.map((c) => `${c.state} ${c.terminal}`));
+
 	// bison's summary: the conflicts no declaration settles, per state.
-	const summary: string[] = [];
 	const unsettled = table.conflicts.filter((c) => c.resolution.by === 'default');
-	for (const state of [...new Set(unsettled.map((c) => c.state))].sort((a, b) => a - b)) {
-		const { sr, rr } = countBy(unsettled.filter((c) => c.state === state));
-		summary.push(
-			`State ${state} conflicts: ${[sr ? `${sr} shift/reduce` : '', rr ? `${rr} reduce/reduce` : '']
-				.filter(Boolean)
-				.join(', ')}`
-		);
-	}
+	const summary: SummaryLine[] = [...new Set(unsettled.map((c) => c.state))]
+		.sort((a, b) => a - b)
+		.map((state) => ({
+			state,
+			bisonState: report.numberOf[lalrOf[state]],
+			...countBy(unsettled.filter((c) => c.state === state))
+		}));
 
 	const classes = classesView(g, grammarClasses(g, { tokens: tokens ?? undefined }));
 	return {
@@ -213,8 +285,8 @@ export function analyze(request: AnalysisRequest): AnalysisResult {
 		unresolved: countBy(unsettled),
 		resolved: table.conflicts.length - unsettled.length,
 		tokens,
-		parse: parse ? parseView(parse) : null,
-		alternative: alternative ? parseView(alternative) : null,
+		parse: parse ? parseView(parse, aug, entries) : null,
+		alternative: alternative ? parseView(alternative, aug, entries) : null,
 		comparison:
 			parse && alternative
 				? {

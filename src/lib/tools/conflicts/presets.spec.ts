@@ -11,6 +11,7 @@ import { analyze } from './analysis';
 import { readPrecedenceText } from './precedence';
 import { DEFAULT_PRESET_ID, presetFor, presetState, presets } from './presets';
 import { DEFAULT_STATE } from './state';
+import { summaryText } from './view';
 
 const preset = (id: string) => presets.find((p) => p.id === id)!;
 function run(id: string) {
@@ -66,9 +67,9 @@ describe('presets', () => {
 
 	it('ambiguous: four conflicts by default; the other parse reduces E → E * E on +', () => {
 		const r = run('ambiguous');
-		expect(r.summary).toEqual([
-			'State 5 conflicts: 2 shift/reduce',
-			'State 6 conflicts: 2 shift/reduce'
+		expect(r.summary.map(summaryText)).toEqual([
+			'LR(1) state 5 conflicts: 2 shift/reduce',
+			'LR(1) state 6 conflicts: 2 shift/reduce'
 		]);
 		const chosen = r.conflicts[r.choices[0][0]];
 		expect([chosen.state, chosen.terminal]).toEqual([6, '+']);
@@ -93,6 +94,9 @@ describe('presets', () => {
 		expect(tree(r)).toBe('S( if E then S( if E then S(OTHER) else S(OTHER) ) )');
 		expect(other(r)).toBe('S( if E then S( if E then S(OTHER) ) else S(OTHER) )');
 		const declared = run('dangling-else-precedence');
+		// Slide 22's words: else with higher precedence than then, on the later line.
+		expect(preset('dangling-else-precedence').label).toBe('Dangling else, else higher than then');
+		expect(preset('dangling-else-precedence').value.precedence).toBe('%left then\n%left else');
 		expect(declared.conflicts[0].explanation.by).toBe('precedence');
 		expect(declared.summary).toEqual([]);
 		expect(tree(declared)).toBe(tree(r));
@@ -100,7 +104,7 @@ describe('presets', () => {
 
 	it('id sequence: a reduce/reduce conflict on $, gone after the rewrite', () => {
 		const r = run('id-sequence');
-		expect(r.summary).toEqual(['State 1 conflicts: 1 reduce/reduce']);
+		expect(r.summary.map(summaryText)).toEqual(['LR(1) state 1 conflicts: 1 reduce/reduce']);
 		expect(tree(r)).toBe('S( id S(ε) )');
 		expect(other(r)).toBe('S(id)');
 		expect(r.report.head[0].lines).toEqual([
@@ -127,7 +131,9 @@ describe('presets', () => {
 		expect(r.conflicts).toEqual([]);
 		expect(r.report.rr).toBe(2);
 		expect(r.report.states.find((s) => s.rr > 0)!.merged).toHaveLength(2);
-		expect(r.classes.place).toEqual({ lr: 'lr1', ll: null, ambiguous: false });
+		// Its language is finite: it is LL(3), inside LL(k) and outside LL(1).
+		expect(r.classes.place).toEqual({ lr: 'lr1', ll: 'llk', ambiguous: false });
+		expect(r.classes.llk).toEqual({ kind: 'finite', k: 3 });
 	});
 
 	it('C-: 372 LR(1) states, one conflict, 115 LALR(1) states', () => {
@@ -136,6 +142,11 @@ describe('presets', () => {
 		expect(preset('cminus').description).toContain('372 states');
 		expect(preset('cminus').description).toContain('115 states');
 		expect(r.parse!.outcome).toBe('accept');
+		expect(r.summary.map(summaryText)).toEqual(['LR(1) state 363 conflicts: 1 shift/reduce']);
+		expect(r.summary[0].bisonState).toBe(107);
+		expect(r.report.head.find((h) => h.title === 'Conflicts')!.lines).toEqual([
+			'State 107 conflicts: 1 shift/reduce'
+		]);
 	});
 
 	it('describe what the tool does, not what it is for', () => {

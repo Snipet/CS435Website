@@ -3,8 +3,10 @@
  * (Bottom-up Parsing III, slide 28), for the grammar and declarations of this
  * tool: rules useless in the parser, the states with conflicts, the grammar
  * with its rules numbered from 0 (`$accept: exp $end`), the terminals and
- * non-terminals, and every state with its items, actions and resolved
- * conflicts, in bison 3.8's layout.
+ * non-terminals, and every state with its items and actions (the reductions
+ * of an unresolved conflict that lose in brackets), in bison 3.8's layout.
+ * The conflicts precedence settles are not listed: `-v` is
+ * `--report=state`, and bison writes those under `--report=solved`.
  *
  * bison builds the LALR(1) automaton, not the canonical LR(1) automaton of
  * the decks: the states are those of lalr1Automaton, renumbered as bison
@@ -188,41 +190,28 @@ export function bisonReport(
 		const shiftSet = new Set(node.shifts.map((s) => s.symbol));
 		const consistent = !(node.reds.length > 1 || (node.reds.length === 1 && shiftSet.size > 0));
 		const errs: string[] = [];
-		const solved: string[] = [];
 		const reds = node.reds.map((r) => ({ rule: r.rule, lookaheads: new Set(r.lookaheads) }));
 		const shifts = node.shifts.map((s) => ({ ...s }));
 		const flushShift = (t: string) => {
 			shiftSet.delete(t);
 			for (const s of shifts) if (s.symbol === t) s.enabled = false;
 		};
+		// A conflict settled here is not in the report: `bison -v` (--report=state) leaves the
+		// "Conflict between rule … resolved as …" lines to --report=solved.
 		if (!consistent) {
 			for (const red of reds) {
 				if (red.rule === 0) continue;
-				const { terminal: last, precedence: rp } = rulePrecedence(g, precedence, red.rule - 1);
-				if (!rp || last === null) continue;
+				const { precedence: rp } = rulePrecedence(g, precedence, red.rule - 1);
+				if (!rp) continue;
 				if (![...red.lookaheads].some((t) => shiftSet.has(t))) continue;
 				for (const t of tokens) {
 					if (!red.lookaheads.has(t) || !shiftSet.has(t)) continue;
 					const tp = precedence.get(t);
 					if (!tp) continue;
-					const log = (as: string, why: string) =>
-						solved.push(
-							`    Conflict between rule ${red.rule} and token ${tag(t)} resolved as ${as} (${why}).`
-						);
-					if (tp.level < rp.level) {
-						log('reduce', `${tag(t)} < ${tag(last)}`);
-						flushShift(t);
-					} else if (tp.level > rp.level) {
-						log('shift', `${tag(last)} < ${tag(t)}`);
-						red.lookaheads.delete(t);
-					} else if (tp.assoc === 'right') {
-						log('shift', `%right ${tag(t)}`);
-						red.lookaheads.delete(t);
-					} else if (tp.assoc === 'left') {
-						log('reduce', `%left ${tag(t)}`);
-						flushShift(t);
-					} else {
-						log('an error', `%nonassoc ${tag(t)}`);
+					if (tp.level < rp.level) flushShift(t);
+					else if (tp.level > rp.level || tp.assoc === 'right') red.lookaheads.delete(t);
+					else if (tp.assoc === 'left') flushShift(t);
+					else {
 						flushShift(t);
 						red.lookaheads.delete(t);
 						errs.push(t);
@@ -263,7 +252,7 @@ export function bisonReport(
 				if (count >= 2) rr += count - 1;
 			}
 		}
-		return { id, node, consistent, shifts, reds, errs, solved, defaultRule, sr, rr, act };
+		return { id, node, consistent, shifts, reds, errs, defaultRule, sr, rr, act };
 	});
 
 	// ───────── printing ─────────
@@ -358,7 +347,6 @@ export function bisonReport(
 				? column(b.node.gotos.map((t) => [tag(t.symbol), `go to state ${numberOf[t.to]}`]))
 				: []
 		);
-		section(b.solved);
 		const actions: Record<string, BisonAction> = {};
 		for (const [t, a] of b.act)
 			actions[t] = a.kind === 'shift' ? { kind: 'shift', to: numberOf[a.to] } : a;

@@ -1,13 +1,15 @@
 <!--
 	One parse of the token string with an LR table: the bottom-up tree in the
-	baseline layout (§3.10), or where the parser stopped.
+	baseline layout (§3.10), or where the parser stopped. The nodes built by
+	the actions at conflict entries are marked; a large tree (the C- grammar's)
+	scrolls in its own box, which opens on the first of them.
 -->
 <script lang="ts">
 	import { ParseTreeView, TokenStream } from '$lib/components/grammar';
 	import { Badge } from '$lib/components/ui';
 	import type { Snippet } from 'svelte';
 	import type { ParseView } from './analysis';
-	import { outcomeText } from './view';
+	import { markText, outcomeText } from './view';
 
 	interface Props {
 		title: string;
@@ -24,6 +26,9 @@
 
 	const uid = $props.id();
 	const outcome = $derived(outcomeText(parse));
+	const highlight = $derived({ current: parse.marks.map((m) => m.path) });
+	/** The tree's box shows the first conflict node at once, however large the tree. */
+	const reveal = $derived(parse.marks[0]?.path ?? null);
 </script>
 
 <section class="parse-card" aria-labelledby="{uid}-title">
@@ -33,15 +38,24 @@
 	</header>
 	{@render children?.()}
 	{#if parse.tree}
-		<div class="tree-box">
-			<ParseTreeView
-				tree={parse.tree}
-				layout="baseline"
-				{tone}
-				ariaLabel="{title}: parse tree"
-				minLabelSize={10}
-			/>
-		</div>
+		<ParseTreeView
+			tree={parse.tree}
+			layout="baseline"
+			{tone}
+			{highlight}
+			{reveal}
+			ariaLabel="{title}: parse tree"
+			minLabelSize={10}
+			maxHeight="min(36rem, 70vh)"
+		/>
+		{#if parse.marks.length}
+			<p class="marks">
+				<span class="swatch" aria-hidden="true"></span>
+				<span>
+					Marked: {markText(parse.marks)}
+				</span>
+			</p>
+		{/if}
 	{:else}
 		{#if parse.at !== null}
 			<TokenStream
@@ -79,12 +93,23 @@
 		font-weight: 600;
 		letter-spacing: 0;
 	}
-	/* A tall tree (the C- grammar's) scrolls inside the card. */
-	.tree-box {
-		max-height: min(36rem, 70vh);
-		position: relative;
-		overflow: auto;
-		scrollbar-width: thin;
+	.marks {
+		display: flex;
+		align-items: baseline;
+		gap: var(--space-2);
+		margin: 0;
+		color: var(--text-2);
+		font-size: var(--text-xs);
+	}
+	/* The mark ParseTreeView draws for a current node. */
+	.swatch {
+		flex: none;
+		width: 0.9em;
+		height: 0.9em;
+		border-bottom: 2px solid var(--active);
+		border-radius: 3px;
+		background: var(--active-soft);
+		transform: translateY(0.1em);
 	}
 	.detail {
 		margin: 0;

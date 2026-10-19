@@ -137,17 +137,19 @@
 		font-family: var(--font-mono);
 		font-variant-ligatures: none;
 	}
-	/* Each item stays on one line; the line breaks between them, and a long item scrolls. */
+	/* The line breaks between the two items, and inside an item too long for the card. */
 	.template {
 		display: flex;
 		flex-wrap: wrap;
 		align-items: baseline;
 		gap: 2px var(--space-2);
 		margin: 0;
-		position: relative;
-		overflow-x: auto;
 		font-size: var(--text-sm);
-		scrollbar-width: thin;
+		overflow-wrap: anywhere;
+	}
+	.template :global(.lr-item) {
+		min-width: 0;
+		white-space: normal;
 	}
 	.moves {
 		display: flex;

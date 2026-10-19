@@ -46,7 +46,13 @@
 		type ConflictsState,
 		type ItemsView
 	} from '$lib/tools/conflicts/state';
-	import { choiceValue, condenseNotes, entryText } from '$lib/tools/conflicts/view';
+	import {
+		choiceValue,
+		condenseNotes,
+		defaultsText,
+		entryText,
+		summaryText
+	} from '$lib/tools/conflicts/view';
 	import { createAnalysisWorker } from '$lib/tools/conflicts/worker';
 	import { toolLink } from '$lib/tools/links';
 	import { toolBySlug } from '$lib/tools/registry';
@@ -252,7 +258,20 @@
 					{:else}
 						<div class="summary">
 							{#if done.summary.length}
-								<pre class="bison">{done.summary.join('\n')}</pre>
+								<ul class="bison" aria-label="Conflicts bison reports, by LR(1) state">
+									{#each done.summary as line (line.state)}
+										<li>
+											<span class="line">{summaryText(line)}</span>
+											<Button
+												size="sm"
+												variant="ghost"
+												onclick={() => report?.show(line.bisonState)}
+											>
+												Parser.output state {line.bisonState}
+											</Button>
+										</li>
+									{/each}
+								</ul>
 							{/if}
 							<p>
 								{done.conflictCount}
@@ -262,8 +281,9 @@
 										? ', '
 										: '.'}{/if}
 								{#if done.unresolved.sr + done.unresolved.rr}
-									{done.unresolved.sr + done.unresolved.rr} left to bison’s default (shift; the earlier
-									rule of a reduce/reduce conflict), which bison reports.
+									{done.unresolved.sr + done.unresolved.rr} left to bison’s default ({defaultsText(
+										done.unresolved
+									)}), which bison reports.
 								{/if}
 							</p>
 						</div>
@@ -424,17 +444,29 @@
 		color: var(--text-2);
 	}
 	.bison {
+		display: flex;
+		flex-direction: column;
+		gap: 2px;
 		align-self: flex-start;
 		max-width: 100%;
 		margin: 0;
-		padding: 6px 12px;
-		position: relative;
-		overflow-x: auto;
+		padding: 4px 4px 4px 12px;
 		border-radius: var(--radius-sm);
 		background: var(--surface-2);
+		list-style: none;
+	}
+	.bison li {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 0 var(--space-3);
+	}
+	.bison .line {
+		min-width: 0;
+		color: var(--text);
 		font-family: var(--font-mono);
-		font-size: var(--text-sm);
 		font-variant-ligatures: none;
+		overflow-wrap: anywhere;
 	}
 	.cards {
 		display: grid;

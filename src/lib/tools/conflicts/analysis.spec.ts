@@ -5,14 +5,17 @@
  */
 import { describe, expect, it } from 'vitest';
 import { formatItem, type ItemView } from '$lib/components/grammar/lr-item';
+import { nodeAtPath } from '$lib/components/grammar/tree-layout';
 import { CMINUS_BNF } from '$lib/theory/cminus/parser';
 import { bracketForm } from '$lib/theory/grammar/derive';
 import { lr1Automaton } from '$lib/theory/grammar/lr';
 import { lrTable } from '$lib/theory/grammar/lr-table';
 import { lrParse } from '$lib/theory/grammar/lr-parse';
 import { parseGrammar } from '$lib/theory/grammar/parse';
+import type { ParseNode } from '$lib/theory/grammar/types';
 import { analyze, sameRequest, type AnalysisRequest, type AnalysisResult } from './analysis';
 import { conflictContext, moveOf, shortestPaths } from './context';
+import { summaryText } from './view';
 import { effectiveChoices, looksUp, overrideTable, parseWith } from './override';
 import { SHIFT_IF, explain, winnerOf } from './resolution';
 import { readPrecedenceText } from './precedence';
@@ -46,9 +49,18 @@ describe('shift/reduce conflicts of E → E + E | E * E | int', () => {
 			[6, '+', 'shift/reduce'],
 			[6, '*', 'shift/reduce']
 		]);
+		// Numbered as LR(1) states, each with its state in Parser.output.
 		expect(plain.summary).toEqual([
-			'State 5 conflicts: 2 shift/reduce',
-			'State 6 conflicts: 2 shift/reduce'
+			{ state: 5, bisonState: 6, sr: 2, rr: 0 },
+			{ state: 6, bisonState: 7, sr: 2, rr: 0 }
+		]);
+		expect(plain.summary.map(summaryText)).toEqual([
+			'LR(1) state 5 conflicts: 2 shift/reduce',
+			'LR(1) state 6 conflicts: 2 shift/reduce'
+		]);
+		expect(plain.report.head[0].lines).toEqual([
+			'State 6 conflicts: 2 shift/reduce',
+			'State 7 conflicts: 2 shift/reduce'
 		]);
 		expect(plain.unresolved).toEqual({ sr: 4, rr: 0 });
 		expect(plain.resolved).toBe(0);
@@ -305,7 +317,7 @@ describe('reduce/reduce conflicts (slides 24–25)', () => {
 			shiftIf: null,
 			text: 'reduce by S → ε because it is the earlier rule'
 		});
-		expect(r.summary).toEqual(['State 1 conflicts: 1 reduce/reduce']);
+		expect(r.summary.map(summaryText)).toEqual(['LR(1) state 1 conflicts: 1 reduce/reduce']);
 		expect(bracketForm(r.parse!.tree!)).toBe('S( id S(ε) )');
 		const other = done({ grammar: 'S → ε | id | id S', input: 'id', choices: [[0, 1]] });
 		expect(bracketForm(other.alternative!.tree!)).toBe('S(id)');
@@ -333,6 +345,79 @@ describe('the C- grammar', () => {
 		expect(r.parse!.outcome).toBe('accept');
 		expect(r.conflicts[0].used).toBe(true);
 		expect(r.report.states[r.conflicts[0].bisonState].sr).toBe(1);
+	});
+
+	it('marks the inner if, which takes the else the default shift moves', () => {
+		const r = done({
+			grammar: CMINUS_BNF,
+			input: 'void ID ( void ) { if ( ID ) if ( ID ) ; else ; }'
+		});
+		const c = r.conflicts[0];
+		expect(r.parse!.marks).toEqual([
+			{ path: expect.any(Array), state: c.state, terminal: 'else', action: 'shift' }
+		]);
+		const node = nodeAtPath(r.parse!.tree!, r.parse!.marks[0].path)!;
+		expect(node.children.map((k) => k.symbol)).toEqual([
+			'if',
+			'(',
+			'expression',
+			')',
+			'statement',
+			'else',
+			'statement'
+		]);
+		// It is the inner if: a statement of the outer one.
+		const outer = nodeAtPath(r.parse!.tree!, r.parse!.marks[0].path.slice(0, -2))!;
+		expect(outer.children.map((k) => k.symbol)).toEqual([
+			'if',
+			'(',
+			'expression',
+			')',
+			'statement'
+		]);
+	});
+});
+
+describe('marks in the trees', () => {
+	const marked = (tree: ParseNode, path: number[]) => bracketForm(nodeAtPath(tree, path)!);
+
+	it('mark the node of the action taken at a conflict entry, in either parse', () => {
+		const r = done({
+			grammar: 'S → if E then S | if E then S else S | OTHER',
+			input: 'if E then if E then OTHER else OTHER',
+			choices: [[0, 1]]
+		});
+		expect(r.parse!.marks.map((m) => [m.terminal, m.action])).toEqual([['else', 'shift']]);
+		expect(marked(r.parse!.tree!, r.parse!.marks[0].path)).toBe(
+			'S( if E then S(OTHER) else S(OTHER) )'
+		);
+		expect(r.alternative!.marks.map((m) => [m.terminal, m.action])).toEqual([
+			['else', 'red. S → if E then S']
+		]);
+		expect(marked(r.alternative!.tree!, r.alternative!.marks[0].path)).toBe(
+			'S( if E then S(OTHER) )'
+		);
+	});
+
+	it('mark E + E after a shift of +, E * E after the other action reduces it (slide 18)', () => {
+		const r = done({ grammar: E, input: 'int * int + int', choices: [[2, 1]] });
+		expect(r.parse!.marks.map((m) => marked(r.parse!.tree!, m.path))).toEqual([
+			'E( E(int) + E(int) )'
+		]);
+		expect(r.alternative!.marks.map((m) => marked(r.alternative!.tree!, m.path))).toEqual([
+			'E( E(int) * E(int) )'
+		]);
+	});
+
+	it('are none without conflicts or without a tree', () => {
+		expect(done({ grammar: 'S → ε | id S', input: 'id id' }).parse!.marks).toEqual([]);
+		const rejected = done({
+			grammar: 'E → E < E | int',
+			precedence: "%nonassoc '<'",
+			input: 'int < int < int'
+		});
+		expect(rejected.parse!.tree).toBeNull();
+		expect(rejected.parse!.marks).toEqual([]);
 	});
 });
 

@@ -10,7 +10,8 @@ import type { HighlightToken, Tone } from '$lib/components/ui/types';
 import type { Diagnostic } from '$lib/theory/diagnostics';
 import type { Precedence } from '$lib/theory/grammar/lr-table';
 import { END_MARKER } from '$lib/theory/grammar/types';
-import type { ConflictView, ParseView } from './analysis';
+import type { ConflictView, ParseMark, ParseView, SummaryLine } from './analysis';
+import type { LlkFinding } from './classes';
 import type { PrecedenceLine } from './precedence';
 
 /** The divider between the stack and the input, the decks' red bar (§3.10). */
@@ -47,6 +48,28 @@ export function resolutionLabel(c: Pick<ConflictView, 'explanation' | 'moves'>):
 	const action = e.winner === 'error' ? 'error' : c.moves[e.winner].kind;
 	if (e.by === 'precedence') return { text: `${action}, by precedence`, tone: 'accept' };
 	return { text: `${action}, bison’s default`, tone: 'active' };
+}
+
+/**
+ * A line of the conflict summary, in bison's words but for the LR(1) table:
+ * `LR(1) state 5 conflicts: 2 shift/reduce`.
+ */
+export function summaryText(line: Pick<SummaryLine, 'state' | 'sr' | 'rr'>): string {
+	const counts = [
+		line.sr ? `${line.sr} shift/reduce` : '',
+		line.rr ? `${line.rr} reduce/reduce` : ''
+	].filter(Boolean);
+	return `LR(1) state ${line.state} conflicts: ${counts.join(', ')}`;
+}
+
+/**
+ * The rules bison's default follows for the conflicts left to it: shift, and
+ * the earlier rule of a reduce/reduce conflict, as far as there are such.
+ */
+export function defaultsText(unresolved: { sr: number; rr: number }): string {
+	if (unresolved.sr && unresolved.rr) return 'shift; the earlier rule of a reduce/reduce conflict';
+	if (unresolved.rr) return 'the earlier rule';
+	return 'shift';
 }
 
 /** The name of a table entry: `action[6, +]`. */
@@ -117,17 +140,41 @@ export function highlightPrecedence(text: string): HighlightToken[] {
 	return out;
 }
 
+/**
+ * What the marked nodes of a tree are: `the node where the parse used a
+ * conflict’s entry: action[8, else] = shift.`
+ */
+export function markText(
+	marks: readonly Pick<ParseMark, 'state' | 'terminal' | 'action'>[]
+): string {
+	const entries = [...new Set(marks.map((m) => `${entryText(m.state, m.terminal)} = ${m.action}`))];
+	const nodes = marks.length === 1 ? 'the node' : `${marks.length} nodes`;
+	const where = entries.length === 1 ? 'a conflict’s entry' : 'conflict entries';
+	return `${nodes} where the parse used ${where}: ${listText(entries)}.`;
+}
+
 /** A list of numbers in words: `4`, `4 and 9`, `3, 8 and 11`. */
 export function listText(items: readonly (string | number)[]): string {
 	if (items.length <= 1) return items.join('');
 	return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
-/** What the dot of the grammar classes diagram marks, or why there is none. */
-export function placeCaption(place: GrammarPlace): string {
-	if (!classPoint(place))
+/**
+ * What the marker of the grammar classes diagram marks, or why there is
+ * none, and for an LR(1) grammar that is not LL(1) what is known of LL(k).
+ */
+export function placeCaption(place: GrammarPlace, llk: LlkFinding | null = null): string {
+	const point = classPoint(place);
+	if (!point)
 		return 'The grammar is not LR(1), and no token string has shown it to be ambiguous: the diagram has no one place for it.';
-	return placeText(place).replace(/^Marked: /, 'The dot marks ');
+	if (point.x2 !== undefined)
+		return `${placeText(place).replace(/^Marked: /, 'The bar marks ')} This page tests LL(1) only, so the bar spans the LL(k) border.`;
+	const text = placeText(place).replace(/^Marked: /, 'The dot marks ');
+	if (place.ll === 'none' && llk?.kind === 'left-recursive')
+		return `${text} ${llk.nonterminal} is left-recursive, and no left-recursive grammar is LL(k).`;
+	if (place.ll === 'llk' && llk?.kind === 'finite')
+		return `${text} Its sentences have at most ${llk.k} ${llk.k === 1 ? 'token' : 'tokens'} and it is not ambiguous, so it is LL(${llk.k}).`;
+	return text;
 }
 
 /**

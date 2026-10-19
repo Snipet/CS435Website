@@ -101,9 +101,6 @@ State 6
 
     $default  reduce using rule 1 (E)
 
-    Conflict between rule 1 and token '+' resolved as reduce (%left '+').
-    Conflict between rule 1 and token '*' resolved as shift ('+' < '*').
-
 
 State 7
 
@@ -112,9 +109,6 @@ State 7
     2  | E '*' E •
 
     $default  reduce using rule 2 (E)
-
-    Conflict between rule 2 and token '+' resolved as reduce ('+' < '*').
-    Conflict between rule 2 and token '*' resolved as reduce (%left '*').
 `;
 
 describe('bisonReport', () => {
@@ -212,11 +206,10 @@ describe('bisonReport', () => {
 			'',
 			"    '<'  error (nonassociative)",
 			'',
-			'    $default  reduce using rule 1 (E)',
-			'',
-			"    Conflict between rule 1 and token '<' resolved as an error (%nonassoc '<').",
-			"    Conflict between rule 1 and token '+' resolved as shift ('<' < '+')."
+			'    $default  reduce using rule 1 (E)'
 		]);
+		// bison -v leaves how precedence settled the conflicts to --report=solved.
+		expect(r.text).not.toContain('Conflict between');
 		expect(r.states[6].actions['<']).toEqual({ kind: 'error' });
 		const empty = report('S → A b\nA → ε');
 		expect(empty.states[0].lines).toContain('    0 $accept: • S $end');

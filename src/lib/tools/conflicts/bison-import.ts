@@ -283,6 +283,10 @@ export function importBison(text: string): BisonImport {
 	let k = 0;
 	const declared = new Set<string>(); // %token names
 	const aliasOf = new Map<string, string>(); // "==" → EQ
+	/** Terminals written as names: in %token, in precedence lines, in rules. */
+	const tokenNames = new Set<string>();
+	/** Terminals written as literals ('E', or "E" that is no alias), where they are written. */
+	const literalUses: { value: string; span: Span }[] = [];
 	const precedence: PrecedenceLineDraft[] = [];
 	let start: { name: string; span: Span } | null = null;
 	const ignored = new Set<string>();
@@ -337,9 +341,13 @@ export function importBison(text: string): BisonImport {
 				for (const a of args) {
 					if (a.kind === 'id') {
 						declared.add(a.value);
+						tokenNames.add(a.value);
 						last = a.value;
 					} else if (a.kind === 'string' && last !== null) aliasOf.set(a.value, last);
-					else if (a.kind === 'char') declared.add(a.value);
+					else if (a.kind === 'char') {
+						declared.add(a.value);
+						literalUses.push({ value: a.value, span: span(a.start, a.end) });
+					}
 				}
 			} else if ((ASSOCS as readonly string[]).includes(name) || name === 'precedence') {
 				const symbols: PrecedenceLineDraft['symbols'] = [];
@@ -354,6 +362,7 @@ export function importBison(text: string): BisonImport {
 						symbols.push({ kind: a.kind, value: a.value, span: span(a.start, a.end) });
 						if (a.kind === 'id') {
 							declared.add(a.value);
+							tokenNames.add(a.value);
 							last = a.value;
 						}
 					} else if (a.kind !== 'tag' && a.kind !== 'number')
@@ -597,7 +606,27 @@ export function importBison(text: string): BisonImport {
 						message: `The terminal ${name} is written like the ${name === END_MARKER ? 'end marker' : 'empty string'} of the lecture notation.`,
 						span: s.span
 					});
+				if (s.kind === 'id' && !nonterminals.has(s.value)) tokenNames.add(s.value);
+				if (s.kind === 'char' || (s.kind === 'string' && !aliasOf.has(s.value)))
+					literalUses.push({ value: s.value, span: s.span });
 			}
+	for (const d of precedence)
+		for (const s of d.symbols)
+			if (s.kind === 'char' || (s.kind === 'string' && !aliasOf.has(s.value)))
+				literalUses.push({ value: s.value, span: s.span });
+
+	// 'E' and the token E are two terminals in bison; the lecture notation has one spelling for both.
+	const warnedLiterals = new Set<string>();
+	for (const use of [...literalUses].sort((a, b) => a.span.start - b.span.start)) {
+		if (!tokenNames.has(use.value) || nonterminals.has(use.value)) continue;
+		if (warnedLiterals.has(use.value)) continue;
+		warnedLiterals.add(use.value);
+		report({
+			severity: 'warning',
+			message: `${text.slice(use.span.start, use.span.end)} and the token ${use.value} are two terminals in bison; here both are read as the terminal ${use.value}.`,
+			span: use.span
+		});
+	}
 
 	// ───────── the start symbol first ─────────
 	let first = rules[0].lhs;

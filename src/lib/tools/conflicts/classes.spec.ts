@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { formatItem } from '$lib/components/grammar/lr-item';
 import { grammarClasses } from '$lib/theory/grammar/lr-classes';
 import { parseGrammar } from '$lib/theory/grammar/parse';
-import { CLASS_CONFLICTS, classesView } from './classes';
+import { classPoint, insideRegion, LL_REGIONS } from '$lib/components/grammar/grammar-classes';
+import { CLASS_CONFLICTS, classesView, llkOf } from './classes';
+import { NOT_LALR } from './presets';
 
 const view = (text: string, tokens?: string[]) => {
 	const g = parseGrammar(text).grammar!;
@@ -55,13 +57,38 @@ describe('classesView', () => {
 			items: [],
 			entry: { nonterminal: 'E', productions: ['E → T + E', 'E → T'] }
 		});
+		// Not LL(1), not left-recursive, an infinite language: LL(k) is not decided (it is LL(2)).
 		expect(v.place).toEqual({ lr: 'slr', ll: null, ambiguous: false });
+		expect(v.llk).toBeNull();
 	});
 
 	it('tells LL(0) and LR(1) without LALR(1)', () => {
 		expect(view('S → a B\nB → b').place).toEqual({ lr: 'lr0', ll: 'll0', ambiguous: false });
-		const v = view('S → a A d | b B d | a B e | b A e\nA → c\nB → c');
-		expect(v.place).toEqual({ lr: 'lr1', ll: null, ambiguous: false });
+		const v = view(NOT_LALR);
 		expect(v.rows[3].conflicts.map((c) => c.kind)).toEqual(['reduce/reduce', 'reduce/reduce']);
+	});
+
+	it('places the LR(1) grammar that is not LALR(1) inside LL(k): its language is finite', () => {
+		const v = view(NOT_LALR);
+		expect(v.place).toEqual({ lr: 'lr1', ll: 'llk', ambiguous: false });
+		expect(v.llk).toEqual({ kind: 'finite', k: 3 });
+		const p = classPoint(v.place)!;
+		expect(p.x2).toBeUndefined();
+		expect(LL_REGIONS.map((r) => insideRegion(r, true, p))).toEqual([true, false]);
+	});
+
+	it('places a left-recursive grammar outside LL(k)', () => {
+		const v = view('E → E + T | T\nT → int');
+		expect(v.place).toEqual({ lr: 'lr0', ll: 'none', ambiguous: false });
+		expect(v.llk).toEqual({ kind: 'left-recursive', nonterminal: 'E' });
+		const p = classPoint(v.place)!;
+		expect(LL_REGIONS.map((r) => insideRegion(r, true, p))).toEqual([false, false]);
+	});
+
+	it('decides nothing about LL(k) for an LL(1) grammar, an ambiguous one or one with useless symbols', () => {
+		expect(view('S → ε | id S').llk).toBeNull();
+		expect(view('E → E + E | int', ['int', '+', 'int', '+', 'int']).llk).toBeNull();
+		// B derives nothing: E is left-recursive, but the grammar is not reduced.
+		expect(llkOf(parseGrammar('E → E + T | T | B\nT → int\nB → B b').grammar!)).toBeNull();
 	});
 });

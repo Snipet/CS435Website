@@ -191,4 +191,30 @@ exp : exp '-' exp
 			['warning', "'$'"]
 		]);
 	});
+
+	it('warns about a literal spelled like a token name: two terminals in bison, one here', () => {
+		const text = "%token E\n%%\nS : 'E' S | E ;";
+		const out = importBison(text);
+		expect(out.grammar).toBe('S → E S | E');
+		expect(out.diagnostics.map((d) => [d.severity, where(text, d), d.message])).toEqual([
+			[
+				'warning',
+				"'E'",
+				"'E' and the token E are two terminals in bison; here both are read as the terminal E."
+			]
+		]);
+		// An undeclared name in a rule, a precedence line and an unaliased string count too, once each.
+		const more = `%left 'x' "if"\n%%\nS : x 'x' | if "if" 'x' ;`;
+		expect(
+			importBison(more)
+				.diagnostics.filter((d) => d.message.includes('two terminals'))
+				.map((d) => where(more, d))
+		).toEqual(["'x'", '"if"']);
+		// A literal and a name that differ, or a name aliased by the string, are fine.
+		for (const fine of ["%token E\n%%\nS : 'e' S | E ;", '%token IF "if"\n%%\nS : "if" S | IF ;'])
+			expect(
+				importBison(fine).diagnostics.some((d) => d.message.includes('two terminals')),
+				fine
+			).toBe(false);
+	});
 });

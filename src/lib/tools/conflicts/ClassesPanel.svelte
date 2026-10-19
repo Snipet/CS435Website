@@ -101,7 +101,7 @@
 		<GrammarClasses highlight={classes.place} />
 		<figcaption>
 			<span>
-				{placeCaption(classes.place)}
+				{placeCaption(classes.place, classes.llk)}
 				Simple LR (SLR); Look-ahead LR (LALR). The slides only name LR(0), SLR and LALR(1); their tables
 				are built here the standard way.
 			</span>

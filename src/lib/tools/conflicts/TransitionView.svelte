@@ -39,32 +39,28 @@
 
 <div class={['transition', mode]}>
 	{#if mode === 'partial'}
-		<div class="pairs" style:--columns={from ? 3 : 1}>
+		<div class={['pairs', { joined: !!from }]} style:--rows={context.rows.length}>
 			{#if from}
-				<div class="caption">State {from.state}</div>
-				<div></div>
+				<div class="caption left">State {from.state}</div>
+				<div class="spacer"></div>
 			{/if}
-			<div class="caption">State {state}</div>
+			<div class="caption right">State {state}</div>
 			{#each context.rows as row, i (i)}
 				{#if from}
-					<div class="item">
+					<div class="item left">
 						{#if row.left}<LrItem item={row.left} />{:else}<span class="visually-hidden"
 								>no item moves to it</span
 							>{/if}
 					</div>
-					{#if i === 0}<div
-							class="arrow-cell"
-							style:grid-column="2"
-							style:grid-row="2 / span {context.rows.length}"
-						>
+					{#if i === 0}<div class="arrow-cell">
 							{@render arrow()}
 						</div>{/if}
 				{/if}
-				<div class="item"><LrItem item={row.right} /></div>
+				<div class="item right"><LrItem item={row.right} /></div>
 			{/each}
-			{#if from}<div class="omitted">{moreLeft ? '…' : ''}</div>
-				<div></div>{/if}
-			<div class="omitted">{moreRight ? '…' : ''}</div>
+			{#if from}<div class="omitted left">{moreLeft ? '…' : ''}</div>
+				<div class="spacer"></div>{/if}
+			<div class="omitted right">{moreRight ? '…' : ''}</div>
 		</div>
 	{:else}
 		<div class="states">
@@ -100,25 +96,73 @@
 </div>
 
 <style>
+	/* Items wrap when the card is narrow (the C- grammar's at phone width) rather than scroll. */
 	.transition {
 		max-width: 100%;
-		position: relative;
-		overflow-x: auto;
+		container-type: inline-size;
 		font-size: var(--text-sm);
-		scrollbar-width: thin;
+		overflow-wrap: anywhere;
 	}
+	.transition :global(.lr-item) {
+		white-space: normal;
+	}
+	/* The two item columns share the width they lack evenly; the ⇒ keeps its own. */
 	.pairs {
-		display: inline-grid;
-		grid-template-columns: repeat(var(--columns), auto);
+		display: grid;
+		grid-template-columns: minmax(0, max-content);
+		justify-content: start;
 		align-items: center;
 		gap: 2px var(--space-4);
+	}
+	.pairs.joined {
+		grid-template-columns: minmax(0, max-content) auto minmax(0, max-content);
+	}
+	.arrow-cell {
+		grid-column: 2;
+		grid-row: 2 / span var(--rows);
+	}
+	/* Too narrow for two columns: the state before, ⇒, then the conflict's state. */
+	@container (max-width: 30rem) {
+		.pairs.joined {
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.pairs.joined .arrow-cell {
+			grid-column: auto;
+			grid-row: auto;
+			justify-content: flex-start;
+			padding: 2px 0 4px;
+		}
+		.pairs.joined .spacer {
+			display: none;
+		}
+		.caption.left {
+			order: 1;
+		}
+		.item.left {
+			order: 2;
+		}
+		.omitted.left {
+			order: 3;
+		}
+		.arrow-cell {
+			order: 4;
+		}
+		.caption.right {
+			order: 5;
+		}
+		.item.right {
+			order: 6;
+		}
+		.omitted.right {
+			order: 7;
+		}
 	}
 	.caption {
 		color: var(--text-3);
 		font-size: var(--text-xs);
 	}
 	.item {
-		white-space: nowrap;
+		min-width: 0;
 	}
 	.arrow-cell {
 		display: flex;
@@ -151,6 +195,8 @@
 		display: flex;
 		flex-direction: column;
 		gap: 2px;
+		min-width: 0;
+		max-width: 100%;
 	}
 	.column ul {
 		margin: 0;
@@ -160,7 +206,6 @@
 	.column li {
 		padding: 0 6px;
 		border-left: 3px solid transparent;
-		white-space: nowrap;
 	}
 	.column li.marked {
 		border-left-color: var(--active);
