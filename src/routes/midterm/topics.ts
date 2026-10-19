@@ -2,9 +2,21 @@
  * The midterm review list, and for each of its topics the tools and notation
  * sections of this site that cover it.
  *
- * The list is kept as it was handed out: its groups, their order and the
- * wording of every line. An asterisk in the list is a star here (`stars: 1`,
- * or 2 for two asterisks). A topic with nothing on the site has no links.
+ * The list is kept as it was handed out: its groups, their order, its nesting
+ * and the wording of every line. An asterisk in the list is a star here
+ * (`stars: 1`, or 2 for two asterisks). A topic with nothing on the site has
+ * no links.
+ *
+ * Lines nest as the list indents them; a tab counts as eight spaces. So the
+ * second "Bottom-Up", indented as far as "Parsing Algorithms", stands next to
+ * it, and the lines indented further under it are its points. The typing of
+ * the list is tidied up: its bullets ("o", "--") are left out, and the lines
+ * they start, with "JavaScript?" lined up under the text of one, are topics of
+ * their group; "--" between words is a dash; quotes are curly; blank lines
+ * inside a group are dropped; a remark on the line under a topic joins it in
+ * parentheses ("(witness “cling”, …)"); and a list in parentheses after a
+ * topic ("Chomsky Hierarchy (3 Regular, …)"), or on a line of its own under it
+ * ("Type Checking, Symbol Table"), gives the topic's points.
  *
  * Links are data (`TopicLink`); `chipFor` turns one into a label and a URL, and
  * gives null for a tool that is not registered, so the page never points at a
@@ -19,6 +31,7 @@ import { presetById as lexerPreset } from '$lib/tools/lexer/presets';
 import { toolLink, type LinkSlug, type LinkStates } from '$lib/tools/links';
 import { GROUPING_INFO, type Grouping } from '$lib/tools/phases/groupings';
 import type { PhasesState } from '$lib/tools/phases/state';
+import { presets as predictivePresets } from '$lib/tools/rd-predictive/presets';
 import { toolBySlug } from '$lib/tools/registry';
 import { LEX2_DEFS, LEX2_RULES } from '$lib/tools/scanner-dfa/presets';
 import { presetById as tDiagramsPreset } from '$lib/tools/t-diagrams/presets';
@@ -33,8 +46,8 @@ import { encode } from '$lib/url-state';
 export const TITLE = 'Midterm Review';
 export const SUMMARY =
 	'The midterm review list, with the tools and notation sections on this site for each topic.';
-/** The list: "Exam will be Thursday 10/15". */
-export const EXAM = 'Thursday 10/15';
+/** The list: "Exam will be Thursday 10/22". */
+export const EXAM = 'Thursday 10/22';
 /** The list's own note on its asterisks. */
 export const STAR_NOTE = 'Asterisks (*’s) are used to mark particularly important concepts';
 
@@ -60,7 +73,17 @@ export const NOTATION_SECTIONS = {
 	ebnf: 'EBNF',
 	trees: 'Parse trees',
 	descent: 'Recursive descent',
-	declarations: 'Disambiguating declarations'
+	declarations: 'Disambiguating declarations',
+	'first-follow': 'First and Follow',
+	'll1-tables': 'LL(1) parsing tables',
+	'll1-traces': 'LL(1) parse traces',
+	handles: 'Handles',
+	'shift-reduce': 'Shift-reduce parsing',
+	'lr-items': 'LR(1) items',
+	'lr-tables': 'LR parsing tables',
+	conflicts: 'Conflicts',
+	bison: 'Precedence in bison',
+	'grammar-classes': 'Grammar classes'
 } as const;
 
 export type NotationSection = keyof typeof NOTATION_SECTIONS;
@@ -238,6 +261,56 @@ export const PRECEDENCE_CASCADE = {
 	rewrite: 'E → E + T | T\nT → T * F | F\nF → int | ( E )'
 };
 
+/**
+ * The Predictive Recursive Descent tool on one of its presets (Top-Down
+ * Parsing, slides 23–41): the preset's grammar, tokens and options, which the
+ * tool recognizes as that preset, so it shows the slide's note and questions.
+ * The chip names the grammar or the tokens (`example`): the preset's own label
+ * may be words around them ("E → T + E | T before left factoring"). Without
+ * that preset the link opens the tool as it first loads.
+ */
+function predictiveOn(id: string, example: string): TopicLink {
+	const preset = predictivePresets.find((p) => p.id === id);
+	if (!preset) return tool('rd-predictive');
+	const state = { ...preset.value };
+	return linked('rd-predictive', state, example, true);
+}
+
+/** The tab of the C- Compiler that draws the course's AST, by its title on the tool's page. */
+export const SYNTAX_TREE = 'Syntax tree';
+
+/**
+ * The C- Compiler on its Syntax tree tab, with the program and input it first
+ * loads (its preset "Greatest common divisor"). Written out here because the
+ * tool's preset module loads the compiler; the spec compares the two.
+ */
+export const CMINUS_SYNTAX_TREE = {
+	source: `/* The greatest common divisor of two numbers.
+   C- has no remainder operator:
+   u - u / v * v is the remainder of u by v. */
+
+int gcd(int u, int v)
+{
+  if (v == 0)
+    return u;
+  return gcd(v, u - u / v * v);
+}
+
+void main(void)
+{
+  int a;
+  int b;
+  a = input();
+  b = input();
+  output(gcd(a, b));
+}
+`,
+	input: '48 18',
+	tab: 'syntax'
+};
+
+const cminusSyntaxTree = (): TopicLink => linked('cminus', CMINUS_SYNTAX_TREE, SYNTAX_TREE);
+
 // ---------------------------------------------------------------------------
 // The list
 // ---------------------------------------------------------------------------
@@ -413,34 +486,105 @@ export const sections: readonly Section[] = [
 				links: [grammarDerivations(), notation('trees')],
 				sub: ['Derivation defines parse tree', 'One tree can have many derivations']
 			}),
-			topic('Syntax-directed Translation (SDT)', {
+			topic('Bison', { stars: 1, links: [notation('bison'), notation('declarations')] }),
+			topic('ASTs', {
 				stars: 1,
-				sub: [
-					'Grammar + Translation rules/Semantic actions',
-					'Semantic values',
-					topic('Bison', { stars: 1 })
-				]
+				links: [tool('rd-predictive'), cminusSyntaxTree(), tool('phases')]
 			}),
-			topic('ASTs', { stars: 1, links: [tool('rd-predictive'), tool('cminus'), tool('phases')] }),
 			topic('Ambiguity', { links: [tool('ambiguity'), notation('declarations')] }),
 			topic('Precedence cascades', {
 				stars: 1,
 				links: [linked('ambiguity', PRECEDENCE_CASCADE, 'E, T, F', true)]
 			}),
+			// The LL(1) and bottom-up topics link the notation sections that cover them.
+			// The tools for them go at the front of a topic's `links`.
 			topic('Parsing Algorithms', {
+				links: [notation('grammar-classes')],
 				sub: [
 					topic('Top-Down', {
 						sub: [
+							topic('Generate-Match parsing', { links: [tool('rd-backtracking')] }),
 							topic('RD with backtracking', {
 								links: [tool('rd-backtracking'), notation('descent')]
 							}),
 							topic('Predictive RD', {
 								links: [tool('rd-predictive'), notation('descent'), notation('ebnf')]
 							}),
-							'Table Driven LL(1)'
+							topic('Computing First and Follow sets', {
+								stars: 2,
+								links: [notation('first-follow')],
+								sub: ['Fixed-point computations']
+							}),
+							topic('Table Driven LL(1)', {
+								stars: 1,
+								links: [notation('ll1-tables'), notation('ll1-traces')]
+							})
 						]
 					}),
-					topic('Bottom-Up', { sub: ['LR(1)'] })
+					topic('Bottom-Up', {
+						sub: [
+							topic('Shift-Reduce parsing', { links: [notation('shift-reduce')] }),
+							topic('LR(1) algorithm', { stars: 1, links: [notation('lr-tables')] })
+						]
+					}),
+					topic('Predictive RD', {
+						stars: 2,
+						links: [tool('rd-predictive')],
+						sub: [
+							topic('Left factoring (use EBNF)', {
+								stars: 1,
+								links: [predictiveOn('suitable', 'E → T + E | T'), notation('ebnf')]
+							}),
+							topic('Remove left recursion (use EBNF)', {
+								stars: 1,
+								links: [predictiveOn('left-recursion-ebnf', 'E → E + T | T'), notation('ebnf')]
+							}),
+							topic('Associativity', {
+								links: [
+									predictiveOn('left-recursion-ebnf', 'E → E + T | T'),
+									predictiveOn('right-recursion', 'A → X op A | X')
+								]
+							}),
+							topic('Building AST', {
+								stars: 1,
+								links: [predictiveOn('ast', 'int + int + int'), cminusSyntaxTree()]
+							}),
+							topic('Visitor Design Pattern', { stars: 2 })
+						]
+					}),
+					topic('Table Driven', {
+						sub: [
+							topic('Remove left recursion (no EBNF)', {
+								stars: 1,
+								links: [predictiveOn('general-form', 'S → S a | S b | c | d')]
+							}),
+							topic('Left factor (no EBNF)', { stars: 1 }),
+							topic('Explicit stack', { links: [notation('ll1-traces')] }),
+							topic('Generate RHSs/match tokens', { links: [notation('ll1-traces')] }),
+							topic('Computing First/Follow sets', {
+								stars: 2,
+								links: [notation('first-follow')]
+							}),
+							topic('Building table!', { stars: 2, links: [notation('ll1-tables')] })
+						]
+					})
+				]
+			}),
+			topic('Bottom-Up', {
+				sub: [
+					topic('Reduce string to start symbol', { links: [notation('handles')] }),
+					topic('Produce rightmost derivation in reverse', { links: [notation('handles')] }),
+					topic('LR(1)', {
+						stars: 2,
+						sub: [
+							topic('LR(1) Items', { stars: 1, links: [notation('lr-items')] }),
+							topic('Closure(Items)', { stars: 1, links: [notation('lr-items')] }),
+							topic('Constructing DFA and table', {
+								stars: 1,
+								links: [notation('lr-items'), notation('lr-tables'), notation('conflicts')]
+							})
+						]
+					})
 				]
 			})
 		]
