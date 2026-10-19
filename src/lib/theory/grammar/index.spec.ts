@@ -37,12 +37,68 @@ describe('grammar engine exports', () => {
 			'recognizes',
 			'parseTrees',
 			'enumerateLanguage',
-			'compareGrammars'
+			'compareGrammars',
+			'displayOrder',
+			'terminalRanks',
+			'sortForDisplay',
+			'printTight',
+			'firstFollow',
+			'firstOfString',
+			'll1Table',
+			'll1Cell',
+			'endInput',
+			'replaceAt',
+			'withRanges',
+			'll1Parse',
+			'augment',
+			'mergeItems',
+			'printProduction',
+			'printItem',
+			'lrClosure',
+			'lrTransition',
+			'lr1Automaton',
+			'lr0Automaton',
+			'lalr1Automaton',
+			'reduceLabel',
+			'readPrecedence',
+			'rulePrecedence',
+			'lrTable',
+			'printAction',
+			'lrParse',
+			'printStack',
+			'shiftReduceRows',
+			'collapseShifts',
+			'printCompact',
+			'printConfiguration',
+			'handlesFromTree',
+			'handlesFromParse',
+			'grammarClasses'
 		] as const;
 		for (const name of names) expect(typeof engine[name], name).toBe('function');
 		expect(engine.END_MARKER).toBe('$');
 		expect(engine.EPSILON).toBe('ε');
 		expect(engine.DEFAULT_MAX_STEPS).toBe(10_000_000);
+		expect(engine.DEFAULT_PARSE_STEPS).toBe(20_000);
+		expect(engine.PARSE_STACK_BUDGET).toBe(4_000_000);
+		expect(engine.MAX_TREE_DEPTH).toBe(500);
+		expect(engine.TREE_DEPTH_TEXT).toBe(
+			'stopped: the parse tree would be more than 500 levels deep'
+		);
+		expect(engine.DEFAULT_MAX_STATES).toBe(5000);
+		expect(engine.ITEM_DOT).toBe('•');
+		expect(engine.STACK_BOTTOM).toBe('dummy');
+	});
+
+	it('runs both parsers on one grammar', () => {
+		const { grammar } = engine.parseGrammar('E → T X\nX → + E | ε\nT → ( E ) | int Y\nY → * T | ε');
+		if (!grammar) throw new Error('the grammar has errors');
+		const tokens = engine.tokenizeInput('int * ( int + int )', grammar.terminals).tokens;
+		const ll = engine.ll1Parse(engine.ll1Table(grammar), tokens);
+		const lr = engine.lrParse(engine.lrTable(engine.lr1Automaton(grammar)), tokens);
+		expect(ll.outcome).toBe('accept');
+		expect(lr.outcome).toBe('accept');
+		expect(engine.treeEquals(ll.tree!, lr.tree!)).toBe(true);
+		expect(engine.handlesFromParse(lr)).toEqual(engine.handlesFromTree(grammar, ll.tree!));
 	});
 
 	it('works end to end: text to grammar to trees to derivation to text', () => {
