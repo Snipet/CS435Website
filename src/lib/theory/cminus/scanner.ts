@@ -2,7 +2,8 @@
  * The C- scanner: characters in, tokens out.
  *
  * Maximal munch (the longest token wins, so `<=` is one LTE and `< =` is LT
- * ASSIGN); a reserved word wins over ID. White space and comments separate
+ * ASSIGN, `++` is one INCREMENT and `a+ +b` is ID PLUS PLUS ID); a reserved
+ * word wins over ID. White space and comments separate
  * tokens and produce none; they are kept in `trivia`. A comment runs from
  * slash-star to the first star-slash (comments do not nest) and may span lines.
  *

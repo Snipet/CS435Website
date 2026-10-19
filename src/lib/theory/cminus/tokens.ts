@@ -1,8 +1,9 @@
 /**
- * Tokens of C- (the language of Appendix A of the course text).
+ * Tokens of C- (the language of Appendix A of the course text), with two
+ * extensions: the keyword `for` and the symbols `++` and `--`.
  *
- * Keywords: else if int return void while. Special symbols:
- * + - * / < <= > >= == != = ; , ( ) [ ] { } and the comment brackets.
+ * Keywords: else for if int return void while. Special symbols:
+ * + - * / < <= > >= == != = ; , ( ) [ ] { } ++ -- and the comment brackets.
  * ID = letter letter*, NUM = digit digit*. Token type names are written in
  * upper case, as in the course's scanners (ID, NUM, PLUS, ASSIGN, ENDFILE …).
  */
@@ -22,7 +23,7 @@ export interface SourceDiagnostic extends Diagnostic {
 	span?: SourceSpan;
 }
 
-export type KeywordType = 'ELSE' | 'IF' | 'INT' | 'RETURN' | 'VOID' | 'WHILE';
+export type KeywordType = 'ELSE' | 'FOR' | 'IF' | 'INT' | 'RETURN' | 'VOID' | 'WHILE';
 
 export type SymbolType =
 	| 'PLUS'
@@ -43,13 +44,16 @@ export type SymbolType =
 	| 'LBRACKET'
 	| 'RBRACKET'
 	| 'LBRACE'
-	| 'RBRACE';
+	| 'RBRACE'
+	| 'INCREMENT'
+	| 'DECREMENT';
 
 export type TokenType = KeywordType | 'ID' | 'NUM' | SymbolType | 'ENDFILE' | 'ERROR';
 
 /** Reserved words and their token types. */
 export const KEYWORDS: Readonly<Record<string, KeywordType>> = {
 	else: 'ELSE',
+	for: 'FOR',
 	if: 'IF',
 	int: 'INT',
 	return: 'RETURN',
@@ -57,12 +61,17 @@ export const KEYWORDS: Readonly<Record<string, KeywordType>> = {
 	while: 'WHILE'
 };
 
-/** Special symbols, two-character ones first so that `<=` wins over `<` (maximal munch). */
+/**
+ * Special symbols, two-character ones first so that `<=` wins over `<` and
+ * `++` over `+` (maximal munch; `+ +` is still PLUS PLUS).
+ */
 export const SYMBOLS: readonly (readonly [string, SymbolType])[] = [
 	['<=', 'LTE'],
 	['>=', 'GTE'],
 	['==', 'EQ'],
 	['!=', 'NEQ'],
+	['++', 'INCREMENT'],
+	['--', 'DECREMENT'],
 	['+', 'PLUS'],
 	['-', 'MINUS'],
 	['*', 'TIMES'],

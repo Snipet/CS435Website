@@ -10,7 +10,14 @@
 	import { revealMarked } from './reveal';
 	import { plural, rangeOfUse, within, type SelectionMarks, type SourceRange } from './selection';
 	import MoreRows from './MoreRows.svelte';
-	import { SHORT_LIST, declaredSymbols, firstOf, phaseDiagnostics, scopeViews } from './views';
+	import {
+		SHORT_LIST,
+		courseTree,
+		declaredSymbols,
+		firstOf,
+		phaseDiagnostics,
+		scopeViews
+	} from './views';
 
 	/** Scopes shown before "List all" is used, and symbols listed per scope. */
 	const SCOPE_LIMIT = 60;
@@ -152,6 +159,7 @@
 		</h3>
 		<AstOutline
 			program={c.parse!.program}
+			tree={courseTree(c)}
 			types={semantic.types}
 			marked={marks.nodes}
 			{selKey}

@@ -960,12 +960,447 @@ function compareGrammars(
   `maxLength` of a few dozen at most; `maxSteps` bounds the time whatever the
   bounds are.
 
+#### LL(1) and LR parsing
+
+Table-driven LL(1) parsing as Table-based Predictive Parsing presents it, and
+bottom-up LR parsing as Bottom-Up Parsing, Bottom-up Parsing II and Bottom-up
+Parsing III present it. Every result is plain data (objects, arrays, Maps), so
+it survives a structured clone and can come from a worker (§5.4); the drivers
+keep their trees at most `MAX_TREE_DEPTH` levels deep for that (a structured
+clone copies nested objects recursively, and Chrome's workers run out of stack
+at about 900 levels of `ParseNode`).
+
+```ts
+// ll1.ts
+function displayOrder(g: Grammar, symbols: Iterable<string>): string[]; // $, T in grammar order, ε: { $, +, ) }
+function terminalRanks(g: Grammar): Map<string, number>;
+function sortForDisplay(ranks: ReadonlyMap<string, number>, symbols: Iterable<string>): string[];
+function printTight(symbols: readonly string[]): string; // *T, (E), int Y: as in First( *T )
+type FirstFollowRule =
+	| 'first-terminal' // First(b) = { b }
+	| 'first-add' // Add First(Ai) – { ε } to First(X)
+	| 'first-self' // ignore Ai if it is X
+	| 'first-stop' // Stop: ε ∉ First(Ai)
+	| 'first-epsilon' // Add ε to First(X)
+	| 'follow-end' // Add $ to Follow(S)
+	| 'follow-add' // Add First(Ai) – { ε } to Follow(X)
+	| 'follow-stop' // Stop: ε ∉ First(Ai)
+	| 'follow-follow'; // Add Follow(Y) to Follow(X)
+interface FirstFollowStep {
+	rule: FirstFollowRule;
+	pass: number; // 0: the rules applied once; 1, 2, …: passes over the productions
+	production: number | null;
+	position: number | null; // Follow: where X is in the right-hand side
+	index: number | null; // i of Ai, from 1
+	symbol: string | null; // Ai; Y for follow-follow
+	target: string; // X
+	added: string[]; // members new to the set (display order)
+	text: string; // "Add First( T ) – { ε } to First( E )", "Stop: ε ∉ First( T )", "Add ε to First( X )"
+}
+interface FirstFollow {
+	first: Map<string, string[]>; // every symbol: N, then T; display order
+	follow: Map<string, string[]>; // terminals too: Follow( int ) (slide 23)
+	firstSteps: FirstFollowStep[];
+	followSteps: FirstFollowStep[];
+	firstPasses: number; // the last pass changes nothing
+	followPasses: number;
+	diagnostics: Diagnostic[]; // a warning per symbol named $ or ε
+}
+function firstFollow(g: Grammar): FirstFollow;
+function firstOfString(ff: FirstFollow, g: Grammar, symbols: readonly string[]): string[];
+interface LL1Placement {
+	production: number;
+	rule: 'first' | 'follow';
+	set: string[]; // First(α) (with ε when α →* ε) or Follow(A)
+	columns: string[]; // set without ε
+	text: string; // "in columns of First( *T ) = { * }", "in columns of Follow( Y ) = { $, +, ) }"
+}
+interface LL1Cell {
+	productions: number[]; // T[A, b]; none: blank (error); two or more: multiply defined
+	placements: LL1Placement[];
+}
+interface LL1Table {
+	grammar: Grammar;
+	rows: string[]; // N in grammar order
+	columns: string[]; // T in grammar order, then $
+	cells: LL1Cell[][]; // [row][column]
+	placements: LL1Placement[]; // grammar order
+	conflicts: { nonterminal: string; terminal: string; productions: number[] }[];
+	ll1: boolean;
+	firstFollow: FirstFollow;
+	diagnostics: Diagnostic[];
+}
+function ll1Table(g: Grammar, ff?: FirstFollow): LL1Table;
+function ll1Cell(t: LL1Table, nonterminal: string, terminal: string): LL1Cell | null;
+type LL1Action =
+	| { kind: 'expand'; production: number }
+	| { kind: 'match'; terminal: string }
+	| { kind: 'accept' }
+	| { kind: 'blank'; nonterminal: string; terminal: string }
+	| { kind: 'mismatch'; expected: string; found: string }
+	| { kind: 'limit' };
+interface LL1Row {
+	stack: string[]; // top first, $ last: int Y X $
+	input: string[]; // the rest of the input with the trailing $
+	action: LL1Action;
+	text: string; // "T X", "ε", "terminal", "ACCEPT", "[E,*] is blank", "Mismatch: $ is not )"
+	tree: ParseNode; // the tree of this row's stack: its non-terminals are unexpanded leaves
+	focus: number[] | null; // path of the node on top of the stack
+	cell: { row: number; column: number } | null; // the entry looked up
+}
+function ll1Parse(
+	t: LL1Table,
+	tokens: readonly string[], // with or without the closing $
+	opts?: { maxSteps?: number }
+): {
+	rows: LL1Row[];
+	outcome: 'accept' | 'error' | 'limit';
+	tree: ParseNode | null;
+	diagnostics: Diagnostic[];
+};
+const DEFAULT_PARSE_STEPS = 20_000; // rows, for ll1Parse and lrParse
+const PARSE_STACK_BUDGET = 4_000_000; // stack entries (and copied tree paths) kept by all the rows of a run
+const MAX_TREE_DEPTH = 500; // levels of the deepest tree a driver builds; deeper: outcome 'limit'
+const TREE_DEPTH_TEXT = 'stopped: the parse tree would be more than 500 levels deep'; // that row's text
+function endInput(
+	g: Grammar,
+	tokens: readonly string[]
+): { input: string[]; diagnostics: Diagnostic[] }; // I = w $
+function replaceAt(
+	root: ParseNode,
+	path: readonly number[],
+	change: (n: ParseNode) => ParseNode
+): ParseNode;
+function withRanges(root: ParseNode): ParseNode; // a copy with every node's token range
+
+// lr.ts
+interface Augmented {
+	grammar: Grammar;
+	start: string; // S, or S’, S’’, … when S is a symbol of the grammar
+	production: Production; // S → E, id = g.productions.length
+	productions: Production[]; // indexed by id
+}
+function augment(g: Grammar): Augmented;
+interface LrItem {
+	production: number;
+	dot: number;
+	lookahead: string | null; // null: an LR(0) item
+}
+interface MergedItem {
+	production: number;
+	dot: number;
+	lookaheads: string[] | null;
+}
+const ITEM_DOT = '•';
+function mergeItems(items: readonly LrItem[]): MergedItem[];
+function printItem(
+	aug: Augmented,
+	item: LrItem | MergedItem,
+	opts?: { brackets?: boolean }
+): string; // E → •E + ( E ), $/+
+function printProduction(p: Production): string; // E → E + ( E )
+interface LrClosureStep {
+	from: number; // the item [X → α•Yβ, a] extended
+	production: number; // Y → γ
+	first: string[]; // First(βa)
+	item: LrItem; // [Y → •γ, b]
+	index: number;
+	added: boolean;
+}
+interface LrClosureOptions {
+	closureOrder?: readonly number[]; // production ids Closure takes first, in this order; the rest in grammar order
+}
+function lrClosure(
+	aug: Augmented,
+	items: readonly LrItem[],
+	opts?: LrClosureOptions
+): { items: LrItem[]; steps: LrClosureStep[] };
+function lrTransition(
+	aug: Augmented,
+	state: readonly LrItem[],
+	y: string,
+	opts?: LrClosureOptions
+): { moved: { from: number; item: LrItem }[]; items: LrItem[]; steps: LrClosureStep[] };
+interface LrState {
+	id: number;
+	items: LrItem[]; // the kernel, then the closure in the order it was added
+	kernel: number;
+	transitions: { symbol: string; to: number }[];
+	reduces: { production: number; lookaheads: string[] | null }[];
+	accept: boolean; // [S → E•, $]: accept on $
+	merged?: number[]; // LALR(1): the LR(1) states merged
+}
+type LrBuildStep =
+	| {
+			kind: 'start';
+			state: number;
+			seed: LrItem[];
+			steps: LrClosureStep[];
+			states: number;
+			edges: number;
+	  }
+	| {
+			kind: 'transition';
+			from: number;
+			symbol: string;
+			moved: { from: number; item: LrItem }[];
+			steps: LrClosureStep[];
+			to: number;
+			isNew: boolean;
+			states: number; // made through this step
+			edges: number;
+	  };
+interface LrAutomaton {
+	kind: 'lr0' | 'lr1' | 'lalr1';
+	augmented: Augmented;
+	states: LrState[];
+	edges: { from: number; symbol: string; to: number }[]; // in the order made
+	steps: LrBuildStep[];
+	truncated: boolean;
+	diagnostics: Diagnostic[];
+}
+const DEFAULT_MAX_STATES = 5000;
+interface LrAutomatonOptions extends LrClosureOptions {
+	trace?: boolean; // default true
+	maxStates?: number; // default DEFAULT_MAX_STATES
+}
+function lr1Automaton(g: Grammar, opts?: LrAutomatonOptions): LrAutomaton;
+function lr0Automaton(g: Grammar, opts?: LrAutomatonOptions): LrAutomaton;
+function lalr1Automaton(lr1: LrAutomaton): LrAutomaton;
+function reduceLabel(aug: Augmented, reduce: LrState['reduces'][number]): string; // E → int on $, +
+
+// lr-table.ts
+type Assoc = 'left' | 'right' | 'nonassoc';
+interface PrecedenceDeclaration {
+	assoc: Assoc;
+	terminals: string[];
+} // one line, lowest first
+interface Precedence {
+	level: number; // the line, from 1
+	assoc: Assoc;
+}
+function readPrecedence(
+	g: Grammar,
+	declarations: readonly PrecedenceDeclaration[]
+): { terminals: Map<string, Precedence>; diagnostics: Diagnostic[] };
+function rulePrecedence(
+	g: Grammar,
+	terminals: ReadonlyMap<string, Precedence>,
+	production: number
+): { terminal: string | null; precedence: Precedence | null }; // its last terminal
+type LrAction =
+	| { kind: 'shift'; state: number }
+	| { kind: 'reduce'; production: number }
+	| { kind: 'accept' }
+	| { kind: 'error' }; // made by %nonassoc
+interface LrConflict {
+	state: number;
+	terminal: string;
+	kind: 'shift/reduce' | 'reduce/reduce';
+	items: [LrItem, LrItem]; // [X → α•aβ, b] and [Y → γ•, a]; [X → α•, a] and [Y → β•, a]
+	actions: [LrAction, LrAction];
+	resolution: { action: LrAction; by: 'precedence' | 'default'; reason: string }; // action: what wins between the two
+}
+type LrMethod = 'lr0' | 'slr1' | 'lr1';
+interface LrTable {
+	method: LrMethod;
+	augmented: Augmented;
+	terminals: string[]; // action columns: T, then $
+	nonterminals: string[]; // goto columns: N
+	action: (LrAction | null)[][]; // [state][column]; null: blank
+	goto: (number | null)[][];
+	conflicts: LrConflict[];
+	unresolved: number; // conflicts left to bison's defaults
+	diagnostics: Diagnostic[];
+}
+function lrTable(
+	a: LrAutomaton,
+	opts?: { method?: LrMethod; precedence?: readonly PrecedenceDeclaration[] }
+): LrTable;
+function printAction(aug: Augmented, a: LrAction, opts?: { style?: 'short' | 'long' }): string; // s4, r(E → int) | shift 4, reduce E → int
+
+// lr-parse.ts
+interface LrStackEntry {
+	symbol: string | null; // null: the bottom < dummy, 0 >
+	state: number;
+}
+const STACK_BOTTOM = 'dummy';
+interface LrParseRow {
+	stack: LrStackEntry[]; // before the action, bottom first (entries are shared between rows)
+	j: number;
+	lookup: { state: number; terminal: string }; // action[top_state(stack), I[j]]
+	action: LrAction | null; // null: blank
+	popped: LrStackEntry[];
+	goto: { state: number; nonterminal: string; to: number | null } | null; // Goto[top_state(stack), X]
+	pushed: LrStackEntry | null;
+	forest: ParseNode[]; // the stack's subtrees after the action
+	text: string; // "shift 1", "reduce E → int", "accept", "error: action[3, $] is blank"
+}
+interface LrParse {
+	grammar: Grammar;
+	input: string[]; // I = w $
+	rows: LrParseRow[];
+	outcome: 'accept' | 'error' | 'limit';
+	tree: ParseNode | null;
+	diagnostics: Diagnostic[];
+}
+function lrParse(t: LrTable, tokens: readonly string[], opts?: { maxSteps?: number }): LrParse;
+interface ShiftReduceRow {
+	stack: string[];
+	input: string[];
+	action: 'shift' | 'reduce' | 'accept' | 'error' | 'limit';
+	production: number | null;
+	count: number; // tokens shifted
+	text: string; // "shift", "shift 3 times", "red. E → E + (E)", "accept"
+	rows: number[]; // the LrParse rows
+}
+function shiftReduceRows(p: LrParse): ShiftReduceRow[];
+function collapseShifts(rows: readonly ShiftReduceRow[]): ShiftReduceRow[];
+function printConfiguration(
+	stack: readonly string[],
+	input: readonly string[],
+	opts?: { compact?: boolean; divider?: string } // defaults true, 'I'
+): string; // E + (int I ) + (int)$
+function printCompact(symbols: readonly string[]): string; // int + (int) + (int)$
+function printStack(stack: readonly LrStackEntry[]): string; // < dummy, 0 > < E, 2 >
+
+// handles.ts
+interface HandleStep {
+	form: SententialForm;
+	handle: { start: number; end: number } | null; // null for the start symbol
+	production: number | null;
+}
+function handlesFromParse(p: LrParse): HandleStep[] | null; // null unless accepted
+function handlesFromTree(g: Grammar, tree: ParseNode): HandleStep[];
+
+// lr-classes.ts
+interface LrClass {
+	member: boolean | null; // null: the automaton was cut off
+	conflicts: LrConflict[];
+	states: number;
+}
+interface GrammarClasses {
+	ll1: { member: boolean; conflicts: LL1Table['conflicts'] };
+	lr0: LrClass;
+	slr1: LrClass;
+	lalr1: LrClass;
+	lr1: LrClass;
+	string: { tokens: string[]; trees: number; ambiguous: boolean } | null;
+	ambiguity: 'unambiguous' | 'ambiguous' | 'unknown';
+	diagnostics: Diagnostic[];
+}
+function grammarClasses(
+	g: Grammar,
+	opts?: { tokens?: readonly string[]; maxStates?: number }
+): GrammarClasses;
+```
+
+- **First and Follow (slides 20 and 22).** `firstFollow` applies the deck's
+  rules pass by pass, productions in grammar order, until a pass changes
+  nothing (that pass is in the trace too). Pass 0 holds First(b) = { b } for
+  each terminal and Add $ to Follow(S). An Ai that is X is ignored (its add
+  changes nothing) but still stops when ε ∉ First(X). Follow is computed for
+  every occurrence of every symbol, so terminals get Follow sets too
+  (Follow( int ) = { $, +, ), * } for the left-factored grammar). The sets agree
+  with `firstSets` and `followSets`, which remain the way to compute them for
+  large grammars (the trace has a step per symbol per production per pass).
+- **The LL(1) table (slides 24–26).** A production A → α goes in the columns of
+  First(α) – { ε }, and when α →* ε also in the columns of Follow(A). Cells hold
+  production ids (the slides print only the right-hand side), with the
+  placements that put them there. An entry with two productions is a
+  conflict and `ll1` is false. Rows and columns follow N and T; the slide's
+  T, E, X, Y and int * + ( ) $ order is a tool's choice.
+- **The LL(1) driver (slides 11–12).** The stack starts as < S $ >; a row shows
+  the stack (top first), the input with its `$`, and what is done to them.
+  On the slide 12 input `int * int` it reproduces the ten rows exactly. Errors
+  are a blank entry (`[E,*] is blank`) or a terminal that does not match
+  (`Mismatch: $ is not )`). With multiply-defined entries the first
+  production is used (with a warning); only then can a run loop, and it stops
+  with outcome `'limit'` (a left-recursive production stops at
+  `MAX_TREE_DEPTH`).
+- **Augmenting and numbering (Bottom-up Parsing III, slides 7–14).** The start
+  production is always added, named S unless the grammar uses S (then S’,
+  S’’, …), and given the id after the grammar's last production, so every
+  production id in tables, conflicts, trees and handles is the grammar's own.
+  State 0 is Closure({ [S → •E, $] }); states are processed in the order they
+  are made; a state's transitions on terminals come before those on
+  non-terminals, each in the order the symbols first appear after • in its
+  items; a Transition result with an existing state's items is that state.
+  Both `E → E + ( E ) | int` and `E → int | E + ( E )` give the 12 states and
+  edges of Bottom-up Parsing II, slide 17.
+- **Item order.** A state lists its kernel, then the items Closure added, in
+  the order it added them (each item is extended once; a second pass would
+  add nothing). `mergeItems` keeps the first appearance of each core and puts
+  `$` first among the lookaheads, then the order of appearance, which gives
+  the slides' `$/+` and `)/+`. Closure takes a non-terminal's productions in
+  grammar order unless `closureOrder` lists production ids to take first.
+  `E → E + ( E ) | int` gives slide 11's order exactly
+  (`S → •E, $ ; E → •E + ( E ), $/+ ; E → •int, $/+`, and the five items in
+  full) and the item lists of slide 14. Bottom-up Parsing III writes its
+  grammar `E → int | E + ( E )` (slide 4): in grammar order the int items come
+  first, as on slide 9, and `closureOrder: [1, 0]` gives the lists of slides 11
+  and 14 from it, with the same states, edges and production ids.
+- **Conflicts and precedence (slides 16–23).** A cell with a shift and a
+  reduce, or two reduces, is a conflict, recorded with the two items (the
+  shift item with the conflict's terminal as lookahead when there is one, as
+  on slide 18). Declarations come one line each, lowest first; a rule's
+  precedence is that of its last terminal. A shift/reduce conflict becomes a
+  shift when no precedence is declared for the rule or the terminal (reported
+  as unresolved: bison's default), when the terminal is higher, or when they
+  are equal and `%right`; a reduce when the rule is higher or they are equal
+  and `%left`; an error entry when they are equal and `%nonassoc`. A
+  reduce/reduce conflict is reported and the earlier rule wins. An entry with
+  a shift and several reduces is settled as bison settles it: the
+  declarations first, rule by rule (a reduce that wins removes the shift for
+  the later rules; `%nonassoc` makes the entry an error whatever else is in
+  it), then what is left is reported, once against the shift and once per
+  further rule against the earliest. `conflicts` and `unresolved` therefore
+  count what bison reports (`S → A x | B x | c x x ; A → c ; B → c`: 1
+  shift/reduce and 1 reduce/reduce conflict on x), and a resolution's
+  `action` is what wins between its two actions. The table holds what won
+  overall, so `lrParse` behaves as bison's parser:
+  `E → E + E | E * E | int` with `%left +` then `%left *` parses
+  `int + int * int` as `E( E(int) + E( E(int) * E(int) ) )`.
+- **The LR driver (Bottom-up Parsing II, slides 20–21).** Rows record the
+  lookup action[top_state(stack), I[j]], the pairs popped, the Goto lookup and
+  the forest of subtrees on the stack after the step; trees and stack pairs
+  are shared between rows. `shiftReduceRows` gives the I-divider view of
+  slides 4–14, `collapseShifts` merges consecutive shifts (`shift 3 times`),
+  and `printConfiguration` writes a row as on slide 14.
+- **Limits of the drivers.** Both drivers stop with outcome `'limit'` after
+  `maxSteps` rows, when their rows hold `PARSE_STACK_BUDGET` stack entries in
+  all (each row keeps its stack, so the memory of a run grows with steps
+  times depth), or before a step that would make a tree deeper than
+  `MAX_TREE_DEPTH` levels; the last row says why (`stopped after 5 steps`,
+  `TREE_DEPTH_TEXT`). Every tree in their results (rows, forests, the final
+  tree) is at most `MAX_TREE_DEPTH` levels deep, so a result survives the
+  structured clone of a worker. They accept a sentence whose tree fits: a
+  list of up to 499 items (`S → id S | ε`; for lrParse also `S → S id | ε`),
+  165 nested parentheses in `E → E + T | T ; T → T * F | F ; F → int | ( E )`
+  (and in its left-factored form for ll1Parse). With a
+  conflict-free table only a long input, or the LR(0) table of a grammar with
+  a non-terminal that derives nothing, gets to a limit.
+- **Handles (Bottom-Up Parsing, slides 4–11).** From the reductions of an
+  accepted LR parse, or from a tree's rightmost derivation reversed; each
+  form but the last has the handle that the next reduction replaces, and
+  what lies right of it is all terminals.
+- **Not in the decks.** LR(0), SLR(1) and LALR(1) are only named, on the Venn
+  diagram of Bottom-up Parsing III, slide 26. `lr0Automaton`, the `'lr0'` and
+  `'slr1'` table methods and `lalr1Automaton` build them the standard way so
+  that `grammarClasses` can place a grammar in that diagram. Its inclusions
+  hold for grammars whose non-terminals are all reachable and productive.
+- **Cost.** Canonical LR(1) automata can be large: the 29 rules of C- give 308
+  states in about 15 ms; `maxStates` (default 5000) cuts the construction off
+  with an error and `truncated`, and `trace: false` skips the steps.
+
 ### 4.5 C- compiler (`theory/cminus/`)
 
 A compiler for C- (the language of Appendix A of the course text) that keeps
 the result of every phase: characters → tokens → abstract syntax tree → symbol
 tables and types → three-address code → optimized three-address code → TINY
-Machine (TM) code. `run.ts`, `codegen.ts` and `interpret.ts` import the
+Machine (TM) code. Two extensions of the language definition, the ones the
+course's C- AST classes imply (`ForStatementNode`, `UnaryExpressionNode`), are
+part of every phase: the `for` loop and the prefix operators `++` and `--`. `run.ts`, `codegen.ts` and `interpret.ts` import the
 machine, its instruction type and its memory sizes from
 `$lib/tools/tiny-vm/machine` (pure TypeScript); nothing else in `theory/`
 imports from a tool.
@@ -979,9 +1414,9 @@ interface SourceSpan extends Span {
 interface SourceDiagnostic extends Diagnostic {
 	span?: SourceSpan; // every phase sets it; Compilation.diagnostics requires it
 }
-// TokenType, in the course's upper-case names: ELSE IF INT RETURN VOID WHILE ID NUM
+// TokenType, in the course's upper-case names: ELSE FOR IF INT RETURN VOID WHILE ID NUM
 // PLUS MINUS TIMES OVER LT LTE GT GTE EQ NEQ ASSIGN SEMI COMMA LPAREN RPAREN
-// LBRACKET RBRACKET LBRACE RBRACE ENDFILE ERROR
+// LBRACKET RBRACKET LBRACE RBRACE INCREMENT DECREMENT ENDFILE ERROR
 interface Token {
 	type: TokenType;
 	lexeme: string;
@@ -1005,11 +1440,13 @@ function scan(
 ): { tokens: Token[] /* ENDFILE last */; trivia: Trivia[]; diagnostics: SourceDiagnostic[] };
 
 // ast.ts — nodes { id, span, kind, … }; ids are preorder numbers from 0 (Program).
-// Kinds: Program VarDecl FunDecl Param Compound If While Return ExprStmt
-//        Assign Binary Var Index Call Num. Parentheses leave no node.
+// Kinds: Program VarDecl FunDecl Param Compound If While For Return ExprStmt
+//        Assign Binary Unary Var Index Call Num. Parentheses leave no node.
+// For { init, test, update: Expr | null; body; headSpan }
+// Unary { op: '++' | '--'; opSpan; target: Var | Index }
 type Decl = VarDecl | FunDecl;
-type Stmt = Compound | If | While | Return | ExprStmt;
-type Expr = Assign | Binary | Var | Index | Call | Num;
+type Stmt = Compound | If | While | For | Return | ExprStmt;
+type Expr = Assign | Binary | Unary | Var | Index | Call | Num;
 type AstNode = Program | Decl | Param | Stmt | Expr;
 function childrenOf(node: AstNode): AstNode[];
 function walk(
@@ -1019,13 +1456,64 @@ function walk(
 function allNodes(root: AstNode): AstNode[]; // preorder: allNodes(program)[id].id === id
 function findNode(root: AstNode, id: number): AstNode | null;
 function nodeAt(root: AstNode, offset: number): AstNode | null; // innermost node at a source offset
-function nodeLabel(node: AstNode): string; // "VarDecl int a[10]", "Binary +", "Var x"
+function nodeLabel(node: AstNode): string; // "VarDecl int a[10]", "Binary +", "Unary ++", "Var x"
 function astLines(root: AstNode): { id: number; depth: number; label: string; span: SourceSpan }[];
 function printAst(root: AstNode, opts?: { indent?: string }): string; // one node per line
 function printExpr(e: Expr): string; // C- text with the fewest parentheses
 
+// courseAst.ts — the tree in the node classes and fields of the course's C- AST header.
+type CourseClass =
+	| 'ProgramNode'
+	| 'FunctionDeclarationNode'
+	| 'VariableDeclarationNode'
+	| 'ArrayDeclarationNode'
+	| 'ParameterNode'
+	| 'CompoundStatementNode'
+	| 'IfStatementNode'
+	| 'WhileStatementNode'
+	| 'ForStatementNode'
+	| 'ReturnStatementNode'
+	| 'ExpressionStatementNode'
+	| 'AssignmentExpressionNode'
+	| 'VariableExpressionNode'
+	| 'SubscriptExpressionNode'
+	| 'CallExpressionNode'
+	| 'AdditiveExpressionNode'
+	| 'MultiplicativeExpressionNode'
+	| 'RelationalExpressionNode'
+	| 'UnaryExpressionNode'
+	| 'IntegerLiteralExpressionNode';
+type CourseValue =
+	| { kind: 'node'; node: CourseNode } // a pointer
+	| { kind: 'list'; nodes: CourseNode[] } // a vector
+	| { kind: 'null' } // nullptr
+	| { kind: 'enum'; type: CourseEnum; value: string } // ValueType INT, AdditiveOperatorType PLUS, …
+	| { kind: 'string'; value: string }
+	| { kind: 'int'; value: number }
+	| { kind: 'bool'; value: boolean }
+	| { kind: 'unset'; phase: 'semantic' | 'codegen' } // set by a phase the compilation did not reach
+	| { kind: 'global'; offset: number }; // framePointerOffset of a global: none; its offset from gp
+interface CourseNode {
+	id: number; // the engine node's id: same preorder, same span
+	node: CourseClass;
+	span: SourceSpan;
+	fields: { name: string; value: CourseValue }[]; // the header's order, base class first
+}
+const COURSE_FIELDS: Record<CourseClass, readonly string[]>;
+function courseAst(
+	program: Program,
+	opts?: { semantic?: SemanticResult | null; codegen?: CodegenResult | null }
+): CourseNode;
+function courseClass(node: AstNode): CourseClass;
+function courseLabel(node: AstNode): string; // "FunctionDeclarationNode gcd", "AdditiveExpressionNode PLUS"
+function courseChildren(node: CourseNode): { field: string; node: CourseNode }[]; // "statements[2]"
+function courseAttributes(node: CourseNode): { name: string; value: CourseValue }[]; // the other fields
+function courseValueText(value: CourseValue): string; // "INT", "gcd", "nullptr", "empty", "not set"
+function walkCourse(root: CourseNode, visit: (node, depth, field: string | null) => void): void;
+function printCourseAst(root: CourseNode, opts?: { indent?: string }): string;
+
 // parser.ts — predictive recursive descent, one function per non-terminal of CMINUS_EBNF.
-const CMINUS_BNF: string; // the 29 rules, readable by parseGrammar
+const CMINUS_BNF: string; // the 29 rules (16 and 26 with the extensions), readable by parseGrammar
 const CMINUS_EBNF: string; // the grammar the parser follows, readable by parseEbnf
 const MAX_NESTING = 200, // statements and parenthesized expressions
 	MAX_TREE_DEPTH = 500, // levels of the tree; a + a + a + … is a level per operator
@@ -1252,7 +1740,7 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
 
 // runtime.ts — AC AC1 FP GP PC, registerName, frame offsets, INT_MIN, INT_MAX,
 // arith(op, a, b) (null for a division by zero) and compare(op, a, b).
-// samples.ts — SAMPLES, sampleById, UNDECLARED_SOURCE.
+// samples.ts — SAMPLES (counting-sort uses for, ++ and --), sampleById, UNDECLARED_SOURCE.
 ```
 
 - **Phases stop at the first error.** `compile` fills the results in order and
@@ -1275,7 +1763,9 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   longer than instruction memory in a program that compiles; `runTM` does not
   run such code (`memory-error`, 0 steps, `pc: null`). `isLoadable(code)`
   tells, and `codeBeforePeephole(c)` is that code only when it can run.
-- **Scanner.** Maximal munch; a reserved word wins over ID. An illegal
+- **Scanner.** Maximal munch; a reserved word wins over ID (`for` included).
+  `++` is INCREMENT and `--` DECREMENT, so `a+++b` is ID INCREMENT PLUS ID,
+  while `a+ +b` is still ID PLUS PLUS ID. An illegal
   character and a `!` without `=` are one ERROR token each; a comment that is
   never closed is one ERROR token to the end of the text (and no trivia
   entry). Tokens and trivia together cover the whole text.
@@ -1296,7 +1786,81 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   with a message that calls it too long rather than nested. Within the
   limits the parser accepts exactly the token strings that `CMINUS_BNF`
   derives (a spec checks it with `recognizes` on mutated programs and random
-  token strings).
+  token strings, with and without `for`, `++` and `--`).
+- **Extensions: grammar.** Rule 16 is
+  `iteration-stmt → while ( expression ) statement | for ( expression-stmt expression-stmt ) statement | for ( expression-stmt expression-stmt expression ) statement`
+  (in the EBNF `for ( [ expression ] ; [ expression ] ; [ expression ] ) statement`;
+  the initializer and the condition are each an `expression-stmt`, with its
+  `;`, and the update is an optional `expression`, which keeps the BNF at 29
+  rules), and
+  rule 26 is `factor → ( expression ) | var | call | NUM | "++" var | "--" var`.
+  The tokens are FOR, INCREMENT and DECREMENT. The operators are prefix
+  only: a var followed by `++` or `--` (`i++`) is a syntax error whose
+  message suggests the prefix form ("write ++i, not i++"); `++` before
+  anything but a var (a number, a parenthesis, a call) is an error too, and
+  `++i = 1` is reported as a left side of `=` that is not a var. A
+  declaration as the initializer (`for (int i = 0; …)`) is a syntax error
+  that says where C- declares variables ("declare i there and write
+  for (i = …; …)"). A syntax error in a for head skips to its `)` before the
+  statement is dropped, so the head gives one message.
+- **Extensions: meaning.** `for (e1; e2; e3) s` evaluates `e1` once, tests
+  `e2` before every round (a missing `e2` is true, so the loop ends only by
+  `return`), and evaluates `e3` after `s`. The analyzer checks `e2` as a
+  condition and `e1`, `e3` as expression statements (an array or a function
+  name is an error, a void call is not); a for loop never counts as
+  returning. `++v` / `--v` adds or subtracts 1 (32-bit wrap-around), stores
+  the result in `v` and has it as its value; `v` follows the rule of the
+  left side of `=` (an int variable or parameter, or an array element; a
+  whole array or a function is an error: "Cannot increment the array a:
+  increment an element, as in ++a[0]."). Three-address code: `e1 · label L1
+· e2 → t · if_false t _ L2 · s · e3 · goto _ _ L1 · label L2` (no
+  `if_false` and no `L2` without `e2`; the jumps and labels carry the head's
+  span and the For node, as those of `while` do), `++x` is the one quad
+  `+ x #1 x` (its value is `x`), and `--a[i]` is
+  `=[] a i t1 · - t1 #1 t2 · []= t2 i a` with the subscript computed once
+  (its value is `t2`). For the order of evaluation a `++` or `--` of a
+  variable counts as an assignment to it, so `x + ++x` copies `x` first. The
+  optimizer and the code generator need nothing new; the interpreter runs
+  the loop and the operators itself, and a spec compares it with the TM code
+  on random programs that use them.
+- **Course AST.** `courseAst` maps the tree, node for node, to the classes and
+  fields of the course's C- AST header: Program → ProgramNode (declarations),
+  FunDecl → FunctionDeclarationNode (valueType, identifier, nestLevel,
+  parameters, functionBody), VarDecl → VariableDeclarationNode (valueType,
+  identifier, nestLevel, framePointerOffset) or ArrayDeclarationNode (the
+  same, then size), Param → ParameterNode (valueType, identifier, nestLevel,
+  isArray, framePointerOffset), Compound → CompoundStatementNode
+  (localDeclarations, statements), If → IfStatementNode
+  (conditionalExpression, thenStatement, elseStatement), While →
+  WhileStatementNode (conditionalExpression, body), For → ForStatementNode
+  (initializer, condition, updater, body), Return → ReturnStatementNode
+  (expression), ExprStmt → ExpressionStatementNode (expression), Assign →
+  AssignmentExpressionNode (variable, expression), Var →
+  VariableExpressionNode (identifier), Index → SubscriptExpressionNode
+  (identifier, index), Call → CallExpressionNode (identifier, arguments),
+  Binary → AdditiveExpressionNode (addOperator PLUS/MINUS, left, right),
+  MultiplicativeExpressionNode (multOperator TIMES/DIVIDE, left, right) or
+  RelationalExpressionNode (relationalOperator LT/LTE/GT/GTE/EQ/NEQ, left,
+  right), Unary → UnaryExpressionNode (unaryOperator INCREMENT/DECREMENT,
+  variable), Num → IntegerLiteralExpressionNode (value). ValueType is VOID or
+  INT for a return type, a variable and a parameter, and ARRAY for an int
+  array declaration or array parameter (a `void` one keeps VOID; the
+  analyzer rejects it). A missing optional part is `nullptr`. The engine
+  keeps its own short kinds, which every phase and spec uses; the mapping is
+  pure and keeps ids, spans and preorder, so the selection carries over
+  unchanged. Two fields are set by later phases: `nestLevel` (the depth of
+  the declaring scope: 0 global, 1 the parameters and the top-level locals of
+  a function, 2 and up nested blocks) once the semantic analyzer has built
+  the symbol table, and `framePointerOffset` (the offset from fp the TM code
+  generator gives a local or a parameter, of element 0 for an array) once
+  code generation ran. The header declares framePointerOffset on
+  VariableDeclarationNode only; its comment places parameters at fp offsets
+  too, so ParameterNode carries it here as well. A global variable has no
+  frame offset: its value is `global`, with its offset from gp. Until a
+  compilation reaches the phase, the field is `unset`. The C- Compiler's
+  Syntax tree tab (and the typed tree of its Semantics tab) shows this tree,
+  one row per node: the field that holds it, its class and its other fields;
+  its drawings label nodes with `courseLabel`.
 - **Semantic analyzer.** Errors: undeclared name (once per use; the
   expression gets the type `error`, which is accepted everywhere, so one
   mistake gives one message); redeclaration in a scope (`input` and `output`

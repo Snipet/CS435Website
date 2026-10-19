@@ -21,6 +21,7 @@ import type {
 	Compound,
 	Expr,
 	FunDecl,
+	IncOp,
 	Index,
 	Program,
 	Stmt,
@@ -428,6 +429,11 @@ class Analyzer {
 			case 'While':
 				this.needInt(s.test, this.expr(s.test), 'a condition');
 				return this.stmt(s.body, blocks);
+			case 'For':
+				if (s.init) this.effect(s.init, 'the initializer of a for loop');
+				if (s.test) this.needInt(s.test, this.expr(s.test), 'a condition');
+				if (s.update) this.effect(s.update, 'the update of a for loop');
+				return this.stmt(s.body, blocks);
 			case 'Return': {
 				const fn = this.fn!;
 				if (s.value) {
@@ -443,13 +449,16 @@ class Analyzer {
 				return blocks;
 			}
 			case 'ExprStmt':
-				if (s.expr) {
-					const t = this.expr(s.expr);
-					// A call of a void function is a statement; a whole array or a function name is not.
-					if (t.kind !== 'void') this.needInt(s.expr, t, 'a statement');
-				}
+				if (s.expr) this.effect(s.expr, 'a statement');
 				return blocks;
 		}
+	}
+
+	/** An expression evaluated for its effect: an expression statement, a for initializer or update. */
+	private effect(e: Expr, role: string): void {
+		const t = this.expr(e);
+		// A call of a void function is a statement; a whole array or a function name is not.
+		if (t.kind !== 'void') this.needInt(e, t, role);
 	}
 
 	// --- Expressions --------------------------------------------------------
@@ -494,23 +503,33 @@ class Analyzer {
 				this.types.set(e.target.id, target);
 				return INT_TYPE;
 			}
+			case 'Unary':
+				// The same rule as for the left side of =: an int variable or an array element.
+				this.types.set(e.target.id, this.target(e.target, e.op));
+				return INT_TYPE;
 		}
 	}
 
-	/** The left side of an assignment: an int variable or an indexed array element. */
-	private target(t: Var | Index): CType {
+	/**
+	 * The left side of an assignment, or the operand of `op` (++ or --): an int
+	 * variable or an indexed array element.
+	 */
+	private target(t: Var | Index, op?: IncOp): CType {
 		if (t.kind === 'Index') return this.index(t);
 		const symbol = this.resolve(t.name, t.span, t.id);
 		if (!symbol) return ERROR_TYPE;
+		const verb = op === undefined ? 'assign to' : op === '++' ? 'increment' : 'decrement';
 		if (isArrayKind(symbol.kind)) {
 			this.error(
-				`Cannot assign to the array ${t.name}: assign to an element, as in ${t.name}[0] = …`,
+				op === undefined
+					? `Cannot assign to the array ${t.name}: assign to an element, as in ${t.name}[0] = …`
+					: `Cannot ${verb} the array ${t.name}: ${verb} an element, as in ${op}${t.name}[0].`,
 				t.span
 			);
 			return ERROR_TYPE;
 		}
 		if (symbol.kind === 'function') {
-			this.error(`Cannot assign to the function ${t.name}.`, t.span);
+			this.error(`Cannot ${verb} the function ${t.name}.`, t.span);
 			return ERROR_TYPE;
 		}
 		return INT_TYPE;
@@ -624,6 +643,7 @@ function alwaysReturns(s: Stmt): boolean {
 		case 'If':
 			return s.else !== null && alwaysReturns(s.then) && alwaysReturns(s.else);
 		case 'While':
+		case 'For':
 		case 'ExprStmt':
 			return false;
 	}

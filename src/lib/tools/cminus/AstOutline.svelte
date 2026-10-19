@@ -1,7 +1,9 @@
 <!--
-	The abstract syntax tree as an outline: one node per row, indented by depth,
-	with its source line (and, when `types` are given, the type of every
-	expression). Nodes fold and unfold; a row selects its node.
+	The abstract syntax tree as an outline in the classes of the course's C- AST:
+	one node per row, indented by depth, with the field of its parent that holds
+	it, its class, its other fields and its source line (and, when `types` are
+	given, the type of every expression). Nodes fold and unfold; a row selects
+	its node.
 
 	Keys, as in a tree view: Up and Down move, Right unfolds or moves to the
 	first child, Left folds or moves to the parent, Home and End jump, Enter or
@@ -10,7 +12,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { Icon } from '$lib/components/ui';
-	import type { CType, Program } from '$lib/theory/cminus';
+	import type { CType, CourseNode, Program } from '$lib/theory/cminus';
 	import MoreRows from './MoreRows.svelte';
 	import { revealMarked } from './reveal';
 	import { ancestorsOf, rangeOf, type SourceRange } from './selection';
@@ -18,6 +20,11 @@
 
 	interface Props {
 		program: Program;
+		/**
+		 * The tree in the course's classes (`courseTree`), with the fields later
+		 * phases set; without it the tree of `program` alone, those fields not set.
+		 */
+		tree?: CourseNode | null;
 		/** Expression node id → type; with it a type column is shown. */
 		types?: ReadonlyMap<number, CType>;
 		/** Ids of the nodes that belong to the selection. */
@@ -29,7 +36,7 @@
 		onselect: (range: SourceRange) => void;
 	}
 
-	let { program, types, marked, selKey = '', label, onselect }: Props = $props();
+	let { program, tree = null, types, marked, selKey = '', label, onselect }: Props = $props();
 
 	const uid = $props.id();
 
@@ -40,7 +47,7 @@
 
 	// Ids are preorder numbers: after an edit, a folded id is kept while it still names a node with children.
 	const collapsed = $derived(keepCollapsed(folded, program));
-	const rows = $derived(outlineRows(program, collapsed, types));
+	const rows = $derived(outlineRows(tree ?? program, collapsed, types));
 	const shown = $derived(all ? rows : rows.slice(0, ROW_LIMIT));
 	const tabStop = $derived(shown.some((r) => r.id === focusId) ? focusId : (shown[0]?.id ?? 0));
 	const firstMarked = $derived.by(() => {
@@ -115,11 +122,6 @@
 		event.preventDefault();
 		if (target) focusRow(target.id);
 	}
-
-	function parts(text: string): [string, string] {
-		const at = text.indexOf(' ');
-		return at === -1 ? [text, ''] : [text.slice(0, at), text.slice(at + 1)];
-	}
 </script>
 
 <div class="outline">
@@ -138,7 +140,6 @@
 	>
 		{#each shown as row, i (row.id)}
 			{@const on = marked.has(row.id)}
-			{@const [kind, detail] = parts(row.label)}
 			<div
 				class={['item', { 'cm-marked': on }]}
 				role="treeitem"
@@ -172,10 +173,20 @@
 					{:else}
 						<span class="twist leaf" aria-hidden="true"></span>
 					{/if}
-					<span class="kind">{kind}</span>{#if detail}<span class="detail">{detail}</span>{/if}
+					{#if row.field}<span class="field">{row.field}:</span>{/if}<span class="kind"
+						>{row.node}</span
+					>{#each row.attrs as attr (attr.name)}<span class="attr" title={attr.note}
+							><span class="attr-name">{attr.name}</span>
+							<span class={['attr-value', attr.tone]}>{attr.text}</span></span
+						>{/each}
 				</span>
-				{#if types}<span class="type">{row.type ?? ''}</span>{/if}
-				<span class="line">{row.line}</span>
+				{#if types}
+					<span class="tail"
+						><span class="type">{row.type ?? ''}</span><span class="line">{row.line}</span></span
+					>
+				{:else}
+					<span class="line">{row.line}</span>
+				{/if}
 			</div>
 		{/each}
 	</div>
@@ -264,19 +275,42 @@
 		background: var(--surface-3);
 		color: var(--text);
 	}
+	.field {
+		margin-right: 0.5em;
+		color: var(--text-3);
+	}
 	.kind {
 		font-weight: 600;
 	}
-	.detail {
-		margin-left: 0.6em;
+	.attr {
+		margin-left: 0.9em;
+	}
+	.attr-name {
+		color: var(--text-3);
+	}
+	.attr-value.enum {
+		color: var(--syn-keyword);
+	}
+	.attr-value.name {
 		color: var(--syn-name);
+	}
+	.attr-value.number {
+		color: var(--syn-number);
+	}
+	.attr-value.none {
+		color: var(--text-2);
+	}
+	.attr-value.unset {
+		color: var(--text-3);
+		font-style: italic;
 	}
 	.type {
 		color: var(--info);
 		white-space: nowrap;
 	}
-	/* The line stays at the right edge while a deep row scrolls sideways under it. */
-	.line {
+	/* The line (and the type) stay at the right edge while a wide row scrolls sideways under them. */
+	.line,
+	.tail {
 		position: sticky;
 		right: 0;
 		margin-right: -12px;
@@ -286,6 +320,14 @@
 		font-variant-numeric: tabular-nums;
 		text-align: right;
 	}
+	.tail {
+		display: grid;
+		grid-template-columns: subgrid;
+		grid-column: span 2;
+		align-items: baseline;
+		text-align: left;
+	}
+	.tail .line,
 	.cols .line {
 		position: static;
 		margin: 0;

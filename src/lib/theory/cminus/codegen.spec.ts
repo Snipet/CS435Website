@@ -874,6 +874,60 @@ void main(void) { leaf(); middle(); }`;
 	});
 });
 
+describe('for loops, ++ and --', () => {
+	const c = build(`int a[3];
+void main(void)
+{
+  int i;
+  for (i = 0; i < 3; ++i) --a[i];
+  output(a[2]);
+}`);
+	const code = c.codegen.code;
+	const of = (text: string) => codeFor(c, code, text);
+
+	it('++ on a variable loads, adds 1 and stores back', () => {
+		expect(of('i := i + 1')).toEqual(['LD 0,-2(5)', 'LDC 1,1(0)', 'ADD 0,0,1', 'ST 0,-2(5)']);
+	});
+
+	it('-- on an element reads it, subtracts 1 and stores it through the same address', () => {
+		expect(of('t2 := a[i]').filter((t) => !t.startsWith('JLT'))).toEqual([
+			'LD 0,-2(5)',
+			'LDA 1,-2(6)',
+			'ADD 1,1,0',
+			'LD 0,0(1)',
+			'ST 0,-4(5)'
+		]);
+		expect(of('t3 := t2 - 1')).toEqual(['LD 0,-4(5)', 'LDC 1,1(0)', 'SUB 0,0,1', 'ST 0,-5(5)']);
+		expect(of('a[i] := t3').filter((t) => !t.startsWith('JLT'))).toEqual([
+			'LD 0,-2(5)',
+			'LDA 1,-2(6)',
+			'ADD 1,1,0',
+			'LD 0,-5(5)',
+			'ST 0,0(1)'
+		]);
+	});
+
+	it('the loop jumps back to its test and out past its update', () => {
+		const at = (text: string) =>
+			code.instructions.filter((i) => i.quad !== null && quadText(c.ir!.quads[i.quad]) === text);
+		const label = (name: string) => {
+			const index = c.ir!.quads.findIndex((q) => quadText(q) === `${name}:`);
+			return code.instructions.find((i) => i.quad !== null && i.quad > index)!.addr;
+		};
+		const [back] = at('goto L1');
+		expect(back.addr + 1 + back.instr.a2).toBe(label('L1'));
+		const [, exit] = at('if_false t1 goto L2');
+		expect(exit.instr.op).toBe('JEQ');
+		expect(exit.addr + 1 + exit.instr.a2).toBe(label('L2'));
+		// The listing shows the loop's quads as comments.
+		expect(code.listing).toContain('* L1:\n');
+		expect(code.listing).toContain('* goto L1\n');
+		expect(code.listing).toContain('* i := i + 1\n');
+		expect(outputs(c.source)).toEqual([-1]);
+		expect(outputs(c.source, [], true)).toEqual([-1]);
+	});
+});
+
 describe('generated code runs', () => {
 	it('arrays: global, local, parameter, through two calls', () => {
 		const source = `int g[3];

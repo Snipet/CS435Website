@@ -399,6 +399,88 @@ describe('assignment targets', () => {
 	});
 });
 
+describe('++ and --', () => {
+	it('apply to an int variable, a parameter or an array element, and have the type int', () => {
+		const r = check(
+			'int g; int a[3]; void f(int p, int q[]) { ++p; --q[0]; } void main(void) { int x; x = ++g + --a[++x]; output(++x); }'
+		);
+		expect(r.diagnostics).toEqual([]);
+		const unary = r.nodes.filter((n) => n.kind === 'Unary');
+		expect(unary).toHaveLength(6);
+		for (const n of unary) {
+			expect(typeText(r.types.get(n.id)!)).toBe('int');
+			if (n.kind === 'Unary') expect(typeText(r.types.get(n.target.id)!)).toBe('int');
+		}
+		// Every ++ and -- is a use of its name.
+		expect(symbol(r, 'g').uses).toHaveLength(1);
+		expect(symbol(r, 'x').uses).toHaveLength(3);
+	});
+
+	it('an array as a whole, a function, a name that is not declared', () => {
+		expect(
+			located(
+				'int a[3]; int f(void) { return 1; } void main(void) { ++a; --f; ++main; ++b; --a[0]; }'
+			)
+		).toEqual([
+			['Cannot increment the array a: increment an element, as in ++a[0].', 'a'],
+			['Cannot decrement the function f.', 'f'],
+			['Cannot increment the function main.', 'main'],
+			['b is not declared.', 'b']
+		]);
+		expect(errors('void f(int p[]) { --p; } void main(void) { }')).toEqual([
+			'Cannot decrement the array p: decrement an element, as in --p[0].'
+		]);
+	});
+
+	it('the subscript of an element follows the rules of every subscript', () => {
+		expect(located(inMain('int x; int a[2]; ++x[0]; --a[a];'))).toEqual([
+			['x is not an array, so it cannot be indexed.', 'x'],
+			['The array a cannot be used as a subscript: use one element, as in a[0].', 'a']
+		]);
+	});
+});
+
+describe('for loops', () => {
+	it('a correct loop, with and without its parts', () => {
+		expect(
+			errors(
+				inMain(
+					'int i; int a[4]; for (i = 0; i < 4; ++i) a[i] = i; for (;;) ; for (; i;) --i; for (output(1); ; input()) ;'
+				)
+			)
+		).toEqual([]);
+	});
+
+	it('the condition is an int; the initializer and the update are statements', () => {
+		expect(
+			located(
+				'int a[2]; void p(void) { } void main(void) { for (a; p(); a) ; for (p(); a; p()) ; }'
+			)
+		).toEqual([
+			[
+				'The array a cannot be used as the initializer of a for loop: use one element, as in a[0].',
+				'a'
+			],
+			['p returns void, so its call cannot be used as a condition.', 'p()'],
+			['The array a cannot be used as the update of a for loop: use one element, as in a[0].', 'a'],
+			['The array a cannot be used as a condition: use one element, as in a[0].', 'a']
+		]);
+	});
+
+	it('a block as the body is a scope of its own', () => {
+		const r = check(inMain('int i; for (i = 0; i < 2; ++i) { int i; i = 5; } { int j; }'));
+		expect(r.diagnostics).toEqual([]);
+		expect(r.scopes.map((s) => s.name)).toEqual(['global', 'main', 'main.1', 'main.2']);
+		expect(symbol(r, 'i', 1).depth).toBe(2);
+	});
+
+	it('an int function that ends in a for loop may still reach its end', () => {
+		expect(warnings('int f(void) { for (;;) return 1; } void main(void) { f(); }')).toEqual([
+			'f returns int, but it may reach the end of its body without returning a value.'
+		]);
+	});
+});
+
 describe('return', () => {
 	it('a value in a void function', () => {
 		expect(located('void f(void) { return 1; } void main(void) { return 2 + 3; }')).toEqual([

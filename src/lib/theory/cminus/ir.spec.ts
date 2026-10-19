@@ -291,6 +291,138 @@ describe('statements', () => {
 	});
 });
 
+describe('the extensions: for loops, ++ and --', () => {
+	it('for with all three parts', () => {
+		expect(lines('for (x = 0; x < 5; ++x) a[x] = x;')).toEqual([
+			'x := 0',
+			'L1:',
+			't1 := x < 5',
+			'if_false t1 goto L2',
+			'a[x] := x',
+			'x := x + 1',
+			'goto L1',
+			'L2:'
+		]);
+	});
+
+	it('for without an initializer or an update has nothing in their place', () => {
+		expect(lines('for (; x;) --x;')).toEqual([
+			'L1:',
+			'if_false x goto L2',
+			'x := x - 1',
+			'goto L1',
+			'L2:'
+		]);
+	});
+
+	it('for without a condition has no exit and no exit label', () => {
+		expect(lines('for (x = input(); ; x = x * 2) output(x);')).toEqual([
+			't1 := call input, 0',
+			'x := t1',
+			'L1:',
+			'param x',
+			'call output, 1',
+			't2 := x * 2',
+			'x := t2',
+			'goto L1'
+		]);
+		expect(lines('for (;;) ;')).toEqual(['L1:', 'goto L1']);
+	});
+
+	it('a void call as the initializer or the update keeps no result', () => {
+		expect(lines('for (output(1); y; output(2)) ;')).toEqual([
+			'param 1',
+			'call output, 1',
+			'L1:',
+			'if_false y goto L2',
+			'param 2',
+			'call output, 1',
+			'goto L1',
+			'L2:'
+		]);
+	});
+
+	it('++ and -- on a variable are one quad, and the value is the variable', () => {
+		expect(quads('++x;')).toEqual(['+ x #1 x']);
+		expect(quads('--g;')).toEqual(['- g #1 g']);
+		expect(lines('y = ++x * 2;')).toEqual(['x := x + 1', 't1 := x * 2', 'y := t1']);
+		expect(lines('output(--x);')).toEqual(['x := x - 1', 'param x', 'call output, 1']);
+	});
+
+	it('++ and -- on an element read it, add or subtract, and store it through one subscript', () => {
+		expect(lines('y = ++a[x + 1];')).toEqual([
+			't1 := x + 1',
+			't2 := a[t1]',
+			't3 := t2 + 1',
+			'a[t1] := t3',
+			'y := t3'
+		]);
+		expect(quads('--arr[2];')).toEqual(['=[] arr #2 t1', '- t1 #1 t2', '[]= t2 #2 arr']);
+	});
+
+	it('an operand that a later ++ or -- changes is copied first', () => {
+		expect(lines('y = x + ++x;')).toEqual(['t1 := x', 'x := x + 1', 't2 := t1 + x', 'y := t2']);
+		expect(lines('y = ++x + ++x;')).toEqual([
+			'x := x + 1',
+			't1 := x',
+			'x := x + 1',
+			't2 := t1 + x',
+			'y := t2'
+		]);
+		expect(lines('two(x, --x);')).toEqual([
+			't1 := x',
+			'x := x - 1',
+			'param t1',
+			'param x',
+			'call two, 2'
+		]);
+		// An element is read into a temporary at once: no copy needed.
+		expect(lines('y = a[0] + ++a[0];')).toEqual([
+			't1 := a[0]',
+			't2 := a[0]',
+			't3 := t2 + 1',
+			'a[0] := t3',
+			't4 := t1 + t3',
+			'y := t4'
+		]);
+	});
+
+	it('the quads of a for loop and of ++ point at their source text', () => {
+		const source = 'void main(void) { int i; int a[3]; for (i = 0; i < 3; ++i) ++a[i]; }';
+		const c = compile(source, { optimize: false });
+		const text = (start: number, end: number) => source.slice(start, end);
+		expect(c.ir!.quads.map((q) => [quadText(q), text(q.span!.start, q.span!.end)])).toEqual([
+			['begin main', 'void main(void)'],
+			['i := 0', 'i = 0'],
+			['L1:', 'for (i = 0; i < 3; ++i)'],
+			['t1 := i < 3', 'i < 3'],
+			['if_false t1 goto L2', 'for (i = 0; i < 3; ++i)'],
+			['t2 := a[i]', 'a[i]'],
+			['t3 := t2 + 1', '++a[i]'],
+			['a[i] := t3', '++a[i]'],
+			['i := i + 1', '++i'],
+			['goto L1', 'for (i = 0; i < 3; ++i)'],
+			['L2:', 'for (i = 0; i < 3; ++i)'],
+			['end main', '}']
+		]);
+		const kinds = new Map(allNodes(c.parse!.program).map((n) => [n.id, n.kind]));
+		expect(c.ir!.quads.map((q) => kinds.get(q.node!))).toEqual([
+			'FunDecl',
+			'Assign',
+			'For',
+			'Binary',
+			'For',
+			'Index',
+			'Unary',
+			'Unary',
+			'Unary',
+			'For',
+			'For',
+			'FunDecl'
+		]);
+	});
+});
+
 describe('order of evaluation', () => {
 	it('copies the left operand when the right one assigns to it', () => {
 		expect(lines('y = x + (x = 5);')).toEqual(['t1 := x', 'x := 5', 't2 := t1 + 5', 'y := t2']);
