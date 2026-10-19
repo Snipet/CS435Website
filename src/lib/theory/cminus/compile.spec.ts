@@ -102,13 +102,19 @@ const EXPECTED: Record<string, (inputs: readonly number[]) => Outcome> = {
 	'zero-divide': ([a, b]) =>
 		b === 0 ? { stop: 'zero-divide', outputs: [a] } : halted(a, arith('/', a, b)!, b),
 	'negative-subscript': ([i]) =>
-		i < 0 ? { stop: 'negative-subscript', outputs: [7] } : halted(7, i === 0 ? 7 : 0, 1)
+		i < 0 ? { stop: 'negative-subscript', outputs: [7] } : halted(7, i === 0 ? 7 : 0, 1),
+	'counting-sort': (inputs) => {
+		const end = inputs.findIndex((v) => v < 0);
+		if (end === -1) return { stop: 'input-exhausted', outputs: [] };
+		const digits = inputs.slice(0, end).filter((v) => v < 10);
+		return halted(digits.length, ...digits.sort((a, b) => a - b));
+	}
 };
 
 describe('the sample programs', () => {
 	const runnable = SAMPLES.filter((s) => s.id !== 'undeclared');
 
-	it('there are twelve, and all but the one with undeclared names compile', () => {
+	it('there are thirteen, and all but the one with undeclared names compile', () => {
 		expect(SAMPLES.map((s) => s.id)).toEqual([
 			'gcd',
 			'factorial',
@@ -121,7 +127,8 @@ describe('the sample programs', () => {
 			'deep-recursion',
 			'undeclared',
 			'zero-divide',
-			'negative-subscript'
+			'negative-subscript',
+			'counting-sort'
 		]);
 		for (const s of runnable) {
 			expect(compile(s.source).diagnostics).toEqual([]);
@@ -610,7 +617,14 @@ describe('order of evaluation agrees everywhere', () => {
 		['output(input() / input() * input());', [20, 6, 5], [15]],
 		['int x; int y; x = y = input(); output(x + y);', [21], [42]],
 		['int x; if (x = input()) output(x); else output(0 - 1);', [0], [-1]],
-		['int x; x = 0; while ((x = x + 1) < 4) output(x);', [], [1, 2, 3]]
+		['int x; x = 0; while ((x = x + 1) < 4) output(x);', [], [1, 2, 3]],
+		['int x; x = 1; output(x + ++x); output(x);', [], [3, 2]],
+		['int x; x = 1; output(++x + x); output(--x * x);', [], [4, 1]],
+		['int x; x = 1; output(++x + ++x + ++x);', [], [9]],
+		['int a[3]; int i; i = 0; a[++i] = ++i; output(a[1]); output(i);', [], [2, 2]],
+		['int a[3]; a[0] = 4; output(a[0] + ++a[0]); output(--a[0] - a[0]);', [], [9, 0]],
+		['int a[3]; int i; i = 0; ++a[i = i + 1]; output(a[1]); output(i);', [], [1, 1]],
+		['int i; for (i = input(); i < input(); ++i) output(i);', [3, 5, 6, 4], [3, 4]]
 	];
 
 	for (const [body, inputs, outputs] of cases) {
@@ -759,6 +773,34 @@ void main(void) { left = input(); while (more()) output(left); output(0 - left);
 			`void main(void) { int i; i = 0; while (i < 6) { if (i > 1) if (i < 4) output(i); else output(0 - i); i = i + 1; } }`,
 			[],
 			[2, 3, -4, -5]
+		],
+		[
+			'nested for loops, one without an update',
+			`int table[16];
+void main(void) {
+  int i; int j;
+  for (i = 0; i < 4; ++i)
+    for (j = 0; j < 4;)
+      table[i * 4 + j] = i * ++j;
+  for (i = 15; i >= 0; i = i - 5) output(table[i]);
+}`,
+			[],
+			[12, 6, 2, 0]
+		],
+		[
+			'a for loop without a condition, left by return',
+			`int find(int a[], int n, int v) { int i; for (i = 0; ; ++i) { if (i == n) return 0 - 1; if (a[i] == v) return i; } }
+void main(void) { int a[5]; int i; for (i = 0; i < 5; ++i) a[i] = i * i; output(find(a, 5, 9)); output(find(a, 5, 7)); }`,
+			[],
+			[3, -1]
+		],
+		[
+			'++ and -- through an array parameter and on a global',
+			`int g; int h[2];
+void bump(int v[], int i) { ++v[i]; --g; }
+void main(void) { int k; for (k = 0; k < 5; ++k) bump(h, k - k / 2 * 2); output(h[0]); output(h[1]); output(g); output(++g + g); }`,
+			[],
+			[3, 2, -5, -8]
 		],
 		[
 			'numbers at the edge of 32 bits',
@@ -936,6 +978,50 @@ describe('random programs', () => {
 			'zero-divide'
 		]);
 	}, 120_000);
+
+	it('with for loops, ++ and --: interpreter and TM code agree on 300 random programs', () => {
+		const rnd = random(Number(process.env.CMINUS_FUZZ_SEED ?? 4350));
+		const stops = new Map<string, number>();
+		let compared = 0;
+		let fors = 0;
+		let steps = 0;
+		for (let n = 0; n < 300; n++) {
+			const { source, inputs } = randomProgram(rnd, { extensions: true });
+			const c = compile(source);
+			if (c.stoppedAt !== null && c.stoppedAt !== 'codegen') {
+				throw new Error(`${JSON.stringify(c.diagnostics, null, 1)}\n${source}`);
+			}
+			if (source.includes('for (')) fors++;
+			if (/(\+\+|--)[a-z]/.test(source)) steps++;
+			if ([false, true].some((optimize) => compile(source, { optimize }).stoppedAt === 'codegen')) {
+				continue;
+			}
+			const runs = allRuns(source, inputs, 3_000_000);
+			if (runs.some(([, stop]) => stop === 'step-budget')) continue;
+			const [, stop, outputs] = runs[0];
+			for (const [name, s, o] of runs) {
+				if (s !== stop || o.length !== outputs.length || o.some((v, i) => v !== outputs[i])) {
+					throw new Error(
+						`program ${n}: ${name} gives ${s} ${JSON.stringify(o)}, the interpreter ${stop} ${JSON.stringify(outputs)}\ninputs ${JSON.stringify(inputs)}\n${source}`
+					);
+				}
+			}
+			compared++;
+			stops.set(stop, (stops.get(stop) ?? 0) + 1);
+		}
+		expect(compared).toBeGreaterThan(250);
+		expect(fors).toBeGreaterThan(100);
+		expect(steps).toBeGreaterThan(150);
+		expect(stops.get('halted')).toBeGreaterThan(150);
+	}, 120_000);
+
+	it('the random programs without the extensions have no for, ++ or --', () => {
+		const rnd = random(5);
+		for (let n = 0; n < 50; n++) {
+			const { source } = randomProgram(rnd);
+			expect(source).not.toMatch(/for \(|\+\+|--/);
+		}
+	});
 
 	it('the optimizer finds work in random programs and never grows them', () => {
 		const rnd = random(77);

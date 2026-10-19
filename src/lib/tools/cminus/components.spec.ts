@@ -230,7 +230,9 @@ describe('SyntaxView', () => {
 	it('shows the tree as an outline and draws the whole small program', () => {
 		const html = render(SyntaxView, { props }).body;
 		expect(count(html, 'role="treeitem"')).toBe(38);
-		expect(html).toContain('aria-label="FunDecl int gcd, line 5"');
+		expect(html).toContain(
+			'aria-label="declarations[0]: FunctionDeclarationNode, valueType INT, identifier gcd, nestLevel 0, line 5"'
+		);
 		expect(html).toContain('aria-level="3"');
 		expect(count(html, 'aria-expanded="true"')).toBe(
 			count(html, 'role="treeitem"') - count(html, /role="treeitem"(?![^>]*aria-expanded)/g)
@@ -279,6 +281,47 @@ describe('SyntaxView', () => {
 	});
 });
 
+describe('SyntaxView in the course classes', () => {
+	const props = { marks: NO_MARKS, selection: null, grammarHref: null, onselect };
+
+	it('shows the fields of each node, and which phase sets those that are not set', () => {
+		const c = compile(source('reverse'));
+		const html = render(SyntaxView, { props: { ...props, c } }).body;
+		expect(html).toContain('aria-label="statements[0]: ForStatementNode, line 11"');
+		expect(html).toContain(
+			'aria-label="updater: UnaryExpressionNode, unaryOperator INCREMENT, line 11"'
+		);
+		expect(html).toContain(
+			'aria-label="localDeclarations[0]: ArrayDeclarationNode, valueType ARRAY, identifier numbers, nestLevel 1, framePointerOffset -6, size 5, line 8"'
+		);
+		const shown = text(html);
+		expect(shown).toContain('ForStatementNode');
+		expect(shown).toContain('UnaryExpressionNode unaryOperator DECREMENT');
+		expect(shown).toContain('nestLevel is set when the symbol table is built');
+		expect(shown).toContain('A field the compilation did not reach is not set .');
+		expect(count(html, 'not set')).toBe(1);
+
+		const stopped = compile('void main(void) { int x; x = ; }');
+		const partial = render(SyntaxView, { props: { ...props, c: stopped } }).body;
+		expect(partial).toContain('title="Set when the symbol table is built (semantic analyzer)"');
+		expect(partial).toContain('title="Set by the code generator"');
+		expect(text(partial)).toContain('nestLevel not set framePointerOffset not set');
+	});
+
+	it('draws the tree with the course class names', () => {
+		const c = compile(source('reverse'));
+		const selection = find(c, '--i');
+		const html = render(SyntaxView, {
+			props: { ...props, c, selection, marks: marksFor(c, selection) }
+		}).body;
+		expect(text(html)).toContain('The statement on line 14');
+		expect(html).toContain('ForStatementNode');
+		expect(html).toContain('UnaryExpressionNode DECREMENT');
+		// --i: the Unary and its variable, in the outline.
+		expect(count(html, /role="treeitem"[^>]*aria-selected="true"/g)).toBe(2);
+	});
+});
+
 describe('AstOutline', () => {
 	it('shows the type of every expression when types are given', () => {
 		const html = render(AstOutline, {
@@ -290,10 +333,18 @@ describe('AstOutline', () => {
 				onselect
 			}
 		}).body;
-		expect(html).toContain('aria-label="Binary ==, type int, line 7"');
-		expect(html).toContain('aria-label="Call output, type void, line 18"');
-		expect(html).toContain('aria-label="If, line 7"');
+		expect(html).toContain(
+			'aria-label="conditionalExpression: RelationalExpressionNode, relationalOperator EQ, type int, line 7"'
+		);
+		expect(html).toContain(
+			'aria-label="expression: CallExpressionNode, identifier output, type void, line 18"'
+		);
+		expect(html).toContain(
+			'aria-label="statements[0]: IfStatementNode, elseStatement nullptr, line 7"'
+		);
 		expect(html).toContain('aria-multiselectable="true"');
+		// Without the tree of the compilation, the fields of later phases are not set.
+		expect(html).toContain('nestLevel not set');
 		// One tab stop: the first row.
 		expect(count(html, 'tabindex="0"')).toBe(1);
 	});
@@ -581,7 +632,7 @@ describe('LanguageView', () => {
 		const shown = text(html);
 		for (const part of [
 			'Lexical conventions',
-			'else if int return void while',
+			'else for if int return void while',
 			'ID = letter letter*',
 			'NUM = digit digit*',
 			'comments do not nest',
@@ -610,6 +661,28 @@ describe('LanguageView', () => {
 			expect(shown, part).toContain(part);
 		}
 		expect(html).toContain('href="/grammar#x"');
+	});
+
+	it('describes the extensions: for, ++ and --', () => {
+		const shown = text(
+			render(LanguageView, { props: { identifiers: 'letters', grammarHref: null } }).body
+		);
+		for (const part of [
+			'FOR for',
+			'INCREMENT ++',
+			'DECREMENT --',
+			'++ is INCREMENT, + + is PLUS PLUS',
+			'for loop (BNF rule 16) and the prefix operators (rule 26)',
+			'Each of the three expressions may be left out',
+			'Only the prefix form exists: i++ is a syntax error.',
+			'Rules 16 and 26 include two extensions',
+			'In a for head the initializer and the condition are each an expression-stmt (with its ; ), and the update is an optional expression .',
+			'e1 is an expression, not a declaration: the loop variable is declared at the start of a block',
+			'iteration-stmt → while ( expression ) statement | for ( expression-stmt expression-stmt ) statement',
+			'factor → ( expression ) | var | call | NUM | "++" var | "--" var'
+		]) {
+			expect(shown, part).toContain(part);
+		}
 	});
 
 	it('follows the identifier rule in use', () => {

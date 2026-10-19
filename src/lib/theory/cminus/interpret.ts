@@ -5,7 +5,10 @@
  *
  * It follows the same rules as compiled code: 32-bit integers that wrap
  * around, division truncating toward zero, operands and arguments evaluated
- * left to right, and for `a[i] = e` the subscript, then e, then the store.
+ * left to right, and for `a[i] = e` the subscript, then e, then the store
+ * (`++a[i]` computes its subscript once). A for loop runs its initializer
+ * once, tests its condition before every round (a missing one is true) and
+ * runs its update after the body.
  * Where compiled code leaves a value undefined the interpreter picks one: a
  * local variable starts at 0, and an int function that ends without a return
  * gives 0. It checks both bounds of a subscript; compiled code only checks
@@ -216,6 +219,19 @@ export function interpret(
 				a[checked(a, i, e.target)] = value;
 				return value;
 			}
+			case 'Unary': {
+				const op = e.op === '++' ? '+' : '-';
+				if (e.target.kind === 'Var') {
+					const c = cell(e.target);
+					c.value = arith(op, c.value, 1)!;
+					return c.value;
+				}
+				const i = evaluate(e.target.index);
+				const a = array(e.target);
+				const k = checked(a, i, e.target);
+				a[k] = arith(op, a[k], 1)!;
+				return a[k];
+			}
 		}
 	};
 
@@ -234,6 +250,13 @@ export function interpret(
 				return s.else ? execute(s.else) : false;
 			case 'While':
 				while (evaluate(s.test) !== 0) if (execute(s.body)) return true;
+				return false;
+			case 'For':
+				if (s.init) evaluate(s.init);
+				while (s.test === null || evaluate(s.test) !== 0) {
+					if (execute(s.body)) return true;
+					if (s.update) evaluate(s.update);
+				}
 				return false;
 			case 'Return':
 				returned = s.value ? evaluate(s.value) : 0;

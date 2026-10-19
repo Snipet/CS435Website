@@ -852,7 +852,9 @@ function compareGrammars(
 A compiler for C- (the language of Appendix A of the course text) that keeps
 the result of every phase: characters → tokens → abstract syntax tree → symbol
 tables and types → three-address code → optimized three-address code → TINY
-Machine (TM) code. `run.ts`, `codegen.ts` and `interpret.ts` import the
+Machine (TM) code. Two extensions of the language definition, the ones the
+course's C- AST classes imply (`ForStatementNode`, `UnaryExpressionNode`), are
+part of every phase: the `for` loop and the prefix operators `++` and `--`. `run.ts`, `codegen.ts` and `interpret.ts` import the
 machine, its instruction type and its memory sizes from
 `$lib/tools/tiny-vm/machine` (pure TypeScript); nothing else in `theory/`
 imports from a tool.
@@ -866,9 +868,9 @@ interface SourceSpan extends Span {
 interface SourceDiagnostic extends Diagnostic {
 	span?: SourceSpan; // every phase sets it; Compilation.diagnostics requires it
 }
-// TokenType, in the course's upper-case names: ELSE IF INT RETURN VOID WHILE ID NUM
+// TokenType, in the course's upper-case names: ELSE FOR IF INT RETURN VOID WHILE ID NUM
 // PLUS MINUS TIMES OVER LT LTE GT GTE EQ NEQ ASSIGN SEMI COMMA LPAREN RPAREN
-// LBRACKET RBRACKET LBRACE RBRACE ENDFILE ERROR
+// LBRACKET RBRACKET LBRACE RBRACE INCREMENT DECREMENT ENDFILE ERROR
 interface Token {
 	type: TokenType;
 	lexeme: string;
@@ -892,11 +894,13 @@ function scan(
 ): { tokens: Token[] /* ENDFILE last */; trivia: Trivia[]; diagnostics: SourceDiagnostic[] };
 
 // ast.ts — nodes { id, span, kind, … }; ids are preorder numbers from 0 (Program).
-// Kinds: Program VarDecl FunDecl Param Compound If While Return ExprStmt
-//        Assign Binary Var Index Call Num. Parentheses leave no node.
+// Kinds: Program VarDecl FunDecl Param Compound If While For Return ExprStmt
+//        Assign Binary Unary Var Index Call Num. Parentheses leave no node.
+// For { init, test, update: Expr | null; body; headSpan }
+// Unary { op: '++' | '--'; opSpan; target: Var | Index }
 type Decl = VarDecl | FunDecl;
-type Stmt = Compound | If | While | Return | ExprStmt;
-type Expr = Assign | Binary | Var | Index | Call | Num;
+type Stmt = Compound | If | While | For | Return | ExprStmt;
+type Expr = Assign | Binary | Unary | Var | Index | Call | Num;
 type AstNode = Program | Decl | Param | Stmt | Expr;
 function childrenOf(node: AstNode): AstNode[];
 function walk(
@@ -906,13 +910,64 @@ function walk(
 function allNodes(root: AstNode): AstNode[]; // preorder: allNodes(program)[id].id === id
 function findNode(root: AstNode, id: number): AstNode | null;
 function nodeAt(root: AstNode, offset: number): AstNode | null; // innermost node at a source offset
-function nodeLabel(node: AstNode): string; // "VarDecl int a[10]", "Binary +", "Var x"
+function nodeLabel(node: AstNode): string; // "VarDecl int a[10]", "Binary +", "Unary ++", "Var x"
 function astLines(root: AstNode): { id: number; depth: number; label: string; span: SourceSpan }[];
 function printAst(root: AstNode, opts?: { indent?: string }): string; // one node per line
 function printExpr(e: Expr): string; // C- text with the fewest parentheses
 
+// courseAst.ts — the tree in the node classes and fields of the course's C- AST header.
+type CourseClass =
+	| 'ProgramNode'
+	| 'FunctionDeclarationNode'
+	| 'VariableDeclarationNode'
+	| 'ArrayDeclarationNode'
+	| 'ParameterNode'
+	| 'CompoundStatementNode'
+	| 'IfStatementNode'
+	| 'WhileStatementNode'
+	| 'ForStatementNode'
+	| 'ReturnStatementNode'
+	| 'ExpressionStatementNode'
+	| 'AssignmentExpressionNode'
+	| 'VariableExpressionNode'
+	| 'SubscriptExpressionNode'
+	| 'CallExpressionNode'
+	| 'AdditiveExpressionNode'
+	| 'MultiplicativeExpressionNode'
+	| 'RelationalExpressionNode'
+	| 'UnaryExpressionNode'
+	| 'IntegerLiteralExpressionNode';
+type CourseValue =
+	| { kind: 'node'; node: CourseNode } // a pointer
+	| { kind: 'list'; nodes: CourseNode[] } // a vector
+	| { kind: 'null' } // nullptr
+	| { kind: 'enum'; type: CourseEnum; value: string } // ValueType INT, AdditiveOperatorType PLUS, …
+	| { kind: 'string'; value: string }
+	| { kind: 'int'; value: number }
+	| { kind: 'bool'; value: boolean }
+	| { kind: 'unset'; phase: 'semantic' | 'codegen' } // set by a phase the compilation did not reach
+	| { kind: 'global'; offset: number }; // framePointerOffset of a global: none; its offset from gp
+interface CourseNode {
+	id: number; // the engine node's id: same preorder, same span
+	node: CourseClass;
+	span: SourceSpan;
+	fields: { name: string; value: CourseValue }[]; // the header's order, base class first
+}
+const COURSE_FIELDS: Record<CourseClass, readonly string[]>;
+function courseAst(
+	program: Program,
+	opts?: { semantic?: SemanticResult | null; codegen?: CodegenResult | null }
+): CourseNode;
+function courseClass(node: AstNode): CourseClass;
+function courseLabel(node: AstNode): string; // "FunctionDeclarationNode gcd", "AdditiveExpressionNode PLUS"
+function courseChildren(node: CourseNode): { field: string; node: CourseNode }[]; // "statements[2]"
+function courseAttributes(node: CourseNode): { name: string; value: CourseValue }[]; // the other fields
+function courseValueText(value: CourseValue): string; // "INT", "gcd", "nullptr", "empty", "not set"
+function walkCourse(root: CourseNode, visit: (node, depth, field: string | null) => void): void;
+function printCourseAst(root: CourseNode, opts?: { indent?: string }): string;
+
 // parser.ts — predictive recursive descent, one function per non-terminal of CMINUS_EBNF.
-const CMINUS_BNF: string; // the 29 rules, readable by parseGrammar
+const CMINUS_BNF: string; // the 29 rules (16 and 26 with the extensions), readable by parseGrammar
 const CMINUS_EBNF: string; // the grammar the parser follows, readable by parseEbnf
 const MAX_NESTING = 200, // statements and parenthesized expressions
 	MAX_TREE_DEPTH = 500, // levels of the tree; a + a + a + … is a level per operator
@@ -1139,7 +1194,7 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
 
 // runtime.ts — AC AC1 FP GP PC, registerName, frame offsets, INT_MIN, INT_MAX,
 // arith(op, a, b) (null for a division by zero) and compare(op, a, b).
-// samples.ts — SAMPLES, sampleById, UNDECLARED_SOURCE.
+// samples.ts — SAMPLES (counting-sort uses for, ++ and --), sampleById, UNDECLARED_SOURCE.
 ```
 
 - **Phases stop at the first error.** `compile` fills the results in order and
@@ -1162,7 +1217,9 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   longer than instruction memory in a program that compiles; `runTM` does not
   run such code (`memory-error`, 0 steps, `pc: null`). `isLoadable(code)`
   tells, and `codeBeforePeephole(c)` is that code only when it can run.
-- **Scanner.** Maximal munch; a reserved word wins over ID. An illegal
+- **Scanner.** Maximal munch; a reserved word wins over ID (`for` included).
+  `++` is INCREMENT and `--` DECREMENT, so `a+++b` is ID INCREMENT PLUS ID,
+  while `a+ +b` is still ID PLUS PLUS ID. An illegal
   character and a `!` without `=` are one ERROR token each; a comment that is
   never closed is one ERROR token to the end of the text (and no trivia
   entry). Tokens and trivia together cover the whole text.
@@ -1183,7 +1240,81 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   with a message that calls it too long rather than nested. Within the
   limits the parser accepts exactly the token strings that `CMINUS_BNF`
   derives (a spec checks it with `recognizes` on mutated programs and random
-  token strings).
+  token strings, with and without `for`, `++` and `--`).
+- **Extensions: grammar.** Rule 16 is
+  `iteration-stmt → while ( expression ) statement | for ( expression-stmt expression-stmt ) statement | for ( expression-stmt expression-stmt expression ) statement`
+  (in the EBNF `for ( [ expression ] ; [ expression ] ; [ expression ] ) statement`;
+  the initializer and the condition are each an `expression-stmt`, with its
+  `;`, and the update is an optional `expression`, which keeps the BNF at 29
+  rules), and
+  rule 26 is `factor → ( expression ) | var | call | NUM | "++" var | "--" var`.
+  The tokens are FOR, INCREMENT and DECREMENT. The operators are prefix
+  only: a var followed by `++` or `--` (`i++`) is a syntax error whose
+  message suggests the prefix form ("write ++i, not i++"); `++` before
+  anything but a var (a number, a parenthesis, a call) is an error too, and
+  `++i = 1` is reported as a left side of `=` that is not a var. A
+  declaration as the initializer (`for (int i = 0; …)`) is a syntax error
+  that says where C- declares variables ("declare i there and write
+  for (i = …; …)"). A syntax error in a for head skips to its `)` before the
+  statement is dropped, so the head gives one message.
+- **Extensions: meaning.** `for (e1; e2; e3) s` evaluates `e1` once, tests
+  `e2` before every round (a missing `e2` is true, so the loop ends only by
+  `return`), and evaluates `e3` after `s`. The analyzer checks `e2` as a
+  condition and `e1`, `e3` as expression statements (an array or a function
+  name is an error, a void call is not); a for loop never counts as
+  returning. `++v` / `--v` adds or subtracts 1 (32-bit wrap-around), stores
+  the result in `v` and has it as its value; `v` follows the rule of the
+  left side of `=` (an int variable or parameter, or an array element; a
+  whole array or a function is an error: "Cannot increment the array a:
+  increment an element, as in ++a[0]."). Three-address code: `e1 · label L1
+· e2 → t · if_false t _ L2 · s · e3 · goto _ _ L1 · label L2` (no
+  `if_false` and no `L2` without `e2`; the jumps and labels carry the head's
+  span and the For node, as those of `while` do), `++x` is the one quad
+  `+ x #1 x` (its value is `x`), and `--a[i]` is
+  `=[] a i t1 · - t1 #1 t2 · []= t2 i a` with the subscript computed once
+  (its value is `t2`). For the order of evaluation a `++` or `--` of a
+  variable counts as an assignment to it, so `x + ++x` copies `x` first. The
+  optimizer and the code generator need nothing new; the interpreter runs
+  the loop and the operators itself, and a spec compares it with the TM code
+  on random programs that use them.
+- **Course AST.** `courseAst` maps the tree, node for node, to the classes and
+  fields of the course's C- AST header: Program → ProgramNode (declarations),
+  FunDecl → FunctionDeclarationNode (valueType, identifier, nestLevel,
+  parameters, functionBody), VarDecl → VariableDeclarationNode (valueType,
+  identifier, nestLevel, framePointerOffset) or ArrayDeclarationNode (the
+  same, then size), Param → ParameterNode (valueType, identifier, nestLevel,
+  isArray, framePointerOffset), Compound → CompoundStatementNode
+  (localDeclarations, statements), If → IfStatementNode
+  (conditionalExpression, thenStatement, elseStatement), While →
+  WhileStatementNode (conditionalExpression, body), For → ForStatementNode
+  (initializer, condition, updater, body), Return → ReturnStatementNode
+  (expression), ExprStmt → ExpressionStatementNode (expression), Assign →
+  AssignmentExpressionNode (variable, expression), Var →
+  VariableExpressionNode (identifier), Index → SubscriptExpressionNode
+  (identifier, index), Call → CallExpressionNode (identifier, arguments),
+  Binary → AdditiveExpressionNode (addOperator PLUS/MINUS, left, right),
+  MultiplicativeExpressionNode (multOperator TIMES/DIVIDE, left, right) or
+  RelationalExpressionNode (relationalOperator LT/LTE/GT/GTE/EQ/NEQ, left,
+  right), Unary → UnaryExpressionNode (unaryOperator INCREMENT/DECREMENT,
+  variable), Num → IntegerLiteralExpressionNode (value). ValueType is VOID or
+  INT for a return type, a variable and a parameter, and ARRAY for an int
+  array declaration or array parameter (a `void` one keeps VOID; the
+  analyzer rejects it). A missing optional part is `nullptr`. The engine
+  keeps its own short kinds, which every phase and spec uses; the mapping is
+  pure and keeps ids, spans and preorder, so the selection carries over
+  unchanged. Two fields are set by later phases: `nestLevel` (the depth of
+  the declaring scope: 0 global, 1 the parameters and the top-level locals of
+  a function, 2 and up nested blocks) once the semantic analyzer has built
+  the symbol table, and `framePointerOffset` (the offset from fp the TM code
+  generator gives a local or a parameter, of element 0 for an array) once
+  code generation ran. The header declares framePointerOffset on
+  VariableDeclarationNode only; its comment places parameters at fp offsets
+  too, so ParameterNode carries it here as well. A global variable has no
+  frame offset: its value is `global`, with its offset from gp. Until a
+  compilation reaches the phase, the field is `unset`. The C- Compiler's
+  Syntax tree tab (and the typed tree of its Semantics tab) shows this tree,
+  one row per node: the field that holds it, its class and its other fields;
+  its drawings label nodes with `courseLabel`.
 - **Semantic analyzer.** Errors: undeclared name (once per use; the
   expression gets the type `error`, which is accepted everywhere, so one
   mistake gives one message); redeclaration in a scope (`input` and `output`

@@ -104,6 +104,57 @@ void main(void) { v[0] = 1; v[1] = 5; v[2] = 50; v[3] = 500; output(first(v, 4))
 	});
 });
 
+describe('the extensions: for loops, ++ and --', () => {
+	it('for: the initializer once, the condition before every round, the update after the body', () => {
+		expect(outputs('int i; for (i = 0; i < 4; ++i) output(i); output(i);')).toEqual([
+			0, 1, 2, 3, 4
+		]);
+		// The order of the three parts and the body, printed as they run.
+		const source = `int step(int n) { output(n); return n; }
+void main(void) { int i; for (i = step(10); step(i) < 12; i = step(i + 1)) output(0 - i); }`;
+		expect(run(source).outputs).toEqual([10, 10, -10, 11, 11, -11, 12, 12]);
+		expect(outputs('int i; i = 9; for (; i < 3;) output(i); output(i);')).toEqual([9]);
+	});
+
+	it('for without a condition runs until it returns', () => {
+		const source = `int first(int a[], int n) { int i; for (i = 0; ; ++i) if (a[i] == n) return i; }
+void main(void) { int a[4]; a[0] = 5; a[1] = 7; a[2] = 9; a[3] = 7; output(first(a, 7)); output(first(a, 9)); }`;
+		expect(run(source).outputs).toEqual([1, 2]);
+		const forever = run(inMain('for (;;) ;'), [], { maxSteps: 300 });
+		expect(forever).toMatchObject({ stop: 'step-budget', steps: 300 });
+	});
+
+	it('++ and -- store back and have the new value', () => {
+		expect(
+			outputs('int x; x = 5; output(++x); output(x); output(--x); output(--x); output(x);')
+		).toEqual([6, 6, 5, 4, 4]);
+		expect(
+			outputs('int a[3]; int i; i = 1; output(++a[i]); output(++a[i] * 10); output(a[1]);')
+		).toEqual([1, 20, 2]);
+		// Left to right: x is read, then incremented.
+		expect(outputs('int x; x = 1; output(x + ++x); output(++x + x); output(x);')).toEqual([
+			3, 6, 3
+		]);
+		expect(outputs('int x; x = 2147483647; output(++x); output(--x);')).toEqual([
+			-2147483648, 2147483647
+		]);
+	});
+
+	it('the subscript of ++a[i] is computed once and checked like any subscript', () => {
+		expect(outputs('int a[3]; int i; i = 0; ++a[++i]; output(i); output(a[1]);')).toEqual([1, 1]);
+		const negative = run(inMain('int a[3]; int i; i = 0; output(7); --a[i - 1]; output(8);'));
+		expect(negative).toMatchObject({ stop: 'negative-subscript', outputs: [7] });
+		expect(where(negative)).toBe('a[i - 1]');
+		const past = run(inMain('int a[3]; ++a[3];'));
+		expect(past.stop).toBe('subscript-out-of-range');
+	});
+
+	it('counts steps for the parts of a for loop as for any statement and expression', () => {
+		// Compound; For, Assign, Num; Binary, Var, Num (twice: 0 and 1); ExprStmt ; ; Unary.
+		expect(run(inMain('int i; for (i = 0; i < 1; ++i) ;')).steps).toBe(12);
+	});
+});
+
 describe('variables', () => {
 	it('globals and locals start at 0', () => {
 		expect(

@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { allNodes, codeQuads, compile, type AstNode, type Compilation } from '$lib/theory/cminus';
+import {
+	allNodes,
+	codeQuads,
+	compile,
+	quadText,
+	type AstNode,
+	type Compilation
+} from '$lib/theory/cminus';
 import { PRESETS, presetById } from './presets';
 import {
 	NO_MARKS,
@@ -173,6 +180,25 @@ describe('marksFor', () => {
 			'if_false',
 			'label'
 		]);
+	});
+
+	it('gives the quads of a for head: its parts, its test, its jumps and its labels', () => {
+		const loop = compile(presetById('reverse')!.value.source, { optimize: false });
+		const head = find(loop.source, 'for (i = 4; i >= 0; --i)');
+		const marks = marksFor(loop, head);
+		expect(sorted(marks.quads).map((i) => quadText(loop.ir!.quads[i]))).toEqual([
+			'i := 4',
+			'L3:',
+			't3 := i >= 0',
+			'if_false t3 goto L4',
+			'i := i - 1',
+			'goto L3',
+			'L4:'
+		]);
+		// The update alone is one quad.
+		const update = marksFor(loop, find(loop.source, '--i'));
+		expect(sorted(update.quads).map((i) => quadText(loop.ir!.quads[i]))).toEqual(['i := i - 1']);
+		expect(update.final.size).toBeGreaterThan(0);
 	});
 
 	it('gives begin for a function header and end for its closing brace', () => {
@@ -455,6 +481,19 @@ describe('the caret', () => {
 		// The closing brace of the loop's block is not a piece.
 		const inner = find(loop.source, '  }');
 		expect(pieceAt(loop.parse!.program, inner.start + 2)).toBeNull();
+
+		const reverse = compile(presetById('reverse')!.value.source);
+		const forHead = find(reverse.source, 'for (i = 0; i < 5; ++i)');
+		for (const offset of [0, 6, 20]) {
+			expect(textOf(reverse, pieceAt(reverse.parse!.program, forHead.start + offset))).toBe(
+				'for (i = 0; i < 5; ++i)'
+			);
+		}
+		// The body of the loop is a piece of its own.
+		const body = find(reverse.source, 'numbers[i] = input();');
+		expect(textOf(reverse, pieceAt(reverse.parse!.program, body.start + 3))).toBe(
+			'numbers[i] = input();'
+		);
 
 		const withElse = compile('void main(void) { if (1) output(1); else output(2); }');
 		const elseAt = withElse.source.indexOf('else') + 2;

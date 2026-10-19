@@ -378,6 +378,54 @@ describe('jumps and labels', () => {
 	});
 });
 
+describe('for loops, ++ and --', () => {
+	it('++ and -- are additions and subtractions the passes know', () => {
+		expect(opt('x = 4; ++x; y = --x * 2;')).toEqual(['x := 4', 'x := 5', 'x := 4', 'y := 8']);
+		expect(opt('x = input(); ++x; output(x);')).toEqual([
+			'x := call input, 0',
+			'x := x + 1',
+			'param x',
+			'call output, 1'
+		]);
+	});
+
+	it('the loop keeps its test, its jump back and its labels', () => {
+		expect(opt('for (x = 0; x < 3; ++x) output(x);')).toEqual([
+			'x := 0',
+			'L1:',
+			't1 := x < 3',
+			'if_false t1 goto L2',
+			'param x',
+			'call output, 1',
+			'x := x + 1',
+			'goto L1',
+			'L2:'
+		]);
+	});
+
+	it('a constant condition: the exit test goes, or the loop body is skipped', () => {
+		expect(opt('for (;1;) output(1);')).toEqual(['L1:', 'param 1', 'call output, 1', 'goto L1']);
+		// Unreachable code is left in place.
+		expect(opt('for (; 0;) output(1);')).toEqual([
+			'L1:',
+			'goto L2',
+			'param 1',
+			'call output, 1',
+			'goto L1',
+			'L2:'
+		]);
+	});
+
+	it('an element incremented in place is read and stored once', () => {
+		expect(opt('a[2] = 7; ++a[2];')).toEqual([
+			'a[2] := 7',
+			't1 := a[2]',
+			't2 := t1 + 1',
+			'a[2] := t2'
+		]);
+	});
+});
+
 describe('the result', () => {
 	const source = `${DECLS}void main(void) { int x; int y; x = 2 + 3; if (x) y = x * 1; output(y + 0); }`;
 	const c = compile(source);

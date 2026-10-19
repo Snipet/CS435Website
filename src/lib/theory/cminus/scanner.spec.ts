@@ -64,10 +64,11 @@ describe('token types', () => {
 	});
 
 	it('produces every token type the language has', () => {
-		const all = 'else if int return void while x 1 + - * / < <= > >= == != = ; , ( ) [ ] { } @';
+		const all =
+			'else for if int return void while x 1 + - * / < <= > >= == != = ; , ( ) [ ] { } ++ -- @';
 		const seen = new Set<TokenType>(types(all));
 		expect(TOKEN_TYPES.filter((t) => !seen.has(t))).toEqual([]);
-		expect(TOKEN_TYPES).toHaveLength(6 + 2 + 19 + 2);
+		expect(TOKEN_TYPES).toHaveLength(7 + 2 + 21 + 2);
 	});
 
 	it('reserved words win over ID, and case matters', () => {
@@ -125,6 +126,38 @@ describe('maximal munch', () => {
 			'RPAREN )',
 			'SEMI ;'
 		]);
+	});
+});
+
+describe('the extensions: for, ++ and --', () => {
+	it('for is a keyword', () => {
+		expect(pairs('for (;;)')).toEqual(['FOR for', 'LPAREN (', 'SEMI ;', 'SEMI ;', 'RPAREN )']);
+		expect(pairs('For fore form')).toEqual(['ID For', 'ID fore', 'ID form']);
+		expect(spellingOf('FOR')).toBe('for');
+	});
+
+	it('++ and -- are one token each, by maximal munch', () => {
+		expect(pairs('++i --a[0]')).toEqual([
+			'INCREMENT ++',
+			'ID i',
+			'DECREMENT --',
+			'ID a',
+			'LBRACKET [',
+			'NUM 0',
+			'RBRACKET ]'
+		]);
+		expect(pairs('i++')).toEqual(['ID i', 'INCREMENT ++']);
+		expect(spellingOf('INCREMENT')).toBe('++');
+		expect(spellingOf('DECREMENT')).toBe('--');
+	});
+
+	it('a+ +b is still PLUS PLUS, and +++ is INCREMENT PLUS', () => {
+		expect(pairs('a+ +b')).toEqual(['ID a', 'PLUS +', 'PLUS +', 'ID b']);
+		expect(pairs('a - -b')).toEqual(['ID a', 'MINUS -', 'MINUS -', 'ID b']);
+		expect(pairs('a+++b')).toEqual(['ID a', 'INCREMENT ++', 'PLUS +', 'ID b']);
+		expect(pairs('---')).toEqual(['DECREMENT --', 'MINUS -']);
+		expect(pairs('+-+')).toEqual(['PLUS +', 'MINUS -', 'PLUS +']);
+		expect(pairs('+/**/+')).toEqual(['PLUS +', 'PLUS +']);
 	});
 });
 
@@ -377,9 +410,9 @@ describe('token tables', () => {
 		expect(spellingOf('ERROR')).toBeNull();
 	});
 
-	it('lists 6 keywords and 19 special symbols', () => {
-		expect(Object.keys(KEYWORDS)).toEqual(['else', 'if', 'int', 'return', 'void', 'while']);
-		expect(SYMBOLS).toHaveLength(19);
+	it('lists 7 keywords and 21 special symbols', () => {
+		expect(Object.keys(KEYWORDS)).toEqual(['else', 'for', 'if', 'int', 'return', 'void', 'while']);
+		expect(SYMBOLS).toHaveLength(21);
 		// A symbol that starts another one is listed after it.
 		SYMBOLS.forEach(([text], i) => {
 			for (const [longer] of SYMBOLS.slice(i + 1)) expect(longer.startsWith(text)).toBe(false);
