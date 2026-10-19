@@ -852,7 +852,10 @@ function compareGrammars(
 Table-driven LL(1) parsing as Table-based Predictive Parsing presents it, and
 bottom-up LR parsing as Bottom-Up Parsing, Bottom-up Parsing II and Bottom-up
 Parsing III present it. Every result is plain data (objects, arrays, Maps), so
-it survives a structured clone and can come from a worker (§5.4).
+it survives a structured clone and can come from a worker (§5.4); the drivers
+keep their trees at most `MAX_TREE_DEPTH` levels deep for that (a structured
+clone copies nested objects recursively, and Chrome's workers run out of stack
+at about 900 levels of `ParseNode`).
 
 ```ts
 // ll1.ts
@@ -943,7 +946,9 @@ function ll1Parse(
 	diagnostics: Diagnostic[];
 };
 const DEFAULT_PARSE_STEPS = 20_000; // rows, for ll1Parse and lrParse
-const PARSE_STACK_BUDGET = 4_000_000; // stack entries kept by all the rows of a run
+const PARSE_STACK_BUDGET = 4_000_000; // stack entries (and copied tree paths) kept by all the rows of a run
+const MAX_TREE_DEPTH = 500; // levels of the deepest tree a driver builds; deeper: outcome 'limit'
+const TREE_DEPTH_TEXT = 'stopped: the parse tree would be more than 500 levels deep'; // that row's text
 function endInput(
 	g: Grammar,
 	tokens: readonly string[]
@@ -989,14 +994,19 @@ interface LrClosureStep {
 	index: number;
 	added: boolean;
 }
+interface LrClosureOptions {
+	closureOrder?: readonly number[]; // production ids Closure takes first, in this order; the rest in grammar order
+}
 function lrClosure(
 	aug: Augmented,
-	items: readonly LrItem[]
+	items: readonly LrItem[],
+	opts?: LrClosureOptions
 ): { items: LrItem[]; steps: LrClosureStep[] };
 function lrTransition(
 	aug: Augmented,
 	state: readonly LrItem[],
-	y: string
+	y: string,
+	opts?: LrClosureOptions
 ): { moved: { from: number; item: LrItem }[]; items: LrItem[]; steps: LrClosureStep[] };
 interface LrState {
 	id: number;
@@ -1037,8 +1047,12 @@ interface LrAutomaton {
 	diagnostics: Diagnostic[];
 }
 const DEFAULT_MAX_STATES = 5000;
-function lr1Automaton(g: Grammar, opts?: { trace?: boolean; maxStates?: number }): LrAutomaton;
-function lr0Automaton(g: Grammar, opts?: { trace?: boolean; maxStates?: number }): LrAutomaton;
+interface LrAutomatonOptions extends LrClosureOptions {
+	trace?: boolean; // default true
+	maxStates?: number; // default DEFAULT_MAX_STATES
+}
+function lr1Automaton(g: Grammar, opts?: LrAutomatonOptions): LrAutomaton;
+function lr0Automaton(g: Grammar, opts?: LrAutomatonOptions): LrAutomaton;
 function lalr1Automaton(lr1: LrAutomaton): LrAutomaton;
 function reduceLabel(aug: Augmented, reduce: LrState['reduces'][number]): string; // E → int on $, +
 
@@ -1072,7 +1086,7 @@ interface LrConflict {
 	kind: 'shift/reduce' | 'reduce/reduce';
 	items: [LrItem, LrItem]; // [X → α•aβ, b] and [Y → γ•, a]; [X → α•, a] and [Y → β•, a]
 	actions: [LrAction, LrAction];
-	resolution: { action: LrAction; by: 'precedence' | 'default'; reason: string };
+	resolution: { action: LrAction; by: 'precedence' | 'default'; reason: string }; // action: what wins between the two
 }
 type LrMethod = 'lr0' | 'slr1' | 'lr1';
 interface LrTable {
@@ -1189,7 +1203,8 @@ function grammarClasses(
   are a blank entry (`[E,*] is blank`) or a terminal that does not match
   (`Mismatch: $ is not )`). With multiply-defined entries the first
   production is used (with a warning); only then can a run loop, and it stops
-  with outcome `'limit'`.
+  with outcome `'limit'` (a left-recursive production stops at
+  `MAX_TREE_DEPTH`).
 - **Augmenting and numbering (Bottom-up Parsing III, slides 7–14).** The start
   production is always added, named S unless the grammar uses S (then S’,
   S’’, …), and given the id after the grammar's last production, so every
@@ -1204,9 +1219,14 @@ function grammarClasses(
   the order it added them (each item is extended once; a second pass would
   add nothing). `mergeItems` keeps the first appearance of each core and puts
   `$` first among the lookaheads, then the order of appearance, which gives
-  the slides' `$/+` and `)/+`. `E → E + ( E ) | int` gives slide 11's order
-  exactly (`S → •E, $ ; E → •E + ( E ), $/+ ; E → •int, $/+`); with
-  `E → int | E + ( E )` the int items come first, as on slide 9.
+  the slides' `$/+` and `)/+`. Closure takes a non-terminal's productions in
+  grammar order unless `closureOrder` lists production ids to take first.
+  `E → E + ( E ) | int` gives slide 11's order exactly
+  (`S → •E, $ ; E → •E + ( E ), $/+ ; E → •int, $/+`, and the five items in
+  full) and the item lists of slide 14. Bottom-up Parsing III writes its
+  grammar `E → int | E + ( E )` (slide 4): in grammar order the int items come
+  first, as on slide 9, and `closureOrder: [1, 0]` gives the lists of slides 11
+  and 14 from it, with the same states, edges and production ids.
 - **Conflicts and precedence (slides 16–23).** A cell with a shift and a
   reduce, or two reduces, is a conflict, recorded with the two items (the
   shift item with the conflict's terminal as lookahead when there is one, as
@@ -1216,8 +1236,16 @@ function grammarClasses(
   as unresolved: bison's default), when the terminal is higher, or when they
   are equal and `%right`; a reduce when the rule is higher or they are equal
   and `%left`; an error entry when they are equal and `%nonassoc`. A
-  reduce/reduce conflict is reported and the earlier rule wins. The table
-  holds what won, so `lrParse` behaves as bison's parser:
+  reduce/reduce conflict is reported and the earlier rule wins. An entry with
+  a shift and several reduces is settled as bison settles it: the
+  declarations first, rule by rule (a reduce that wins removes the shift for
+  the later rules; `%nonassoc` makes the entry an error whatever else is in
+  it), then what is left is reported, once against the shift and once per
+  further rule against the earliest. `conflicts` and `unresolved` therefore
+  count what bison reports (`S → A x | B x | c x x ; A → c ; B → c`: 1
+  shift/reduce and 1 reduce/reduce conflict on x), and a resolution's
+  `action` is what wins between its two actions. The table holds what won
+  overall, so `lrParse` behaves as bison's parser:
   `E → E + E | E * E | int` with `%left +` then `%left *` parses
   `int + int * int` as `E( E(int) + E( E(int) * E(int) ) )`.
 - **The LR driver (Bottom-up Parsing II, slides 20–21).** Rows record the
@@ -1225,12 +1253,20 @@ function grammarClasses(
   the forest of subtrees on the stack after the step; trees and stack pairs
   are shared between rows. `shiftReduceRows` gives the I-divider view of
   slides 4–14, `collapseShifts` merges consecutive shifts (`shift 3 times`),
-  and `printConfiguration` writes a row as on slide 14. Both drivers stop with
-  outcome `'limit'` after `maxSteps` rows or when their rows hold
-  `PARSE_STACK_BUDGET` stack entries in all (each row keeps its stack, so the
-  memory of a run grows with steps times depth: lrParse takes a thousand
-  nested parentheses). With a conflict-free table only the LR(0) table of a
-  grammar with a non-terminal that derives nothing can get there.
+  and `printConfiguration` writes a row as on slide 14.
+- **Limits of the drivers.** Both drivers stop with outcome `'limit'` after
+  `maxSteps` rows, when their rows hold `PARSE_STACK_BUDGET` stack entries in
+  all (each row keeps its stack, so the memory of a run grows with steps
+  times depth), or before a step that would make a tree deeper than
+  `MAX_TREE_DEPTH` levels; the last row says why (`stopped after 5 steps`,
+  `TREE_DEPTH_TEXT`). Every tree in their results (rows, forests, the final
+  tree) is at most `MAX_TREE_DEPTH` levels deep, so a result survives the
+  structured clone of a worker. They accept a sentence whose tree fits: a
+  list of up to 499 items (`S → id S | ε`; for lrParse also `S → S id | ε`),
+  165 nested parentheses in `E → E + T | T ; T → T * F | F ; F → int | ( E )`
+  (and in its left-factored form for ll1Parse). With a
+  conflict-free table only a long input, or the LR(0) table of a grammar with
+  a non-terminal that derives nothing, gets to a limit.
 - **Handles (Bottom-Up Parsing, slides 4–11).** From the reductions of an
   accepted LR parse, or from a tree's rightmost derivation reversed; each
   form but the last has the handle that the next reduction replaces, and

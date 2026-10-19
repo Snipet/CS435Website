@@ -163,6 +163,34 @@ export interface LrClosureStep {
 	added: boolean;
 }
 
+/**
+ * Options of Closure and of the automata built with it. `closureOrder`: the
+ * order in which Closure adds the productions Y → γ of a non-terminal, as
+ * production ids; the ids listed come first, in that order, and the others
+ * follow in grammar order (the default). Ids that are not productions of the
+ * grammar are ignored. Bottom-up Parsing III writes its grammar E → int first
+ * (slide 4) but lists E → •E + ( E ) before E → •int on slides 11 and 14;
+ * with `closureOrder: [1, 0]` that grammar gives the items of those slides.
+ */
+export interface LrClosureOptions {
+	closureOrder?: readonly number[];
+}
+
+/** The grammar's productions in the order Closure adds them. */
+function closureProductions(g: Grammar, closureOrder?: readonly number[]): Production[] {
+	if (!closureOrder || closureOrder.length === 0) return g.productions;
+	const out: Production[] = [];
+	const listed = new Set<number>();
+	for (const id of closureOrder) {
+		const p = g.productions[id];
+		if (p === undefined || p.id !== id || listed.has(id)) continue;
+		listed.add(id);
+		out.push(p);
+	}
+	for (const p of g.productions) if (!listed.has(p.id)) out.push(p);
+	return out;
+}
+
 /** What Closure and Transition need to know about the grammar. */
 interface Context {
 	aug: Augmented;
@@ -174,10 +202,10 @@ interface Context {
 	rest: Map<string, { terminals: string[]; nullable: boolean }>;
 }
 
-function contextOf(aug: Augmented): Context {
+function contextOf(aug: Augmented, opts?: LrClosureOptions): Context {
 	const g = aug.grammar;
 	const byLhs = new Map<string, Production[]>(g.nonterminals.map((n) => [n, []]));
-	for (const p of g.productions) byLhs.get(p.lhs)?.push(p);
+	for (const p of closureProductions(g, opts?.closureOrder)) byLhs.get(p.lhs)?.push(p);
 	return {
 		aug,
 		isNonterminal: new Set(g.nonterminals),
@@ -269,14 +297,17 @@ function checkItems(aug: Augmented, items: readonly LrItem[]): void {
  * Closure(Items) (Bottom-up Parsing III, slide 10): for each [X → α•Yβ, a]
  * in Items, for each production Y → γ, for each b ∈ First(βa), add
  * [Y → •γ, b], until Items is unchanged. Items come out in the order they
- * were added (the order of slides 9 and 11), with a step per add.
+ * were added (the order of slides 9 and 11), with a step per add. The
+ * productions Y → γ are taken in grammar order unless `closureOrder` says
+ * otherwise (LrClosureOptions).
  */
 export function lrClosure(
 	aug: Augmented,
-	items: readonly LrItem[]
+	items: readonly LrItem[],
+	opts?: LrClosureOptions
 ): { items: LrItem[]; steps: LrClosureStep[] } {
 	checkItems(aug, items);
-	return close(contextOf(aug), items, true);
+	return close(contextOf(aug, opts), items, true);
 }
 
 /** One item of Transition: [X → α•yβ, b] at `from` in the state gives [X → αy•β, b]. */
@@ -302,12 +333,13 @@ function moves(aug: Augmented, state: readonly LrItem[], y: string): LrMove[] {
 export function lrTransition(
 	aug: Augmented,
 	state: readonly LrItem[],
-	y: string
+	y: string,
+	opts?: LrClosureOptions
 ): { moved: LrMove[]; items: LrItem[]; steps: LrClosureStep[] } {
 	checkItems(aug, state);
 	const moved = moves(aug, state, y);
 	const { items, steps } = close(
-		contextOf(aug),
+		contextOf(aug, opts),
 		moved.map((m) => m.item),
 		true
 	);
@@ -379,6 +411,14 @@ export interface LrAutomaton {
 /** Default limit on the number of states of lr0Automaton and lr1Automaton. */
 export const DEFAULT_MAX_STATES = 5000;
 
+/** Options of lr1Automaton and lr0Automaton. */
+export interface LrAutomatonOptions extends LrClosureOptions {
+	/** Record every Closure and Transition step (default true). */
+	trace?: boolean;
+	/** Stop making states at this many (default DEFAULT_MAX_STATES). */
+	maxStates?: number;
+}
+
 function labels(aug: Augmented, items: readonly LrItem[]): Pick<LrState, 'reduces' | 'accept'> {
 	const order: number[] = [];
 	const lookaheads = new Map<number, string[]>();
@@ -418,13 +458,9 @@ function reservedWarnings(g: Grammar): Diagnostic[] {
 
 const kernelKey = (items: readonly LrItem[]): string => JSON.stringify(items.map(itemKey).sort());
 
-function build(
-	g: Grammar,
-	kind: 'lr0' | 'lr1',
-	opts?: { trace?: boolean; maxStates?: number }
-): LrAutomaton {
+function build(g: Grammar, kind: 'lr0' | 'lr1', opts?: LrAutomatonOptions): LrAutomaton {
 	const aug = augment(g);
-	const ctx = contextOf(aug);
+	const ctx = contextOf(aug, opts);
 	const trace = opts?.trace ?? true;
 	const maxStates = Math.max(1, Math.floor(opts?.maxStates ?? DEFAULT_MAX_STATES));
 	const states: LrState[] = [];
@@ -511,12 +547,11 @@ function build(
  *
  * `trace` (default true) records every Closure and Transition step;
  * `maxStates` (default DEFAULT_MAX_STATES) bounds the construction, which
- * can grow quickly for large grammars.
+ * can grow quickly for large grammars; `closureOrder` changes the order of
+ * the items Closure adds (LrClosureOptions), and with it the order of the
+ * transitions that follow from it.
  */
-export function lr1Automaton(
-	g: Grammar,
-	opts?: { trace?: boolean; maxStates?: number }
-): LrAutomaton {
+export function lr1Automaton(g: Grammar, opts?: LrAutomatonOptions): LrAutomaton {
 	return build(g, 'lr1', opts);
 }
 
@@ -525,10 +560,7 @@ export function lr1Automaton(
  * Not in the decks, which only name LR(0) (Bottom-up Parsing III, slide 26);
  * used for the LR(0) and SLR(1) tables of grammarClasses.
  */
-export function lr0Automaton(
-	g: Grammar,
-	opts?: { trace?: boolean; maxStates?: number }
-): LrAutomaton {
+export function lr0Automaton(g: Grammar, opts?: LrAutomatonOptions): LrAutomaton {
 	return build(g, 'lr0', opts);
 }
 

@@ -569,7 +569,10 @@ export type LL1Action =
 	| { kind: 'blank'; nonterminal: string; terminal: string }
 	/** The terminal on top is not the next token. */
 	| { kind: 'mismatch'; expected: string; found: string }
-	/** The step limit was reached (only a grammar that is not LL(1) can loop). */
+	/**
+	 * The run stopped at maxSteps, PARSE_STACK_BUDGET or MAX_TREE_DEPTH (only a
+	 * grammar that is not LL(1) can loop; a very long input can get there too).
+	 */
 	| { kind: 'limit' };
 
 export interface LL1Row {
@@ -579,7 +582,10 @@ export interface LL1Row {
 	input: string[];
 	/** What is done to this row's stack and input. */
 	action: LL1Action;
-	/** The Action column: the right-hand side pushed ("T X", "ε"), "terminal", "ACCEPT", or the error. */
+	/**
+	 * The Action column: the right-hand side pushed ("T X", "ε"), "terminal", "ACCEPT", the
+	 * error, or why the run stopped ("stopped after 5 steps", TREE_DEPTH_TEXT).
+	 */
 	text: string;
 	/** The parse tree for this row's stack: non-terminals still on the stack are unexpanded leaves. */
 	tree: ParseNode;
@@ -597,18 +603,38 @@ export interface LL1Parse {
 	diagnostics: Diagnostic[];
 }
 
-/** Default step limit of ll1Parse and lrParse. */
+/**
+ * Default step limit of ll1Parse and lrParse. The two other limits,
+ * MAX_TREE_DEPTH and PARSE_STACK_BUDGET, are what bound long inputs: a run
+ * accepts a sentence when its parse tree is at most MAX_TREE_DEPTH levels
+ * deep, so a list of up to about 500 items (S → id S | ε takes 499 ids) or a
+ * few hundred nested parentheses (165 in E → E + T | T ; T → T * F | F ;
+ * F → int | ( E )); a longer one stops with outcome 'limit'.
+ */
 export const DEFAULT_PARSE_STEPS = 20_000;
 
 /**
  * ll1Parse and lrParse also stop (outcome 'limit') once their rows hold this
- * many stack entries in all. Each row keeps its own stack (an array of shared
- * entries), so a run's memory grows with its steps times its stack depth:
- * enough for hundreds of levels of nesting (a thousand nested parentheses
- * for lrParse), and a run whose stack keeps growing stops long before it
- * fills memory.
+ * many stack entries in all (for ll1Parse, together with the tree nodes each
+ * row copies). Each row keeps its own stack (an array of shared entries), so
+ * a run's memory grows with its steps times its stack depth, and a run whose
+ * stack keeps growing stops long before it fills memory.
  */
 export const PARSE_STACK_BUDGET = 4_000_000;
+
+/**
+ * The deepest parse tree ll1Parse and lrParse build, in levels (the root is
+ * level 1). A structured clone, which carries a result out of a worker
+ * (docs/ARCHITECTURE.md §5.4), copies nested objects recursively, and
+ * Chrome's workers run out of stack at about 900 levels of ParseNode; every
+ * tree in the drivers' results is at most this deep, so the results survive
+ * the clone. A run whose tree would grow deeper stops with outcome 'limit'
+ * (a left-recursive production chosen for ever, or a very long input).
+ */
+export const MAX_TREE_DEPTH = 500;
+
+/** The text of the row where a driver stops at MAX_TREE_DEPTH. */
+export const TREE_DEPTH_TEXT = `stopped: the parse tree would be more than ${MAX_TREE_DEPTH} levels deep`;
 
 /**
  * Runs the LL(1) algorithm of Table-based Predictive Parsing, slide 11, on
@@ -619,10 +645,11 @@ export const PARSE_STACK_BUDGET = 4_000_000;
  * input are both `$`.
  *
  * When the table has multiply-defined entries the parser takes the first
- * production of the entry (with a warning), and stops with outcome 'limit'
- * after `maxSteps` rows (default DEFAULT_PARSE_STEPS) or PARSE_STACK_BUDGET
- * stack entries, which only a grammar that is not LL(1) can reach (a
- * left-recursive production chosen for ever).
+ * production of the entry (with a warning). A run stops with outcome 'limit'
+ * after `maxSteps` rows (default DEFAULT_PARSE_STEPS), at PARSE_STACK_BUDGET,
+ * or before an expansion that would make the tree deeper than
+ * MAX_TREE_DEPTH: a left-recursive production chosen for ever (only a grammar
+ * that is not LL(1) can loop) or a very long input.
  */
 export function ll1Parse(
 	table: LL1Table,
@@ -650,10 +677,12 @@ export function ll1Parse(
 	];
 	const rows: LL1Row[] = [];
 	let j = 0;
+	// What the rows keep: each its stack, its focus path and the path of nodes it copies.
 	let cells = 0;
+	const cost = (): number => stack.length + (stack[stack.length - 1].path?.length ?? 0);
 	const row = (action: LL1Action, text: string, cell: LL1Row['cell'] = null): void => {
 		const top = stack[stack.length - 1];
-		cells += stack.length;
+		cells += cost();
 		rows.push({
 			stack: stack.map((e) => e.symbol).reverse(),
 			input: input.slice(j),
@@ -665,7 +694,7 @@ export function ll1Parse(
 		});
 	};
 	for (;;) {
-		if (rows.length === maxSteps - 1 || cells + stack.length > PARSE_STACK_BUDGET) {
+		if (rows.length === maxSteps - 1 || cells + cost() > PARSE_STACK_BUDGET) {
 			row({ kind: 'limit' }, `stopped after ${rows.length} steps`);
 			return { rows, outcome: 'limit', tree: null, diagnostics };
 		}
@@ -697,7 +726,13 @@ export function ll1Parse(
 				return { rows, outcome: 'error', tree: null, diagnostics };
 			}
 			const p = g.productions[productions[0]];
+			// The node on top is at level path + 1; its children would be one level below.
+			if (p.rhs.length > 0 && top.path.length + 2 > MAX_TREE_DEPTH) {
+				row({ kind: 'limit' }, TREE_DEPTH_TEXT);
+				return { rows, outcome: 'limit', tree: null, diagnostics };
+			}
 			row({ kind: 'expand', production: p.id }, printSymbols(p.rhs), cell);
+			cells += p.rhs.length * (top.path.length + 1);
 			tree = replaceAt(tree, top.path, (node) => ({
 				...node,
 				production: p.id,

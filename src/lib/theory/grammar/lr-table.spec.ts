@@ -235,6 +235,85 @@ describe('lrTable', () => {
 		expect(tableOf(ID_SEQUENCE_FIXED).conflicts).toEqual([]);
 	});
 
+	describe('an entry with a shift and two reduces, settled as bison settles it', () => {
+		// After c, x can be shifted (S → c x x) or reduced by A → c or by B → c.
+		const TWO_REDUCES = 'S → A x | B x | c x x\nA → c\nB → c';
+		const x = (t: LrTable) => t.action[1][t.terminals.indexOf('x')];
+
+		it('reports the reduce/reduce conflict too (Bottom-up Parsing III, slide 23)', () => {
+			const t = tableOf(TWO_REDUCES);
+			expect(t.conflicts.map((c) => describeConflict(t, c))).toEqual([
+				'1 on x: shift/reduce [S → c •x x, $] and [A → c•, x] → shift 5',
+				'1 on x: reduce/reduce [A → c•, x] and [B → c•, x] → reduce A → c'
+			]);
+			// bison: 1 shift/reduce, 1 reduce/reduce.
+			expect(t.unresolved).toBe(2);
+			expect(x(t)).toEqual({ kind: 'shift', state: 5 });
+			expect(parsed(t, 'c x x')).toBe('S(c x x)');
+			expect(parsed(t, 'c x')).toBe('error');
+		});
+
+		it('drops both reduces when the shift wins over each', () => {
+			const t = tableOf(TWO_REDUCES, [
+				{ assoc: 'left', terminals: ['c'] },
+				{ assoc: 'left', terminals: ['x'] }
+			]);
+			expect(t.conflicts.map((c) => [describeConflict(t, c), c.resolution.by])).toEqual([
+				['1 on x: shift/reduce [S → c •x x, $] and [A → c•, x] → shift 5', 'precedence'],
+				['1 on x: shift/reduce [S → c •x x, $] and [B → c•, x] → shift 5', 'precedence']
+			]);
+			expect(t.unresolved).toBe(0);
+			expect(x(t)).toEqual({ kind: 'shift', state: 5 });
+		});
+
+		it('keeps the reduce/reduce conflict when a reduce wins over the shift', () => {
+			const t = tableOf(TWO_REDUCES, [
+				{ assoc: 'left', terminals: ['x'] },
+				{ assoc: 'left', terminals: ['c'] }
+			]);
+			expect(t.conflicts.map((c) => [describeConflict(t, c), c.resolution.by])).toEqual([
+				['1 on x: shift/reduce [S → c •x x, $] and [A → c•, x] → reduce A → c', 'precedence'],
+				['1 on x: reduce/reduce [A → c•, x] and [B → c•, x] → reduce A → c', 'default']
+			]);
+			expect(t.unresolved).toBe(1);
+			expect(x(t)).toEqual({ kind: 'reduce', production: 3 });
+			expect(parsed(t, 'c x')).toBe('S( A(c) x )');
+		});
+
+		it('applies the declarations before the defaults', () => {
+			// D → ε has no precedence and comes first; A → c wins over the shift by precedence, so the
+			// shift is gone and D → ε, the earlier rule, is what the entry holds (as in bison).
+			const t = tableOf('S → A x | B x | c x x\nB → c D\nD → ε\nA → c', [
+				{ assoc: 'left', terminals: ['x'] },
+				{ assoc: 'left', terminals: ['c'] }
+			]);
+			expect(t.conflicts.map((c) => [describeConflict(t, c), c.resolution.by])).toEqual([
+				['1 on x: shift/reduce [S → c •x x, $] and [A → c•, x] → reduce A → c', 'precedence'],
+				['1 on x: reduce/reduce [D → •, x] and [A → c•, x] → reduce D → ε', 'default']
+			]);
+			expect(t.unresolved).toBe(1);
+			expect(x(t)).toEqual({ kind: 'reduce', production: 4 });
+		});
+
+		it('keeps the error entry of %nonassoc over a second reduce', () => {
+			// After E < E, < can be shifted or reduced by E → E < E or by B → E < E.
+			const t = tableOf('E → E < E | B | int\nB → E < E', [
+				{ assoc: 'nonassoc', terminals: ['<'] }
+			]);
+			const less = t.terminals.indexOf('<');
+			const state = t.conflicts.find((c) => c.terminal === '<')!.state;
+			expect(t.conflicts.map((c) => describeConflict(t, c))).toEqual([
+				`${state} on <: shift/reduce [E → E •< E, <] and [E → E < E•, <] → error`,
+				`${state} on $: reduce/reduce [E → E < E•, $] and [B → E < E•, $] → reduce E → E < E`
+			]);
+			expect(t.action[state][less]).toEqual({ kind: 'error' });
+			expect(t.unresolved).toBe(1);
+			const run = lrParse(t, input(t.augmented.grammar, 'int < int < int'));
+			expect(run.outcome).toBe('error');
+			expect(run.rows.at(-1)!.text).toBe(`error: action[${state}, <] is an error entry`);
+		});
+	});
+
 	it('builds LR(0) and SLR(1) tables on the LR(0) automaton', () => {
 		const a = lr0Automaton(grammar(LEFT_FACTORED));
 		const lr0 = lrTable(a);

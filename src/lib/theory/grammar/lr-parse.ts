@@ -13,7 +13,13 @@
  * stack, which share their parts with the rows before.
  */
 import type { Diagnostic } from '../diagnostics';
-import { DEFAULT_PARSE_STEPS, PARSE_STACK_BUDGET, endInput } from './ll1';
+import {
+	DEFAULT_PARSE_STEPS,
+	MAX_TREE_DEPTH,
+	PARSE_STACK_BUDGET,
+	TREE_DEPTH_TEXT,
+	endInput
+} from './ll1';
 import { printProduction } from './lr';
 import type { LrAction, LrTable } from './lr-table';
 import { printSymbols } from './parse';
@@ -45,7 +51,10 @@ export interface LrParseRow {
 	pushed: LrStackEntry | null;
 	/** The subtrees of the stack's symbols after the action, bottom first. */
 	forest: ParseNode[];
-	/** "shift 1", "reduce E → int", "accept", "error: action[3, int] is blank". */
+	/**
+	 * "shift 1", "reduce E → int", "accept", "error: action[3, int] is blank", or why
+	 * the run stopped ("stopped after 5 steps", TREE_DEPTH_TEXT).
+	 */
 	text: string;
 }
 
@@ -65,10 +74,11 @@ export interface LrParse {
  * table on `tokens` (without or with the closing `$`). A table with
  * conflicts holds the action each conflict was resolved to, so the parser
  * does what bison's would. Stops with outcome 'limit' after `maxSteps` rows
- * (default DEFAULT_PARSE_STEPS) or PARSE_STACK_BUDGET stack entries. A table
- * without conflicts gets there only when it reduces without lookaheads: the
- * LR(0) table of a grammar with a non-terminal that derives nothing
- * (S → A S b ; A → ε) reduces A → ε for ever.
+ * (default DEFAULT_PARSE_STEPS), at PARSE_STACK_BUDGET stack entries, or
+ * before a reduction that would make a tree deeper than MAX_TREE_DEPTH (a
+ * very long input). A table without conflicts loops only when it reduces
+ * without lookaheads: the LR(0) table of a grammar with a non-terminal that
+ * derives nothing (S → A S b ; A → ε) reduces A → ε for ever.
  */
 export function lrParse(
 	table: LrTable,
@@ -83,9 +93,9 @@ export function lrParse(
 	const maxSteps = Math.max(1, Math.floor(opts?.maxSteps ?? DEFAULT_PARSE_STEPS));
 	const columnOf = new Map(table.terminals.map((t, i) => [t, i]));
 	const gotoColumnOf = new Map(table.nonterminals.map((n, i) => [n, i]));
-	// A pair is made once and shared by every row whose stack holds it.
-	const stack: { pair: LrStackEntry; tree: ParseNode | null }[] = [
-		{ pair: { symbol: null, state: 0 }, tree: null }
+	// A pair is made once and shared by every row whose stack holds it. `depth`: the tree's levels.
+	const stack: { pair: LrStackEntry; tree: ParseNode | null; depth: number }[] = [
+		{ pair: { symbol: null, state: 0 }, tree: null, depth: 0 }
 	];
 	const rows: LrParseRow[] = [];
 	const pairs = (): LrStackEntry[] => stack.map((e) => e.pair);
@@ -138,13 +148,21 @@ export function lrParse(
 			const pushed = { symbol: t, state: action.state };
 			stack.push({
 				pair: pushed,
-				tree: { symbol: t, terminal: true, children: [], start: j, end: j + 1 }
+				tree: { symbol: t, terminal: true, children: [], start: j, end: j + 1 },
+				depth: 1
 			});
 			j++;
 			row(action, `shift ${action.state}`, { pushed });
 			continue;
 		}
 		const p = aug.productions[action.production];
+		let depth = 1;
+		for (let k = stack.length - p.rhs.length; k < stack.length; k++)
+			depth = Math.max(depth, stack[k].depth + 1);
+		if (depth > MAX_TREE_DEPTH) {
+			row(null, TREE_DEPTH_TEXT);
+			return { grammar: g, input, rows, outcome: 'limit', tree: null, diagnostics };
+		}
 		const popped = stack.splice(stack.length - p.rhs.length);
 		const below = stack[stack.length - 1].pair.state;
 		const gc = gotoColumnOf.get(p.lhs);
@@ -170,7 +188,8 @@ export function lrParse(
 				production: p.id,
 				start: children[0]?.start ?? j,
 				end: children[children.length - 1]?.end ?? j
-			}
+			},
+			depth
 		});
 		row(action, `reduce ${printProduction(p)}`, { popped: poppedPairs, goto, pushed });
 	}

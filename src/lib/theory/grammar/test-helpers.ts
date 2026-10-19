@@ -2,7 +2,7 @@
 import { bracketForm } from './derive';
 import { parseTrees } from './earley';
 import { makeGrammar, parseEbnf, parseGrammar, tokenizeInput } from './parse';
-import type { EbnfGrammar, Grammar } from './types';
+import type { EbnfGrammar, Grammar, ParseNode } from './types';
 
 /** Parses grammar text that must be free of errors. */
 export function grammar(text: string): Grammar {
@@ -88,6 +88,18 @@ export const DANGLING_ELSE_S = 'S → if E then S | if E then S else S | OTHER\n
 export const ID_SEQUENCE = 'S → ε | id | id S';
 /** Bottom-up Parsing III, slide 25: the rewrite. */
 export const ID_SEQUENCE_FIXED = 'S → ε | id S';
+
+/** The levels of a tree (the root alone is 1), without recursion. */
+export function treeDepth(root: ParseNode): number {
+	let depth = 0;
+	const open: [ParseNode, number][] = [[root, 1]];
+	while (open.length > 0) {
+		const [node, level] = open.pop()!;
+		depth = Math.max(depth, level);
+		for (const child of node.children) open.push([child, level + 1]);
+	}
+	return depth;
+}
 
 /** A small deterministic pseudo-random generator (mulberry32). */
 export function random(seed: number): () => number {

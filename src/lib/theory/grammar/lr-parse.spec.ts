@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { unproductive } from './analyze';
 import { bracketForm, treeEquals } from './derive';
 import { parseTrees, recognizes } from './earley';
-import { DEFAULT_PARSE_STEPS, PARSE_STACK_BUDGET } from './ll1';
+import { DEFAULT_PARSE_STEPS, MAX_TREE_DEPTH, PARSE_STACK_BUDGET, TREE_DEPTH_TEXT } from './ll1';
 import { lalr1Automaton, lr0Automaton, lr1Automaton, type LrAutomaton } from './lr';
 import {
 	STACK_BOTTOM,
@@ -26,7 +26,8 @@ import {
 	input,
 	random,
 	randomGrammar,
-	randomTokens
+	randomTokens,
+	treeDepth
 } from './test-helpers';
 import type { Grammar } from './types';
 
@@ -122,15 +123,46 @@ describe('lrParse', () => {
 		expect(parse.rows[8].forest[0]).toBe(parse.rows[7].forest[0]);
 	});
 
-	it('parses a thousand nested parentheses, sharing stack pairs between rows', () => {
+	it('parses nested parentheses up to the tree depth limit, sharing stack pairs between rows', () => {
 		const h = grammar(CASCADE);
 		const t = lrTable(lr1Automaton(h));
-		const tokens = [...Array(1000).fill('('), 'int', ...Array(1000).fill(')')];
-		const deep = lrParse(t, tokens);
+		const parens = (k: number) => [...Array(k).fill('('), 'int', ...Array(k).fill(')')];
+		// Three levels per pair of parentheses (E, T, F), four for E(T(F(int))).
+		const deep = lrParse(t, parens(165));
 		expect(deep.outcome).toBe('accept');
-		expect(deep.tree).toMatchObject({ start: 0, end: 2001 });
+		expect(deep.tree).toMatchObject({ start: 0, end: 331 });
+		expect(treeDepth(deep.tree!)).toBe(3 * 165 + 4);
 		expect(deep.rows[2].stack[0]).toBe(deep.rows[1].stack[0]);
 		expect(deep.rows[5].stack[3]).toBe(deep.rows[4].stack[3]);
+		expect(structuredClone(deep).tree).toEqual(deep.tree);
+		const over = lrParse(t, parens(1000));
+		expect(over.outcome).toBe('limit');
+		expect(over.tree).toBeNull();
+		expect(over.rows.at(-1)).toMatchObject({ action: null, text: TREE_DEPTH_TEXT });
+		expect(shiftReduceRows(over).at(-1)).toMatchObject({ action: 'limit', text: 'stopped' });
+		expect(over.rows.every((r) => r.forest.every((f) => treeDepth(f) <= MAX_TREE_DEPTH))).toBe(
+			true
+		);
+		expect(() => structuredClone(over)).not.toThrow();
+	});
+
+	it('takes a list up to the tree depth limit, and its results clone', () => {
+		// S → id S | ε shifts every id before it reduces: the tree grows only at the end.
+		const t = lrTable(lr1Automaton(grammar(ID_SEQUENCE_FIXED)));
+		const longest = lrParse(t, Array(MAX_TREE_DEPTH - 1).fill('id'));
+		expect(longest.outcome).toBe('accept');
+		expect(treeDepth(longest.tree!)).toBe(MAX_TREE_DEPTH);
+		expect(structuredClone(longest).tree).toEqual(longest.tree);
+		const long = lrParse(t, Array(2000).fill('id'));
+		expect(long.outcome).toBe('limit');
+		expect(long.rows.at(-1)!.text).toBe(TREE_DEPTH_TEXT);
+		// 2000 shifts, then reductions until the tree would have 501 levels.
+		expect(long.rows).toHaveLength(2000 + MAX_TREE_DEPTH + 1);
+		expect(() => structuredClone(long)).not.toThrow();
+		// A left-recursive list keeps the stack short; the tree still grows a level per item.
+		const left = lrTable(lr1Automaton(grammar('S → S id | ε')));
+		expect(lrParse(left, Array(MAX_TREE_DEPTH - 1).fill('id')).outcome).toBe('accept');
+		expect(lrParse(left, Array(MAX_TREE_DEPTH).fill('id')).outcome).toBe('limit');
 	});
 
 	it('visits states 8–11 on nested parentheses', () => {

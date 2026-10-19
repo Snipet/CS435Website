@@ -98,7 +98,12 @@ export type LrAction =
 	| { kind: 'error' };
 
 export interface LrResolution {
-	/** What the table holds: the shift, the reduce, or an error entry (%nonassoc). */
+	/**
+	 * The action that wins between the two: the shift, the reduce (the earlier rule
+	 * of a reduce/reduce conflict), or an error entry (%nonassoc). The table entry
+	 * is what wins all of its conflicts: an error entry, else the shift if it is
+	 * left, else the earliest reduce left.
+	 */
 	action: LrAction;
 	/**
 	 * 'precedence': the declarations settle it. 'default': nothing settles it,
@@ -140,7 +145,7 @@ export interface LrTable {
 	goto: (number | null)[][];
 	/** Every conflict, by state, then column. */
 	conflicts: LrConflict[];
-	/** Conflicts that no declaration settled: the ones bison reports. */
+	/** Conflicts that no declaration settled: the ones bison reports (its N shift/reduce, M reduce/reduce). */
 	unresolved: number;
 	diagnostics: Diagnostic[];
 }
@@ -164,6 +169,16 @@ interface Candidate {
  * the rule is higher, or they are equal and %left; equal and %nonassoc make
  * the entry an error. A reduce/reduce conflict is reported and the earlier
  * rule wins (accept counts as the earliest).
+ *
+ * An entry with a shift and several reduces is settled as bison settles it.
+ * The declarations are applied first, rule by rule: a reduce that loses to the
+ * shift leaves the entry; one that wins removes the shift, and the later rules
+ * no longer meet it; %nonassoc removes both and the entry is an error whatever
+ * else is in it. The reduces left are then reported against the shift (one
+ * shift/reduce conflict, with the earliest of them) and against the earliest
+ * of them (one reduce/reduce conflict each), so `unresolved` counts what
+ * bison reports: `S → A x | B x | c x x ; A → c ; B → c` has 1 shift/reduce
+ * and 1 reduce/reduce conflict on x, and the entry shifts.
  */
 export function lrTable(
 	a: LrAutomaton,
@@ -274,7 +289,7 @@ export function lrTable(
 		}
 		const row: (LrAction | null)[] = terminals.map(() => null);
 		for (const t of terminals) {
-			let shift = shifts.get(t) ?? null;
+			const shift = shifts.get(t) ?? null;
 			// Accept first: it is the start rule, which bison numbers first.
 			const list = (reduces.get(t) ?? []).sort((x, y) =>
 				x.action.kind === 'accept'
@@ -283,50 +298,62 @@ export function lrTable(
 						? 1
 						: x.production - y.production
 			);
-			const removed = new Set<Candidate>();
+			const conflict = (
+				kind: LrConflict['kind'],
+				a: Candidate,
+				b: Candidate,
+				resolution: LrResolution
+			): void => {
+				conflicts.push({
+					state: state.id,
+					terminal: t,
+					kind,
+					items: [a.item, b.item],
+					actions: [a.action, b.action],
+					resolution
+				});
+			};
+			// As bison does: first the declarations settle, rule by rule, what they can between the
+			// shift and each reduce. A reduce that wins removes the shift (later rules no longer meet
+			// it); %nonassoc removes both and makes the entry an error.
+			let shifting = shift !== null;
 			let errorEntry = false;
+			const kept: Candidate[] = [];
 			for (const r of list) {
-				if (!shift) break;
-				const resolution = resolveShiftReduce(t, r.production);
-				const settled = resolution.action.kind === 'shift' ? shift.action : resolution.action;
-				conflicts.push({
-					state: state.id,
-					terminal: t,
-					kind: 'shift/reduce',
-					items: [shift.item, r.item],
-					actions: [shift.action, r.action],
-					resolution: { ...resolution, action: settled }
-				});
-				if (resolution.action.kind === 'shift') removed.add(r);
-				else {
-					shift = null;
-					if (resolution.action.kind === 'error') {
-						removed.add(r);
-						errorEntry = true;
-					}
+				const resolution = shift && shifting ? resolveShiftReduce(t, r.production) : null;
+				if (!shift || !resolution || resolution.by === 'default') {
+					kept.push(r);
+					continue;
 				}
-			}
-			const left = list.filter((r) => !removed.has(r));
-			for (const other of left.slice(1))
-				conflicts.push({
-					state: state.id,
-					terminal: t,
-					kind: 'reduce/reduce',
-					items: [left[0].item, other.item],
-					actions: [left[0].action, other.action],
-					resolution: {
-						action: left[0].action,
-						by: 'default',
-						reason: `${show(left[0].production)} is the earlier rule.`
-					}
+				const kind = resolution.action.kind;
+				conflict('shift/reduce', shift, r, {
+					...resolution,
+					action: kind === 'shift' ? shift.action : resolution.action
 				});
-			row[columnOf.get(t)!] = shift
-				? shift.action
-				: left.length > 0
-					? left[0].action
-					: errorEntry
-						? { kind: 'error' }
-						: null;
+				if (kind === 'shift') continue;
+				shifting = false;
+				if (kind === 'error') errorEntry = true;
+				else kept.push(r);
+			}
+			// What is left is reported, as bison counts it (one shift/reduce conflict per terminal, one
+			// reduce/reduce conflict per further rule), and settled by bison's defaults.
+			if (shift && shifting && kept.length > 0)
+				conflict('shift/reduce', shift, kept[0], {
+					...resolveShiftReduce(t, kept[0].production),
+					action: shift.action
+				});
+			for (const other of kept.slice(1))
+				conflict('reduce/reduce', kept[0], other, {
+					action: kept[0].action,
+					by: 'default',
+					reason: `${show(kept[0].production)} is the earlier rule.`
+				});
+			// bison's table: an error made by %nonassoc, else the shift, else the earliest reduce.
+			row[columnOf.get(t)!] = errorEntry
+				? { kind: 'error' }
+				: shift && shifting
+					? shift.action
+					: (kept[0]?.action ?? null);
 		}
 		action.push(row);
 		gotoTable.push(gotoRow);

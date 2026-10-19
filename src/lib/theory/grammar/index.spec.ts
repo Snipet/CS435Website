@@ -80,6 +80,10 @@ describe('grammar engine exports', () => {
 		expect(engine.DEFAULT_MAX_STEPS).toBe(10_000_000);
 		expect(engine.DEFAULT_PARSE_STEPS).toBe(20_000);
 		expect(engine.PARSE_STACK_BUDGET).toBe(4_000_000);
+		expect(engine.MAX_TREE_DEPTH).toBe(500);
+		expect(engine.TREE_DEPTH_TEXT).toBe(
+			'stopped: the parse tree would be more than 500 levels deep'
+		);
 		expect(engine.DEFAULT_MAX_STATES).toBe(5000);
 		expect(engine.ITEM_DOT).toBe('•');
 		expect(engine.STACK_BOTTOM).toBe('dummy');

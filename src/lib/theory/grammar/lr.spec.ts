@@ -148,6 +148,38 @@ describe('lrClosure', () => {
 		]);
 	});
 
+	it('takes the productions in closureOrder, then the others in grammar order', () => {
+		const aug = augment(deck15);
+		const seed: LrItem[] = [{ production: 2, dot: 0, lookahead: '$' }];
+		const slide11 = [
+			'S → •E, $',
+			'E → •E + ( E ), $',
+			'E → •int, $',
+			'E → •E + ( E ), +',
+			'E → •int, +'
+		];
+		expect(show(aug, lrClosure(aug, seed, { closureOrder: [1, 0] }).items)).toEqual(slide11);
+		// Listing one id is enough; ids that are not productions and repeats are ignored.
+		expect(show(aug, lrClosure(aug, seed, { closureOrder: [1] }).items)).toEqual(slide11);
+		expect(show(aug, lrClosure(aug, seed, { closureOrder: [9, -1, 1, 1, 0.5] }).items)).toEqual(
+			slide11
+		);
+		expect(show(aug, lrClosure(aug, seed, { closureOrder: [] }).items)).toEqual(
+			show(aug, lrClosure(aug, seed).items)
+		);
+		const g = grammar('S → A B\nA → a | b A\nB → c | d');
+		const ab = augment(g);
+		const start: LrItem[] = [{ production: 5, dot: 0, lookahead: '$' }];
+		expect(show(ab, lrClosure(ab, start, { closureOrder: [2, 4] }).items)).toEqual([
+			'S’ → •S, $',
+			'S → •A B, $',
+			'A → •b A, c',
+			'A → •b A, d',
+			'A → •a, c',
+			'A → •a, d'
+		]);
+	});
+
 	it('extends E → E + (• E ), + as slide 9 does', () => {
 		const aug = augment(deck15);
 		const { items, steps } = lrClosure(aug, [{ production: 1, dot: 3, lookahead: '+' }]);
@@ -201,6 +233,19 @@ describe('lrTransition', () => {
 			'E → •int, )/+'
 		]);
 		expect(four.items).toEqual(a.states[4].items);
+	});
+
+	it('closes in closureOrder', () => {
+		const b = lr1Automaton(deck15, { closureOrder: [1, 0] });
+		const four = lrTransition(b.augmented, b.states[3].items, '(', { closureOrder: [1, 0] });
+		expect(merged(b.augmented, four.items)).toEqual([
+			'E → E + ( •E ), $/+',
+			'E → •E + ( E ), )/+',
+			'E → •int, )/+'
+		]);
+		expect(four.items).toEqual(b.states[4].items);
+		const plain = lrTransition(b.augmented, b.states[3].items, '(');
+		expect(merged(b.augmented, plain.items)[1]).toBe('E → •int, )/+');
 	});
 
 	it('gives the empty set when no item has •y', () => {
@@ -266,6 +311,44 @@ describe('lr1Automaton', () => {
 			'S → •E, $',
 			'E → •int, $/+',
 			'E → •E + ( E ), $/+'
+		]);
+	});
+
+	it('gives the item lists of slides 11 and 14 from the deck’s own grammar order with closureOrder', () => {
+		// Bottom-up Parsing III writes E → int | E + ( E ) (slide 4) and lists E → •E + ( E ) first.
+		const expected = lr1Automaton(deck14);
+		const a = lr1Automaton(deck15, { closureOrder: [1, 0] });
+		expect(edges(a)).toEqual(SLIDE_EDGES);
+		expect(labels(a)).toEqual(SLIDE_LABELS);
+		expect(a.states.map((s) => merged(a.augmented, s.items))).toEqual(
+			expected.states.map((s) => merged(expected.augmented, s.items))
+		);
+		expect(merged(a.augmented, a.states[0].items)).toEqual([
+			'S → •E, $',
+			'E → •E + ( E ), $/+',
+			'E → •int, $/+'
+		]);
+		expect(merged(a.augmented, a.states[4].items)).toEqual([
+			'E → E + ( •E ), $/+',
+			'E → •E + ( E ), )/+',
+			'E → •int, )/+'
+		]);
+		// Slide 11, in full.
+		expect(show(a.augmented, a.states[0].items)).toEqual([
+			'S → •E, $',
+			'E → •E + ( E ), $',
+			'E → •int, $',
+			'E → •E + ( E ), +',
+			'E → •int, +'
+		]);
+		// The productions keep their ids: E → int is production 0 of this grammar.
+		expect(a.states[1].reduces).toEqual([{ production: 0, lookaheads: ['$', '+'] }]);
+		const steps = a.steps[0].kind === 'start' ? a.steps[0].steps : [];
+		expect(steps.slice(0, 2).map((st) => st.production)).toEqual([1, 0]);
+		expect(lr0Automaton(deck15, { closureOrder: [1, 0] }).states[0].items).toEqual([
+			{ production: 2, dot: 0, lookahead: null },
+			{ production: 1, dot: 0, lookahead: null },
+			{ production: 0, dot: 0, lookahead: null }
 		]);
 	});
 

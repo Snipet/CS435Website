@@ -4,7 +4,9 @@ import { bracketForm, treeEquals, yieldOf } from './derive';
 import { parseTrees, recognizes } from './earley';
 import {
 	DEFAULT_PARSE_STEPS,
+	MAX_TREE_DEPTH,
 	PARSE_STACK_BUDGET,
+	TREE_DEPTH_TEXT,
 	displayOrder,
 	endInput,
 	firstFollow,
@@ -34,7 +36,8 @@ import {
 	input,
 	random,
 	randomGrammar,
-	randomTokens
+	randomTokens,
+	treeDepth
 } from './test-helpers';
 import { ebnfToGrammar } from './parse';
 import { END_MARKER, EPSILON, type Grammar, type ParseNode } from './types';
@@ -489,9 +492,49 @@ describe('ll1Parse', () => {
 		const stored = long.rows.reduce((sum, r) => sum + r.stack.length, 0);
 		expect(stored).toBeLessThanOrEqual(PARSE_STACK_BUDGET + long.rows.at(-1)!.stack.length);
 		expect(long.rows.at(-1)!.action).toEqual({ kind: 'limit' });
+		expect(long.rows.at(-1)!.text).toBe(TREE_DEPTH_TEXT);
 		// The other order of the same grammar reaches a blank entry instead.
 		const other = ll1Table(grammar('E → int | E + ( E )'));
 		expect(ll1Parse(other, ['int', '+']).outcome).toBe('error');
+	});
+
+	it('stops a left-recursive run before its tree is too deep for a structured clone', () => {
+		// Table-based Predictive Parsing, slide 26: E → E + T puts E back on top for ever.
+		const t = ll1Table(grammar('E → E + T | T\nT → int'));
+		expect(t.ll1).toBe(false);
+		const run = ll1Parse(t, ['int', '+', 'int']);
+		expect(run.outcome).toBe('limit');
+		expect(MAX_TREE_DEPTH).toBe(500);
+		expect(TREE_DEPTH_TEXT).toBe('stopped: the parse tree would be more than 500 levels deep');
+		const last = run.rows.at(-1)!;
+		expect(last).toMatchObject({ action: { kind: 'limit' }, text: TREE_DEPTH_TEXT, cell: null });
+		expect(treeDepth(last.tree)).toBe(MAX_TREE_DEPTH);
+		expect(last.focus).toHaveLength(MAX_TREE_DEPTH - 1);
+		expect(Math.max(...run.rows.map((r) => treeDepth(r.tree)))).toBe(MAX_TREE_DEPTH);
+		expect(() => structuredClone(run)).not.toThrow();
+	});
+
+	it('takes a list up to the tree depth limit, and its results clone', () => {
+		const t = ll1Table(grammar('S → id S | ε'));
+		expect(t.ll1).toBe(true);
+		// S( id S( id … S(ε) ) ): one level per id, and one for S(ε).
+		const longest = ll1Parse(t, Array(MAX_TREE_DEPTH - 1).fill('id'));
+		expect(longest.outcome).toBe('accept');
+		expect(treeDepth(longest.tree!)).toBe(MAX_TREE_DEPTH);
+		expect(longest.tree).toMatchObject({ start: 0, end: MAX_TREE_DEPTH - 1 });
+		expect(structuredClone(longest).tree).toEqual(longest.tree);
+		const over = ll1Parse(t, Array(MAX_TREE_DEPTH).fill('id'));
+		expect(over.outcome).toBe('limit');
+		expect(over.rows.at(-1)!.text).toBe(TREE_DEPTH_TEXT);
+		const long = ll1Parse(t, Array(2000).fill('id'));
+		expect(long.outcome).toBe('limit');
+		expect(long.rows.every((r) => treeDepth(r.tree) <= MAX_TREE_DEPTH)).toBe(true);
+		expect(() => structuredClone(long)).not.toThrow();
+		// Nested parentheses: three levels each (E, T, F).
+		const nested = ll1Table(grammar('E → T X\nX → + E | ε\nT → F Y\nY → * T | ε\nF → ( E ) | int'));
+		const parens = (k: number) => [...Array(k).fill('('), 'int', ...Array(k).fill(')')];
+		expect(ll1Parse(nested, parens(165)).outcome).toBe('accept');
+		expect(ll1Parse(nested, parens(166)).outcome).toBe('limit');
 	});
 
 	it('accepts exactly the sentences of an LL(1) grammar, with their one parse tree', () => {
