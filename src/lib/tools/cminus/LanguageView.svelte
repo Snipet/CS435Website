@@ -24,11 +24,11 @@
 	interface Props {
 		/** The identifier rule in use. */
 		identifiers: IdentifierMode;
-		/** Link that opens the BNF in Context-Free Grammars; null hides it. */
-		grammarHref: string | null;
+		/** Links that open the BNF in the grammar tools (grammar-links.ts); none hides them. */
+		grammarLinks: readonly { title: string; href: string }[];
 	}
 
-	let { identifiers, grammarHref }: Props = $props();
+	let { identifiers, grammarLinks }: Props = $props();
 
 	const keywords = Object.keys(KEYWORDS);
 	const symbols = SYMBOLS.map(([text]) => text);
@@ -148,7 +148,7 @@
 	<section class="cm-section wide">
 		<h3 class="cm-heading">Grammar</h3>
 		<div class="pair">
-			<GrammarText href={grammarHref} />
+			<GrammarText links={grammarLinks} />
 		</div>
 	</section>
 

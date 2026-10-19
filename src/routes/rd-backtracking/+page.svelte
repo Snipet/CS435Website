@@ -153,22 +153,25 @@
 
 	// Other tools open on this grammar, and on the token stream while it has no errors.
 	const links = $derived.by(() => {
-		if (!analysis.grammar) return { predictive: null, grammar: null };
+		if (!analysis.grammar) return { predictive: null, grammar: null, ll1: null };
 		const state = analysis.run
 			? { grammar: form.grammar, input: form.input }
 			: { grammar: form.grammar };
 		return {
 			predictive: toolLink('rd-predictive', state),
-			grammar: toolLink('grammar', state)
+			grammar: toolLink('grammar', state),
+			ll1: toolLink('ll1', state)
 		};
 	});
 	const predictiveTitle = toolBySlug('rd-predictive')?.title ?? 'Predictive Recursive Descent';
 	const grammarTitle = toolBySlug('grammar')?.title ?? 'Context-Free Grammars';
+	const ll1Title = toolBySlug('ll1')?.title ?? 'LL(1) Parsing Table';
 	/** The links that exist: a tool that is not part of the site has none. */
 	const openIn = $derived(
 		[
 			{ title: grammarTitle, href: links.grammar },
-			{ title: predictiveTitle, href: links.predictive }
+			{ title: predictiveTitle, href: links.predictive },
+			{ title: ll1Title, href: links.ll1 }
 		].filter((link): link is { title: string; href: string } => link.href !== null)
 	);
 
@@ -224,7 +227,7 @@
 					<p class="open-in">
 						Open this grammar in
 						{#each openIn as link, i (link.title)}
-							{i > 0 ? ' or ' : ''}
+							{i > 0 ? (i === openIn.length - 1 ? ' or ' : ', ') : ''}
 							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path (toolHref) -->
 							<a href={link.href}>{link.title}</a>
 						{/each}

@@ -29,12 +29,12 @@
 		marks: SelectionMarks;
 		selection: SourceRange | null;
 		selKey?: string;
-		/** Link that opens the BNF in Context-Free Grammars; null hides it. */
-		grammarHref: string | null;
+		/** Links that open the BNF in the grammar tools (grammar-links.ts); none hides them. */
+		grammarLinks: readonly { title: string; href: string }[];
 		onselect: (range: SourceRange) => void;
 	}
 
-	let { c, marks, selection, selKey = '', grammarHref, onselect }: Props = $props();
+	let { c, marks, selection, selKey = '', grammarLinks, onselect }: Props = $props();
 
 	const program = $derived(c.parse!.program);
 	const tree = $derived(courseTree(c));
@@ -122,7 +122,7 @@
 	</div>
 
 	<Disclosure summary="Grammar" openSummary="Grammar" variant="boxed">
-		<GrammarText href={grammarHref} level={3} />
+		<GrammarText links={grammarLinks} level={3} />
 	</Disclosure>
 </div>
 
