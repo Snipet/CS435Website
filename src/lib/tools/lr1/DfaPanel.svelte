@@ -18,7 +18,7 @@
 	import { METHOD_NAMES, METHODS, type BuildResult, type Method } from './build';
 	import CircleDiagram from './CircleDiagram.svelte';
 	import { describeBuildStep, type BuildStep } from './construction';
-	import { DRAW_ALL, WINDOW, type StateRange } from './diagram';
+	import { DRAW_ALL, MAX_RANGE, WINDOW, rangeWith, type StateRange } from './diagram';
 	import { itemLines, linesOf, type ItemForm } from './items';
 	import ItemSetDiagram from './ItemSetDiagram.svelte';
 	import type { DfaSelection } from './selection';
@@ -225,7 +225,7 @@
 				min={0}
 				max={total - 1}
 				value={range[0]}
-				onchange={(v) => onrange([v, Math.max(v, range[1])])}
+				onchange={(v) => onrange(rangeWith(range, 'first', v))}
 			/>
 			<NumberField
 				label="to"
@@ -234,9 +234,11 @@
 				min={0}
 				max={total - 1}
 				value={range[1]}
-				onchange={(v) => onrange([Math.min(range[0], v), v])}
+				onchange={(v) => onrange(rangeWith(range, 'last', v))}
 			/>
-			<span class="of">of 0–{total - 1}</span>
+			<span class="of"
+				>of 0–{total - 1}{total > MAX_RANGE ? `, at most ${MAX_RANGE} at a time` : ''}</span
+			>
 			<Button size="sm" disabled={range[0] === 0} onclick={() => move(-size)}>Previous</Button>
 			<Button size="sm" disabled={range[1] >= total - 1} onclick={() => move(size)}>Next</Button>
 			{#if total <= DRAW_ALL}
@@ -260,9 +262,7 @@
 		</StepControls>
 	{:else if merges.length > 0}
 		<p class="caption">
-			{#each merges as m, i (m.id)}{i > 0 ? '; ' : ''}state {m.id} merges LR(1) states {m.merged.join(
-					', '
-				)}{/each}.
+			{merges.map((m) => `State ${m.id} merges LR(1) states ${m.merged.join(', ')}.`).join(' ')}
 		</p>
 	{/if}
 

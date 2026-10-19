@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { LinkStates } from '$lib/tools/links';
 import { decode, encode } from '$lib/url-state';
 import { presetState, presets } from './presets';
+import { MAX_RANGE } from './range';
 import { DEFAULT_GRAMMAR, DEFAULT_STATE, isLr1Hash, stateFromHash, type Lr1State } from './state';
 
 describe('URL state', () => {
@@ -73,6 +74,15 @@ describe('URL state', () => {
 			{ grammar: 'S → a', parseStep: 0.5 }
 		])
 			expect(isLr1Hash(bad), JSON.stringify(bad)).toBe(false);
+	});
+
+	it('cuts a range to the most states drawn at once', () => {
+		expect(stateFromHash({ grammar: 'S → a', range: [0, 10_000_000] }).range).toEqual([
+			0,
+			MAX_RANGE - 1
+		]);
+		expect(stateFromHash({ grammar: 'S → a', range: [340, 371] }).range).toEqual([340, 371]);
+		expect(stateFromHash({ grammar: 'S → a', range: [7, 7] }).range).toEqual([7, 7]);
 	});
 
 	it('survives the trip through the URL hash', () => {

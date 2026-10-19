@@ -7,7 +7,7 @@ import { closureOrderOf, computeBuild, readGrammar, type BuildResult } from './b
 import { closureSetup } from './closure-steps';
 import { buildSteps } from './construction';
 import { boxLines, shownRange, stateNotes } from './diagram';
-import { itemLines } from './items';
+import { closureItemText, itemLines } from './items';
 import { parseFrames, statesVisited } from './parse-steps';
 import {
 	DEFAULT_PRESET_ID,
@@ -19,7 +19,7 @@ import {
 	type Lr1Preset
 } from './presets';
 import { DEFAULT_STATE, isLr1Hash } from './state';
-import { actionCell, conflictCells, gotoEntry } from './table-view';
+import { actionCell, actionColumns, conflictCells, gotoEntry } from './table-view';
 
 const preset = (id: string): Lr1Preset => presets.find((p) => p.id === id)!;
 
@@ -102,6 +102,38 @@ describe('every preset', () => {
 				expect(['14', '15']).toContain(q.cite.deck);
 			}
 		}
+		// Where each question is asked, and answered when the slides answer it.
+		const questions = presets.flatMap((p) =>
+			(p.questions ?? []).map((q) => [
+				p.id,
+				q.prompt.slice(0, 24),
+				formatCitation(q.cite),
+				q.unanswered ?? false
+			])
+		);
+		expect(questions).toEqual([
+			['transition', 'In context containing E ', 'Bottom-up Parsing III · slide 8', false],
+			['transition', 'In context containing E ', 'Bottom-up Parsing III · slide 8', false],
+			['circles', 'DFA input is ?', 'Bottom-up Parsing II · slide 16', true],
+			['circles', 'DFA alphabet consists of', 'Bottom-up Parsing II · slide 16', true],
+			['table-fragment', 'Rows correspond to ?', 'Bottom-up Parsing II · slide 18', true],
+			['table-fragment', 'Columns correspond to ?', 'Bottom-up Parsing II · slide 18', true],
+			['lr-parse', 'Left string can be imple', 'Bottom-up Parsing II · slide 15', false],
+			['lr-parse', 'After shift or reduce ac', 'Bottom-up Parsing II · slide 20', false],
+			['epsilon', 'Reduce pops 0 or more sy', 'Bottom-up Parsing II · slide 15', true],
+			[
+				'shift-reduce-conflict',
+				'We have a shift/reduce o',
+				'Bottom-up Parsing III · slides 18–20',
+				false
+			],
+			[
+				'reduce-reduce-conflict',
+				'How does this confuse th',
+				'Bottom-up Parsing III · slides 24–25',
+				false
+			]
+		]);
 		expect(decks['14'].title).toBe('Bottom-up Parsing II');
 		expect(decks['15'].title).toBe('Bottom-up Parsing III');
 		expect(presets.map((p) => (p.cite ? formatCitation(p.cite) : null))).toEqual([
@@ -175,13 +207,15 @@ describe('the parsing DFA of the decks', () => {
 
 	it('draws states 3–7 for the fragment of slide 19, with the columns in the slide’s order', () => {
 		const { state, build } = load('table-fragment');
+		expect(state.grammar).toBe(DECK_14_GRAMMAR);
 		expect(shownRange(build.automaton.states.length, state.range)).toEqual([3, 7]);
 		const t = build.table;
-		expect(t.terminals).toEqual(['int', '+', '(', ')', '$']);
+		const columns = actionColumns(t, build.automaton.edges);
+		expect(columns.map((k) => t.terminals[k])).toEqual(['int', '+', '(', ')', '$']);
 		expect(t.nonterminals).toEqual(['E']);
 		const conflicts = conflictCells(t);
 		const row = (s: number) => [
-			...t.terminals.map((_, k) =>
+			...columns.map((k) =>
 				actionCell(t, s, k, conflicts)
 					.entries.map((e) => e.code + (e.sub ? `_${e.sub}` : ''))
 					.join('/')
@@ -196,6 +230,18 @@ describe('the parsing DFA of the decks', () => {
 			['', 's8', '', 's7', '', ''],
 			['', 'r_E→E+(E)', '', '', 'r_E→E+(E)', '']
 		]);
+	});
+
+	it.each([
+		['E → E + ( E ) | int', DECK_14_GRAMMAR, 'grammar'],
+		['E → int | E + ( E )', DECK_15_GRAMMAR, 'grammar'],
+		['E → int | E + ( E ), E → E + ( E ) first', DECK_15_GRAMMAR, 'reversed']
+	] as const)('orders the action columns int + ( ) $ as slide 19 does: %s', (_, grammar, order) => {
+		for (const method of ['lr1', 'lalr1', 'slr1', 'lr0'] as const) {
+			const b = computeBuild({ grammar, order, method, input: '' })!;
+			const columns = actionColumns(b.table, b.automaton.edges);
+			expect(columns.map((k) => b.table.terminals[k])).toEqual(['int', '+', '(', ')', '$']);
+		}
 	});
 
 	it('merges 12 LR(1) states into 7 LALR(1) states', () => {
@@ -231,33 +277,32 @@ describe('Closure and Transition', () => {
 		return { state, build, setup, run: setup.run! };
 	};
 
-	it('constructs the start context of slide 11, in full and abbreviated', () => {
+	it('constructs the start context of slide 11, in full and abbreviated, as the slide writes it', () => {
 		const { setup, run: r } = run('start-context');
 		expect(setup.kind === 'closure' && setup.start).toBe(true);
-		expect(
-			r.items.map((i) => formatItem(itemLines(setup.aug, [i], 'full')[0].view, 'spaced'))
-		).toEqual([
-			'S → • E, $',
-			'E → • E + ( E ), $',
-			'E → • int, $',
-			'E → • E + ( E ), +',
-			'E → • int, +'
+		// The stepper's lists draw the items with closureItemText's form: the dot against
+		// the symbol after it, everything else spaced.
+		expect(r.items.map((i) => closureItemText(itemLines(setup.aug, [i], 'full')[0].view))).toEqual([
+			'S → •E, $',
+			'E → •E + ( E ), $',
+			'E → •int, $',
+			'E → •E + ( E ), +',
+			'E → •int, +'
 		]);
 		expect(
-			itemLines(setup.aug, r.items, 'abbreviated').map((l) => formatItem(l.view, 'spaced'))
-		).toEqual(['S → • E, $', 'E → • E + ( E ), $/+', 'E → • int, $/+']);
+			itemLines(setup.aug, r.items, 'abbreviated').map((l) => closureItemText(l.view))
+		).toEqual(['S → •E, $', 'E → •E + ( E ), $/+', 'E → •int, $/+']);
 	});
 
 	it('extends E → E + (•E), + with the two items of slide 9, then with their + forms', () => {
 		const { state, setup, run: r } = run('extend-context');
-		const show = (k: number) =>
-			formatItem(itemLines(setup.aug, [r.items[k]], 'full')[0].view, 'spaced');
+		const show = (k: number) => closureItemText(itemLines(setup.aug, [r.items[k]], 'full')[0].view);
 		expect(r.items.map((_, k) => show(k))).toEqual([
-			'E → E + ( • E ), +',
-			'E → • int, )',
-			'E → • E + ( E ), )',
-			'E → • int, +',
-			'E → • E + ( E ), +'
+			'E → E + ( •E ), +',
+			'E → •int, )',
+			'E → •E + ( E ), )',
+			'E → •int, +',
+			'E → •E + ( E ), +'
 		]);
 		// The preset opens where the second item of the slide is added.
 		const f = r.frames[state.closureStep!];

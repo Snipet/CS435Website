@@ -227,7 +227,7 @@
 	}
 	.input .j {
 		min-height: 1.2em;
-		color: var(--active);
+		color: var(--text);
 		font-size: var(--text-xs);
 		font-weight: 700;
 	}
@@ -237,6 +237,9 @@
 	.input li.next {
 		border-color: var(--active);
 		background: var(--active-soft);
+	}
+	.input li.next .index {
+		color: var(--text-2);
 	}
 	.stack li {
 		padding: 2px 6px;

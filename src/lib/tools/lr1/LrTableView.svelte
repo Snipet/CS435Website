@@ -29,6 +29,8 @@
 		cell?: CellRef | null;
 		/** The cell the parser looks up. */
 		lookup?: CellRef | null;
+		/** The order of the action columns (indices into `table.terminals`); default: as in the table. */
+		columns?: readonly number[] | null;
 		/** The state the parser is in. */
 		current?: number | null;
 		/** Select a state by its row. */
@@ -42,13 +44,18 @@
 		row = null,
 		cell = null,
 		lookup = null,
+		columns = null,
 		current = null,
 		onrow,
 		caption
 	}: Props = $props();
 
 	const conflicts = $derived(conflictCells(table));
-	const actionColumns = $derived(table.terminals.map((_, k) => k));
+	const actionColumns = $derived(
+		columns && columns.length === table.terminals.length
+			? columns
+			: table.terminals.map((_, k) => k)
+	);
 	const gotoColumns = $derived(table.nonterminals.map((_, k) => k));
 	const rows = $derived.by(() => {
 		const out: number[] = [];
@@ -76,8 +83,8 @@
 			</tr>
 			<tr class="symbols">
 				<th scope="col" class="state-col"><span class="visually-hidden">State</span></th>
-				{#each table.terminals as t, k (k)}
-					<th scope="col">{symbolText(t)}</th>
+				{#each actionColumns as k (k)}
+					<th scope="col">{symbolText(table.terminals[k])}</th>
 				{/each}
 				{#each table.nonterminals as n, k (k)}
 					<th scope="col" class={{ rule: k === 0 }}>{symbolText(n)}</th>
@@ -164,7 +171,7 @@
 	}
 	thead .parts th {
 		padding-bottom: 0;
-		color: var(--text-3);
+		color: var(--text-2);
 		font-family: var(--font-sans);
 		font-size: var(--text-xs);
 		font-weight: 400;

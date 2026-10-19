@@ -2,7 +2,8 @@
 	Pseudocode as a slide writes it, one line per row, with the line that runs
 	marked (and lines that are running around it, such as Transition's
 	`return Closure(Items)` while Closure runs, marked more quietly). The dot of
-	an item is red, as in the decks.
+	an item is red, as in the decks. A listing wider than its box scrolls, and
+	takes focus so the keyboard can scroll it.
 -->
 <script lang="ts">
 	interface Props {
@@ -22,7 +23,9 @@
 	const parts = (line: string) => line.split(/(•)/u);
 </script>
 
-<ol class="code" aria-label={label}>
+<!-- A scrolling region takes focus so the keyboard can scroll it. -->
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<ol class="code" aria-label={label} tabindex="0">
 	{#each lines as line, i (i)}
 		<li
 			class={{ active: on.has(i), outer: around.has(i) && !on.has(i) }}
@@ -49,6 +52,10 @@
 		font-variant-ligatures: none;
 		line-height: 1.7;
 		list-style: none;
+	}
+	.code:focus-visible {
+		outline: 2px solid var(--focus);
+		outline-offset: 2px;
 	}
 	li {
 		display: flex;

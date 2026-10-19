@@ -1,15 +1,15 @@
 /**
  * The construction of the parsing DFA as the decks number it (Bottom-up
  * Parsing II, slide 17; Bottom-up Parsing III, slide 14): state 0 is
- * Closure({ [S → •E, $] }); the states are worked on in the order they are
+ * Closure({ S → •E, $ }) (slide 11); the states are worked on in the order they are
  * made, and from each, the edges on terminals come first, then those on
  * non-terminals. The engine lists the edges in the order it made them, and a
  * new state takes the next number, so the steps follow from the edges alone.
  */
-import { formatItem, symbolText } from '$lib/components/grammar/lr-item';
+import { symbolText } from '$lib/components/grammar/lr-item';
 import type { LrAutomaton } from '$lib/theory/grammar/lr';
 import { startItem } from './closure-steps';
-import { itemView } from './items';
+import { closureItemText, itemView } from './items';
 
 export interface BuildStep {
 	/** 'done': every state's transitions are made (the last step). */
@@ -64,7 +64,7 @@ export function buildSteps(a: LrAutomaton): BuildStep[] {
 export function describeBuildStep(a: LrAutomaton, step: BuildStep): string {
 	if (step.kind === 'start') {
 		const item = { ...startItem(a.augmented), ...(a.kind === 'lr0' ? { lookahead: null } : {}) };
-		return `State 0 = Closure({ ${formatItem(itemView(a.augmented, item), 'bracketed')} }).`;
+		return `State 0 = Closure({ ${closureItemText(itemView(a.augmented, item))} }).`;
 	}
 	if (step.kind === 'done') {
 		const edges = `${step.edges} ${step.edges === 1 ? 'edge' : 'edges'}`;

@@ -6,6 +6,7 @@
 import type { LinkStates } from '$lib/tools/links';
 import { METHODS, type ClosureOrder, type Method } from './build';
 import type { ItemForm } from './items';
+import { MAX_RANGE } from './range';
 
 export type DfaView = 'boxes' | 'circles';
 export type ClosureMode = 'closure' | 'transition';
@@ -23,7 +24,10 @@ export interface Lr1State {
 	items: ItemForm;
 	/** The DFA as item-set boxes (Bottom-up Parsing III, slide 14) or as circles (Bottom-up Parsing II, slide 17). */
 	view: DfaView;
-	/** The states drawn and tabled, [first, last]; null: all of a small automaton, else the first window. */
+	/**
+	 * The states drawn and tabled, [first, last], at most `MAX_RANGE` of them; null: all of a
+	 * small automaton, else the first window.
+	 */
 	range: [number, number] | null;
 	/** What the Closure stepper runs: Closure(Items) or Transition(state, y). */
 	closure: ClosureMode;
@@ -101,7 +105,8 @@ export function isLr1Hash(value: unknown): value is Lr1Hash {
 /**
  * The state a hash value describes. A link from another tool has only the
  * grammar and perhaps a token string: the tool then opens with the decks'
- * defaults and every stepper at its end.
+ * defaults and every stepper at its end. A range of more than `MAX_RANGE`
+ * states is cut to its first `MAX_RANGE`.
  */
 export function stateFromHash(value: Lr1Hash): Lr1State {
 	const d = DEFAULT_STATE;
@@ -112,7 +117,9 @@ export function stateFromHash(value: Lr1Hash): Lr1State {
 		method: value.method ?? d.method,
 		items: value.items ?? d.items,
 		view: value.view ?? d.view,
-		range: Array.isArray(value.range) ? [value.range[0], value.range[1]] : null,
+		range: Array.isArray(value.range)
+			? [value.range[0], Math.min(value.range[1], value.range[0] + MAX_RANGE - 1)]
+			: null,
 		closure: value.closure ?? d.closure,
 		seed: value.seed ?? '',
 		from: value.from ?? 0,

@@ -47,7 +47,7 @@ describe('buildSteps', () => {
 	});
 
 	it('says what each step does', () => {
-		expect(describeBuildStep(a, steps[0])).toBe('State 0 = Closure({ [S → • E, $] }).');
+		expect(describeBuildStep(a, steps[0])).toBe('State 0 = Closure({ S → •E, $ }).');
 		expect(describeBuildStep(a, steps[4])).toBe('Transition(3, () is a new set of items: state 4.');
 		expect(describeBuildStep(a, steps[10])).toBe(
 			'Transition(9, int) has the items of state 5: an edge to it, no new state.'
@@ -56,7 +56,7 @@ describe('buildSteps', () => {
 			'Every state’s transitions are made: 12 states, 13 edges.'
 		);
 		const lr0 = lr0Automaton(g);
-		expect(describeBuildStep(lr0, buildSteps(lr0)[0])).toBe('State 0 = Closure({ [S → • E] }).');
+		expect(describeBuildStep(lr0, buildSteps(lr0)[0])).toBe('State 0 = Closure({ S → •E }).');
 		const cut = lr1Automaton(g, { maxStates: 5 });
 		const last = buildSteps(cut).at(-1)!;
 		expect(describeBuildStep(cut, last)).toMatch(/^The construction was cut off at 5 states/);

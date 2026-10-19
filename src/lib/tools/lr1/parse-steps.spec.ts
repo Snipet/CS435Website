@@ -133,6 +133,9 @@ describe('parseFrames', () => {
 		const last = bad.frames[bad.frames.length - 1];
 		expect(last).toMatchObject({ phase: 'error', lines: [11] });
 		expect(bad.frames[bad.frames.length - 2].text).toBe('action[3, $] is blank');
+		// The error step names the blank entry it stops on, which the table marks.
+		expect(last.text).toBe('action[3, $] is blank: error, halt and report error');
+		expect(last.cell).toEqual({ state: 3, kind: 'action', column: bad.t.terminals.indexOf('$') });
 	});
 
 	it('pops no pairs for an ε-production and counts its ε leaf', () => {

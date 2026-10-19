@@ -141,7 +141,12 @@ export function parseFrames(t: LrTable, p: LrParse): ParseFrame[] {
 						: `${lookup} = ${actionEntry(aug, a).words}`
 		});
 		if (a === null || a.kind === 'error') {
-			frames.push({ ...base, phase: 'error', lines: [11], text: 'error: halt and report error' });
+			frames.push({
+				...base,
+				phase: 'error',
+				lines: [11],
+				text: `${lookup} ${a === null ? 'is blank' : 'is an error entry'}: error, halt and report error`
+			});
 			return;
 		}
 		if (a.kind === 'accept') {

@@ -1,7 +1,8 @@
 /**
  * The action/goto table in the notation of Bottom-up Parsing II, slide 19:
  * terminal columns, then `$` (the action table), a vertical rule, then the
- * non-terminal columns (the goto table). Entries are `sN` (shift, go to state
+ * non-terminal columns (the goto table). The terminals come in the order the
+ * DFA first shifts them (`actionColumns`), which is the slide's int + ( ) $. Entries are `sN` (shift, go to state
  * N), `gN` (go to N), `r` with the production as a subscript (`r` E→E+(E)),
  * and `accept`; a blank entry is an error. A cell with a conflict shows every
  * action in it.
@@ -10,6 +11,7 @@ import { joinSymbols, symbolText } from '$lib/components/grammar/lr-item';
 import type { Augmented } from '$lib/theory/grammar/lr';
 import { printProduction } from '$lib/theory/grammar/lr';
 import type { LrAction, LrConflict, LrTable } from '$lib/theory/grammar/lr-table';
+import { END_MARKER } from '$lib/theory/grammar/types';
 
 /** One entry as drawn: `s4`, `g6`, `accept`, or `r` with `sub` E→int as a subscript. */
 export interface EntryView {
@@ -123,6 +125,29 @@ export function gotoCellName(t: LrTable, state: number, column: number): string 
 
 /** A cell of the table: an action cell (terminal column) or a goto cell. */
 export type CellRef = { state: number; kind: 'action' | 'goto'; column: number };
+
+/**
+ * The order of the action columns (indices into `t.terminals`): the terminals
+ * in the order the DFA's edges first carry them (edges in the order they are
+ * made), then any other terminal in grammar order, then `$`. For
+ * E → E + ( E ) | int that is int + ( ) $, the columns of Bottom-up Parsing II,
+ * slide 19, whichever way the grammar is written.
+ */
+export function actionColumns(t: LrTable, edges: readonly { symbol: string }[]): number[] {
+	const index = new Map(t.terminals.map((x, i) => [x, i]));
+	const end = index.get(END_MARKER);
+	const out: number[] = [];
+	const seen = new Set<number>();
+	const add = (k: number | undefined) => {
+		if (k === undefined || k === end || seen.has(k)) return;
+		seen.add(k);
+		out.push(k);
+	};
+	for (const e of edges) add(index.get(e.symbol));
+	t.terminals.forEach((_, k) => add(k));
+	if (end !== undefined) out.push(end);
+	return out;
+}
 
 /** The cell an edge of the DFA is stored in: a terminal edge in action, a non-terminal edge in goto. */
 export function edgeCell(t: LrTable, edge: { from: number; symbol: string }): CellRef | null {

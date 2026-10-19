@@ -1,20 +1,16 @@
 <!--
 	The parsing DFA as numbered circles (Bottom-up Parsing II, slide 17): an
 	unlabeled start arrow into state 0, edges labeled with one grammar symbol,
-	each state's reduce and accept labels beside it. Drawn by AutomatonView; the
-	whole range is laid out once, so states keep their places while the
-	construction adds them.
+	each state's reduce and accept labels beside it. The circles are placed in
+	rows (placeCircles) as many to a row as the width allows, and drawn by
+	AutomatonView; the whole range is placed once, so states keep their places
+	while the construction adds them.
 -->
 <script lang="ts">
 	import type { StateAnnotation } from '$lib/components/grammar';
-	import {
-		AutomatonView,
-		layoutAutomaton,
-		nodePositions,
-		type GraphSelection
-	} from '$lib/components/graph';
+	import { AutomatonView, type GraphSelection } from '$lib/components/graph';
 	import type { LrAutomaton } from '$lib/theory/grammar/lr';
-	import { circleDrawing, type StateRange } from './diagram';
+	import { circleColumns, circleDrawing, placeCircles, type StateRange } from './diagram';
 	import type { DfaSelection } from './selection';
 
 	interface Props {
@@ -43,13 +39,25 @@
 		ariaLabel = 'Parsing DFA'
 	}: Props = $props();
 
+	/** The width the drawing has, so a row holds as many circles as fit at their natural size. */
+	let width = $state(0);
 	const full = $derived(circleDrawing(automaton, notes, range));
-	const fullLayout = $derived(layoutAutomaton(full.automaton));
-	const positions = $derived(nodePositions(fullLayout));
+	const columns = $derived(circleColumns(full.automaton, width - 2 * 40));
+	const placement = $derived(placeCircles(full.automaton, columns));
+	const positions = $derived(placement.positions);
 	const shown = $derived(circleDrawing(automaton, notes, range, made));
 	const idOf = $derived(new Map(shown.states.map((s, k) => [s, k])));
 	const transitionOf = $derived(new Map(shown.edges.map((e, t) => [e, t])));
-	const viewKey = $derived(`${automaton.kind}:${automaton.states.length}:${range[0]}-${range[1]}`);
+	/** The whole range's extent (the start arrow and labels around it included), so it keeps its scale while states are added. */
+	const extent = $derived({
+		x: -60,
+		y: -40,
+		width: placement.width + 100,
+		height: placement.height + 80
+	});
+	const viewKey = $derived(
+		`${automaton.kind}:${automaton.states.length}:${range[0]}-${range[1]}:${columns}`
+	);
 
 	const graphSelected = $derived.by((): GraphSelection => {
 		if (selected?.kind === 'state') {
@@ -79,19 +87,27 @@
 	});
 </script>
 
-<AutomatonView
-	automaton={shown.automaton}
-	{positions}
-	extent={fullLayout.bounds}
-	{viewKey}
-	{highlight}
-	selected={graphSelected}
-	selectionActions={false}
-	height="auto"
-	{ariaLabel}
-	onstateclick={(id) => onselect({ kind: 'state', state: shown.states[id] })}
-	ontransitionclick={(ids) => {
-		const k = shown.edges[ids[0]];
-		if (k !== undefined) onselect({ kind: 'edge', edge: k });
-	}}
-/>
+<div class="circles" bind:clientWidth={width}>
+	<AutomatonView
+		automaton={shown.automaton}
+		{positions}
+		{extent}
+		{viewKey}
+		{highlight}
+		selected={graphSelected}
+		selectionActions={false}
+		height="auto"
+		{ariaLabel}
+		onstateclick={(id) => onselect({ kind: 'state', state: shown.states[id] })}
+		ontransitionclick={(ids) => {
+			const k = shown.edges[ids[0]];
+			if (k !== undefined) onselect({ kind: 'edge', edge: k });
+		}}
+	/>
+</div>
+
+<style>
+	.circles {
+		min-width: 0;
+	}
+</style>

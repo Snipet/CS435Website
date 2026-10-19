@@ -6,7 +6,6 @@ import {
 	CLOSURE_CODE,
 	TRANSITION_CODE,
 	betaA,
-	bracketedItem,
 	closureRun,
 	closureSetup,
 	describeFrame,
@@ -68,10 +67,10 @@ describe('closureRun', () => {
 		const texts = r.frames.map((f) => describeFrame(aug, r, f));
 		expect(texts.slice(0, 5)).toEqual([
 			'Closure starts from 1 item.',
-			'[S → • E, $] has • before the non-terminal E.',
+			'[S → •E, $] has • before the non-terminal E.',
 			'A production of E: E → E + ( E ).',
 			'βa = $, so First(βa) = { $ }.',
-			'Add [E → • E + ( E ), $] to Items.'
+			'Add [E → •E + ( E ), $] to Items.'
 		]);
 		expect(texts[texts.length - 1]).toBe(
 			'Items is unchanged: another pass adds nothing. The closure has 5 items. 2 additions found the item already there.'
@@ -84,9 +83,6 @@ describe('closureRun', () => {
 			beta: ['+', '(', 'E', ')'],
 			a: ')'
 		});
-		expect(bracketedItem(aug, { production: 1, dot: 3, lookahead: '+' })).toBe(
-			'[E → E + ( • E ), +]'
-		);
 	});
 
 	it('has just a first and a last frame when there is nothing to add', () => {
@@ -121,7 +117,7 @@ describe('transitionRun', () => {
 		);
 		expect(describeFrame(aug, t, t.frames[1])).toBe('Items ← ∅');
 		expect(describeFrame(aug, t, t.frames[2])).toBe(
-			'[E → E + • ( E ), $] is in the state: add [E → E + ( • E ), $] to Items.'
+			'[E → E + •( E ), $] is in the state: add [E → E + ( •E ), $] to Items.'
 		);
 		expect(describeFrame(aug, t, t.frames[4])).toBe(
 			'return Closure(Items): close the 2 items moved over (.'

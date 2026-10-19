@@ -6,7 +6,6 @@
 	[Y → •γ, b] added.
 -->
 <script lang="ts">
-	import { LrItem } from '$lib/components/grammar';
 	import {
 		Button,
 		CodeEditor,
@@ -26,8 +25,9 @@
 		type ClosureFrame,
 		type ClosureSetup
 	} from './closure-steps';
+	import ClosureItem from './ClosureItem.svelte';
 	import ItemList, { type ItemMark } from './ItemList.svelte';
-	import { itemLines, itemView } from './items';
+	import { closureItemText, itemLines, itemView } from './items';
 	import Pseudocode from './Pseudocode.svelte';
 	import type { ClosureMode } from './state';
 
@@ -150,9 +150,7 @@
 					maxRows={4}
 					lineNumbers={false}
 					tabInserts={false}
-					placeholder={startText
-						? `blank: [${startText.lhs} → •${startText.rhs.join(' ')}, $]`
-						: ''}
+					placeholder={startText ? `blank: ${closureItemText(startText, true)}` : ''}
 					oninput={() => onedit?.()}
 				/>
 				<div class="seed-buttons">
@@ -169,9 +167,7 @@
 				</div>
 				{#if setup?.kind === 'closure' && setup.start && startText}
 					<p class="note">
-						Closure(&#123;
-						<LrItem item={startText} style="spaced" />
-						&#125;): the start state of the parsing DFA.
+						Closure(&#123; <ClosureItem item={startText} /> &#125;): the start state of the parsing DFA.
 					</p>
 				{/if}
 			</div>
@@ -241,7 +237,7 @@
 					{@const item = run.items[frame.current]}
 					<dl class="values">
 						<dt>[X → α<span class="dot">•</span>Yβ, a]</dt>
-						<dd><LrItem item={itemView(aug, item)} /></dd>
+						<dd><ClosureItem item={itemView(aug, item)} brackets /></dd>
 						{#if frame.production !== null}
 							<dt>Y → γ</dt>
 							<dd class="mono">{printProduction(aug.productions[frame.production])}</dd>
@@ -253,7 +249,7 @@
 						{#if frame.add}
 							<dt>add [Y → <span class="dot">•</span>γ, b]</dt>
 							<dd>
-								<LrItem item={itemView(aug, frame.add.item)} />
+								<ClosureItem item={itemView(aug, frame.add.item)} brackets />
 								<span class="added">{frame.add.added ? 'new' : 'already in Items'}</span>
 							</dd>
 						{/if}

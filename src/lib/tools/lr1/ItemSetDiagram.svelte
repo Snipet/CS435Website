@@ -60,6 +60,8 @@
 	const LABEL_H = 18;
 	/** The least scale the drawing opens with. */
 	const MIN_DEFAULT = 0.55;
+	/** The drawing opens whole when it fits at this scale or more. */
+	const FIT_ALL = 0.75;
 
 	const ids = $derived.by(() => {
 		const out: number[] = [];
@@ -81,18 +83,23 @@
 		).length
 	);
 
-	// Sizes: measured once drawn, estimated until then. A change of content drops the measurements.
+	// Sizes: measured once drawn, estimated until then. A change of content drops the
+	// measurements. `measured` is read on every run of `nodes`, so a measurement always
+	// reaches the layout.
 	const contentKey = $derived(
 		`${ids.join(',')}|${form}|${automaton.states.length}|${automaton.kind}`
 	);
-	let measured = $state.raw<Record<number, BoxNodeInput>>({});
-	let measuredFor = '';
+	let measured = $state.raw<{ key: string; sizes: Record<number, BoxNodeInput> }>({
+		key: '',
+		sizes: {}
+	});
 	const nodes = $derived.by(() => {
 		const key = contentKey;
-		const known: Record<number, BoxNodeInput> = measuredFor === key ? measured : {};
+		const m = measured;
+		const known = m.key === key ? m.sizes : {};
 		return ids.map((s) => {
-			const m = known[s];
-			if (m) return m;
+			const size = known[s];
+			if (size) return size;
 			const est = estimateBox(
 				lines.get(s)!.map((l) => l.view),
 				noteTexts.get(s)!
@@ -116,11 +123,13 @@
 	const frameEls: Record<number, HTMLElement> = $state({});
 	const noteEls: Record<number, HTMLElement> = $state({});
 
+	/** Reads the drawn sizes; the layout is redone when one differs from the size it used. */
 	function measure() {
 		const key = contentKey;
+		const used = nodes;
 		const next: Record<number, BoxNodeInput> = {};
-		let changed = measuredFor !== key;
-		for (const node of nodes) {
+		let changed = measured.key !== key;
+		for (const node of used) {
 			const el = frameEls[node.id];
 			if (!el || !el.isConnected) return;
 			const items = el.querySelector<HTMLElement>('.items');
@@ -133,63 +142,134 @@
 				note: noteEl ? { width: noteEl.offsetWidth, height: noteEl.offsetHeight } : null
 			};
 			if (m.width === 0) return;
-			const old = node;
 			if (
-				Math.abs(m.width - old.width) > 0.5 ||
-				Math.abs(m.height - old.height) > 0.5 ||
-				Math.abs((m.note?.width ?? 0) - (old.note?.width ?? 0)) > 0.5 ||
-				Math.abs((m.note?.height ?? 0) - (old.note?.height ?? 0)) > 0.5 ||
-				Math.abs((m.attach ?? 0) - (old.attach ?? 0)) > 0.5
+				Math.abs(m.width - node.width) > 0.5 ||
+				Math.abs(m.height - node.height) > 0.5 ||
+				Math.abs((m.note?.width ?? 0) - (node.note?.width ?? 0)) > 0.5 ||
+				Math.abs((m.note?.height ?? 0) - (node.note?.height ?? 0)) > 0.5 ||
+				Math.abs((m.attach ?? 0) - (node.attach ?? 0)) > 0.5
 			)
 				changed = true;
 			next[node.id] = m;
 		}
-		if (!changed) return;
-		measuredFor = key;
-		measured = next;
+		if (changed) measured = { key, sizes: next };
 	}
 
 	$effect(() => {
 		void layout;
 		untrack(measure);
 	});
+	// Web fonts loading, a mark that changes a box: whatever resizes a box measures again.
 	$effect(() => {
-		// Web fonts change the boxes' sizes once they load.
-		if (typeof document === 'undefined' || !document.fonts) return;
-		let live = true;
-		document.fonts.ready.then(() => {
-			if (live) {
-				measuredFor = '';
-				measure();
-			}
-		});
-		return () => {
-			live = false;
-		};
+		if (typeof ResizeObserver === 'undefined') return;
+		const els = ids.flatMap((s) => [frameEls[s], noteEls[s]]).filter((el) => !!el);
+		const observer = new ResizeObserver(() => untrack(measure));
+		for (const el of els) observer.observe(el);
+		return () => observer.disconnect();
 	});
 
-	// Zoom: by default the drawing fits the width of its box (never enlarged).
+	// Zoom: by default the whole drawing when it fits at 75% or more, else the drawing fits
+	// the width of its box (never enlarged) and scrolls down.
 	let viewportWidth = $state(0);
-	let viewportHeight = $state(0);
+	let windowHeight = $state(0);
+	/** The tallest the box gets (its CSS max-height), so the zoom does not depend on the box's own height. */
+	const boxHeight = $derived(windowHeight > 0 ? Math.min(0.72 * windowHeight, 44 * 16) : 0);
+	let viewport = $state<HTMLElement>();
 	let zoom = $state<number | null>(null);
+	const clampScale = (s: number) => Math.min(2.5, Math.max(0.15, s));
 	// On a narrow screen the drawing keeps a readable size and scrolls sideways instead.
 	const fitWidth = $derived(
 		viewportWidth > 0
 			? Math.max(Math.min(1, (viewportWidth - 2) / Math.max(1, layout.width)), MIN_DEFAULT)
 			: 1
 	);
-	const scale = $derived(zoom ?? fitWidth);
-	const clampScale = (s: number) => Math.min(2.5, Math.max(0.15, s));
+	/** The scale that shows the whole drawing (never enlarged). */
+	const whole = $derived(
+		viewportWidth > 0
+			? clampScale(
+					Math.min(
+						1,
+						(viewportWidth - 2) / Math.max(1, layout.width),
+						boxHeight > 0 ? (boxHeight - 2) / Math.max(1, layout.height) : 1
+					)
+				)
+			: 1
+	);
+	const scale = $derived(zoom ?? (whole >= FIT_ALL ? whole : fitWidth));
 	function fitAll() {
-		if (viewportWidth <= 0) return;
-		zoom = clampScale(
-			Math.min(
-				1,
-				(viewportWidth - 2) / layout.width,
-				viewportHeight > 0 ? (viewportHeight - 2) / layout.height : 1
-			)
-		);
+		if (viewportWidth > 0) zoom = whole;
 	}
+
+	/**
+	 * Scrolls the drawing's box (not the page) so `el` is in view: the least
+	 * scroll that shows it, its top left first when it is larger than the box.
+	 */
+	function reveal(el: Element | null | undefined) {
+		const box = viewport;
+		if (!box || !el || !(el instanceof HTMLElement || el instanceof SVGElement)) return;
+		const v = box.getBoundingClientRect();
+		const r = el.getBoundingClientRect();
+		const left = v.left + box.clientLeft;
+		const top = v.top + box.clientTop;
+		const right = left + box.clientWidth;
+		const bottom = top + box.clientHeight;
+		const pad = 12;
+		let dx = 0;
+		let dy = 0;
+		if (r.left < left + pad || r.width > box.clientWidth - 2 * pad) dx = r.left - left - pad;
+		else if (r.right > right - pad) dx = r.right - right + pad;
+		if (r.top < top + pad || r.height > box.clientHeight - 2 * pad) dy = r.top - top - pad;
+		else if (r.bottom > bottom - pad) dy = r.bottom - bottom + pad;
+		if (Math.abs(dx) < 1 && Math.abs(dy) < 1) return;
+		const still =
+			typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+		box.scrollTo({
+			left: box.scrollLeft + dx,
+			top: box.scrollTop + dy,
+			behavior: still ? 'auto' : 'smooth'
+		});
+	}
+	/**
+	 * The state or edge label kept in view: the one marked last by the parser, the
+	 * selection or the construction. It is shown again after the layout or the zoom
+	 * changes.
+	 */
+	let focus: string | null = null;
+	function showFocus() {
+		requestAnimationFrame(() => {
+			if (focus !== null) reveal(viewport?.querySelector(`[data-focus="${focus}"]`));
+		});
+	}
+	function keepInView(key: () => string | null) {
+		$effect(() => {
+			const k = key();
+			untrack(() => {
+				if (k === null) return;
+				focus = k;
+				showFocus();
+			});
+		});
+	}
+	keepInView(() => (current !== null && current !== undefined ? `state:${current}` : null));
+	keepInView(() =>
+		selected?.kind === 'state'
+			? `state:${selected.state}`
+			: selected?.kind === 'edge'
+				? `edge:${selected.edge}`
+				: null
+	);
+	keepInView(() =>
+		step?.made !== null && step?.made !== undefined
+			? `state:${step.made}`
+			: step?.from !== null && step?.from !== undefined
+				? `state:${step.from}`
+				: null
+	);
+	$effect(() => {
+		void layout;
+		void scale;
+		untrack(showFocus);
+	});
 
 	const placed = $derived(new Map(layout.nodes.map((n) => [n.id, n])));
 	const isSelectedState = (s: number) => selected?.kind === 'state' && selected.state === s;
@@ -211,6 +291,8 @@
 		}
 	}
 </script>
+
+<svelte:window bind:innerHeight={windowHeight} />
 
 <div class="diagram">
 	<div class="toolbar">
@@ -243,8 +325,8 @@
 	</div>
 	<div
 		class="viewport"
+		bind:this={viewport}
 		bind:clientWidth={viewportWidth}
-		bind:clientHeight={viewportHeight}
 		role="group"
 		aria-label={ariaLabel}
 	>
@@ -300,6 +382,7 @@
 								}
 							]}
 							style="left: {p.frame.x}px; top: {p.frame.y}px;"
+							data-focus="state:{s}"
 							bind:this={frameEls[s]}
 							role="button"
 							tabindex={shown ? 0 : -1}
@@ -344,6 +427,7 @@
 							]}
 							style="left: {e.labelBox.x}px; top: {e.labelBox.y}px; width: {e.labelBox
 								.width}px; height: {e.labelBox.height}px;"
+							data-focus="edge:{edge.index}"
 							aria-pressed={isSelectedEdge(edge.index)}
 							aria-label="Edge from state {edge.from} to state {edge.to} on {symbolText(
 								edge.symbol

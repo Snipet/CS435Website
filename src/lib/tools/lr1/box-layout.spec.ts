@@ -11,7 +11,7 @@ import {
 	type BoxNodeInput,
 	type Point
 } from './box-layout';
-import { boxLines, estimateBox, monoWidth, stateNotes } from './diagram';
+import { MAX_RANGE, boxLines, estimateBox, monoWidth, shownRange, stateNotes } from './diagram';
 
 /** The layout's input for states first…last of an automaton, with estimated sizes. */
 function input(a: LrAutomaton, first = 0, last = a.states.length - 1) {
@@ -39,6 +39,13 @@ const onBoundary = (p: Point, b: Box) => {
 	const onY = Math.abs(p.y - b.y) < 0.5 || Math.abs(p.y - b.y - b.height) < 0.5;
 	return (inX && onY) || (inY && onX);
 };
+
+const strictlyInside = (p: Point, b: Box) =>
+	p.x > b.x + 0.5 && p.x < b.x + b.width - 0.5 && p.y > b.y + 0.5 && p.y < b.y + b.height - 0.5;
+
+/** The points of an SVG path made of M and L commands. */
+const pathPoints = (d: string): Point[] =>
+	[...d.matchAll(/[ML]\s*(-?[\d.]+)[\s,]+(-?[\d.]+)/g)].map((m) => ({ x: +m[1], y: +m[2] }));
 
 const shrink = (b: Box, by: number): Box => ({
 	x: b.x + by,
@@ -77,6 +84,19 @@ function check(layout: BoxLayout, nodes: readonly BoxNodeInput[], edges: readonl
 			onBoundary(e.points[e.points.length - 1], to.frame),
 			`edge ${e.from}→${e.to} ends at its state`
 		).toBe(true);
+		// The arrowhead's tip is on the frame and the rest of it outside, where it shows (the
+		// frames are drawn over the edges).
+		if (e.kind !== 'loop') {
+			const [tip, ...rest] = pathPoints(e.arrow);
+			expect(onBoundary(tip, to.frame), `the head of ${e.from}→${e.to} touches its state`).toBe(
+				true
+			);
+			for (const q of rest)
+				expect(
+					strictlyInside(q, to.frame),
+					`the head of ${e.from}→${e.to} is inside state ${e.to}`
+				).toBe(false);
+		}
 		// …through no other box.
 		for (const n of layout.nodes) {
 			const boxes = [n.frame, ...(n.note ? [n.note] : [])];
@@ -156,6 +176,28 @@ describe('layoutBoxes', () => {
 		expect(layoutBoxes(nodes, edges, { start })).toEqual(layout);
 	});
 
+	it('ends edges into the bottom of a box at its border (E → E + E | E * E | int)', () => {
+		const a = lr1Automaton(parseGrammar('E → E + E | E * E | int').grammar!);
+		const { nodes, edges, start } = input(a);
+		const layout = layoutBoxes(nodes, edges, { start });
+		check(layout, nodes, edges);
+		// 3 →int 1 and 4 →int 1 go back up into the one-line box of 1, and 5 →+ 3, 5 →* 4,
+		// 6 →+ 3 and 6 →* 4 into the bottom of the four-line boxes of 3 and 4.
+		const up = layout.edges.filter((e) => e.kind === 'up');
+		expect(up.map((e) => `${e.from}→${e.to}`).sort()).toEqual([
+			'3→1',
+			'4→1',
+			'5→3',
+			'5→4',
+			'6→3',
+			'6→4'
+		]);
+		for (const e of up) {
+			const frame = layout.nodes.find((n) => n.id === e.to)!.frame;
+			expect(e.points.at(-1)!.y).toBeCloseTo(frame.y + frame.height, 5);
+		}
+	});
+
 	it('draws a loop on the left of a state and an edge within a layer under it', () => {
 		const nodes: BoxNodeInput[] = [
 			{ id: 0, width: 160, height: 60, note: null },
@@ -219,14 +261,28 @@ describe('layoutBoxes', () => {
 		expect(layoutBoxes([], [], {})).toMatchObject({ nodes: [], edges: [], start: null });
 	});
 
+	const cminus = lr1Automaton(parseGrammar(CMINUS_BNF).grammar!, { trace: false });
+
 	it.each([0, 16, 32, 100, 200, 300, 356])(
 		'lays out C- states %i–%i+15 in a fraction of a second',
 		(first) => {
-			const cminus = lr1Automaton(parseGrammar(CMINUS_BNF).grammar!, { trace: false });
 			const { nodes, edges, start } = input(cminus, first, first + 15);
 			const t0 = performance.now();
 			const layout = layoutBoxes(nodes, edges, { start });
 			expect(performance.now() - t0).toBeLessThan(400);
+			check(layout, nodes, edges);
+		}
+	);
+
+	it.each([0, MAX_RANGE, 340])(
+		'lays out MAX_RANGE C- states from %i, the most the page draws, in a fraction of a second',
+		(first) => {
+			const [from, to] = shownRange(cminus.states.length, [first, first + 10_000]);
+			expect(to - from + 1).toBeLessThanOrEqual(MAX_RANGE);
+			const { nodes, edges, start } = input(cminus, from, to);
+			const t0 = performance.now();
+			const layout = layoutBoxes(nodes, edges, { start });
+			expect(performance.now() - t0).toBeLessThan(1000);
 			check(layout, nodes, edges);
 		}
 	);

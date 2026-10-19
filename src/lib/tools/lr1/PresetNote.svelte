@@ -1,6 +1,7 @@
 <!--
 	What the loaded preset is: its slide, a description, and the questions the
-	slides pose, each with its answer behind "Show answer".
+	slides pose, each with its answer behind "Show answer" (marked when the
+	slides leave the question open).
 -->
 <script lang="ts">
 	import { CitationTag, Disclosure } from '$lib/components/ui';
@@ -13,7 +14,7 @@
 	let { preset }: Props = $props();
 </script>
 
-<aside class="note" aria-label="About this example">
+<div class="note" role="group" aria-label="About this example">
 	{#if preset.cite}<CitationTag cite={preset.cite} />{/if}
 	<p class="desc">{preset.description}</p>
 	{#if preset.questions?.length}
@@ -22,6 +23,7 @@
 				<li>
 					<p class="prompt">{q.prompt}</p>
 					<Disclosure summary="Show answer" openSummary="Hide answer">
+						{#if q.unanswered}<p class="open">The slide leaves this question open.</p>{/if}
 						<p class="answer">{q.answer}</p>
 						<p class="where"><CitationTag cite={q.cite} /></p>
 					</Disclosure>
@@ -29,7 +31,7 @@
 			{/each}
 		</ul>
 	{/if}
-</aside>
+</div>
 
 <style>
 	.note {
@@ -63,6 +65,12 @@
 		font-size: 1.0625rem;
 		font-style: italic;
 		line-height: 1.4;
+	}
+	.open {
+		margin: 0 0 var(--space-1);
+		color: var(--text-2);
+		font-size: var(--text-sm);
+		font-style: italic;
 	}
 	.answer {
 		margin: 0 0 var(--space-2);

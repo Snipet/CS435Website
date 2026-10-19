@@ -11,14 +11,21 @@
  * top and enters at the bottom; an edge within a layer dips into the gap
  * under the layer; an edge to the state itself loops on the box's left side.
  * Edges that span several layers pass through reserved places in the layers
- * between, so no edge crosses a box. Within a layer the order comes from
+ * between, so no edge crosses a box. An edge ends with a short straight piece
+ * into its box, so its arrowhead stands square on the box's side. Within a layer the order comes from
  * barycenter sweeps, and the places from an isotonic fit of each box to its
  * neighbors. Labels go beside their edges where they touch no box and no
  * other label; a gap grows until every label fits.
  *
  * Pure: sizes in, geometry out (the page measures the boxes it draws).
  */
-import { arrowHeadD, boxesOverlap, segmentHitsBox, type Box } from '$lib/components/graph/geometry';
+import {
+	ARROW_LENGTH,
+	arrowHeadD,
+	boxesOverlap,
+	segmentHitsBox,
+	type Box
+} from '$lib/components/graph/geometry';
 
 export interface Point {
 	x: number;
@@ -112,6 +119,12 @@ const SIDE_DIP = 16;
 const SIDE_STEP = 10;
 const CORNER = 8;
 const ARROW_BACK = 7;
+/**
+ * The last piece of an edge between layers runs straight into its box, so the
+ * arrowhead stands square on the box's side and lies wholly outside it (the
+ * boxes are drawn over the edges).
+ */
+const LEAD = ARROW_LENGTH + 2;
 /** The most a gap grows while making room for labels. */
 const GROW_ROUNDS = 6;
 
@@ -162,6 +175,20 @@ function isotonic(targets: readonly number[]): number[] {
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
+
+/** The least of `f` over `xs` (`empty` for none); a loop, so any number of values is fine. */
+function minOf<T>(xs: readonly T[], f: (x: T) => number, empty: number): number {
+	let m = Infinity;
+	for (const x of xs) m = Math.min(m, f(x));
+	return m === Infinity ? empty : m;
+}
+
+/** The greatest of `f` over `xs` (`empty` for none). */
+function maxOf<T>(xs: readonly T[], f: (x: T) => number, empty: number): number {
+	let m = -Infinity;
+	for (const x of xs) m = Math.max(m, f(x));
+	return m === -Infinity ? empty : m;
+}
 
 /** A polyline with rounded corners, as an SVG path. */
 function roundedPath(points: readonly Point[]): string {
@@ -276,7 +303,7 @@ export function layoutBoxes(
 		layer[v] = l;
 		used[l] = (used[l] ?? 0) + fullWidth[v] + nodeGap;
 	}
-	const layers = Math.max(...layer) + 1;
+	const layers = maxOf(layer, (l) => l, 0) + 1;
 
 	// ── elements: the nodes, and dummies for edges that span more than one layer ──
 	const elems: Elem[] = nodesIn.map((node, i) => ({
@@ -393,7 +420,7 @@ export function layoutBoxes(
 		for (let l = layers - 2; l >= 0; l--) placeRow(rows[l], (e) => down[e]);
 	}
 	for (let l = 0; l < layers; l++) placeRow(rows[l], (e) => [...up[e], ...down[e]]);
-	const minLeft = Math.min(...elems.map((e) => e.left));
+	const minLeft = minOf(elems, (e) => e.left, 0);
 	for (const el of elems) el.left += padding - minLeft;
 
 	// ── side edges (within a layer) dip into the gap under it, one depth each ──
@@ -426,8 +453,8 @@ export function layoutBoxes(
 		let y = padding;
 		for (let l = 0; l < layers; l++) {
 			const nodesHere = rows[l].filter((e) => elems[e].node >= 0).map((e) => elems[e].node);
-			pad[l] = Math.max(0, ...nodesHere.map((i) => topExt[i]));
-			band[l] = pad[l] + Math.max(0, ...nodesHere.map((i) => bodyH[i]));
+			pad[l] = maxOf(nodesHere, (i) => topExt[i], 0);
+			band[l] = pad[l] + maxOf(nodesHere, (i) => bodyH[i], 0);
 			top[l] = y;
 			const sides = sideCount[l] > 0 ? SIDE_DIP + (sideCount[l] - 1) * SIDE_STEP + labelH + 8 : 0;
 			y += band[l] + baseGap + sides + extra[l];
@@ -523,14 +550,15 @@ export function layoutBoxes(
 					const l = elems[d].layer;
 					pts.push({ x: anchorX(d), y: top[l] }, { x: anchorX(d), y: bandBottom(l) });
 				}
-				pts.push({ x: xv, y: top[lv] }, { x: xv, y: fv.y });
+				pts.push({ x: xv, y: Math.min(top[lv], fv.y - LEAD) }, { x: xv, y: fv.y });
 			} else {
 				pts.push({ x: xu, y: fu.y }, { x: xu, y: top[lu] });
 				for (const d of c.dummies) {
 					const l = elems[d].layer;
 					pts.push({ x: anchorX(d), y: bandBottom(l) }, { x: anchorX(d), y: top[l] });
 				}
-				pts.push({ x: xv, y: bandBottom(lv) }, { x: xv, y: fv.y + fv.height });
+				const bottom = fv.y + fv.height;
+				pts.push({ x: xv, y: Math.max(bandBottom(lv), bottom + LEAD) }, { x: xv, y: bottom });
 			}
 			return dedupe(pts);
 		});
@@ -602,7 +630,7 @@ export function layoutBoxes(
 					const a = pts[i];
 					const b = pts[i + 1];
 					if (Math.abs(a.x - b.x) < 0.01 && Math.abs(b.y - a.y) < labelH) continue;
-					const g = Math.min(...[a, b].map((p) => gapAt(p.y)));
+					const g = Math.min(gapAt(a.y), gapAt(b.y));
 					if (g < 0) continue;
 					const dx = b.x - a.x;
 					const dy = b.y - a.y;

@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { formatItem } from '$lib/components/grammar/lr-item';
 import { augment, lr1Automaton } from '$lib/theory/grammar/lr';
 import { parseGrammar } from '$lib/theory/grammar/parse';
-import { itemLines, itemView, linesOf, readItems } from './items';
+import {
+	closureItemParts,
+	closureItemText,
+	itemLines,
+	itemView,
+	linesOf,
+	readItems
+} from './items';
 
 const augmented = (text: string) => augment(parseGrammar(text).grammar!);
 const aug = augmented('E → E + ( E ) | int');
@@ -117,5 +124,32 @@ describe('readItems', () => {
 		const read = readItems('E → •int, $\nE → •foo, $', aug);
 		expect(read.items).toHaveLength(1);
 		expect(read.diagnostics[0].span!.start).toBe('E → •int, $\nE → •'.length);
+	});
+});
+
+describe('closureItemText', () => {
+	const view = (production: number, dot: number, lookahead: string | null) =>
+		itemView(aug, { production, dot, lookahead });
+
+	it('writes items as slide 11 does: the dot against the symbol after it', () => {
+		// S → E is production 2 of the augmented grammar.
+		expect(closureItemText(view(2, 0, '$'))).toBe('S → •E, $');
+		expect(closureItemText(view(0, 0, '$'))).toBe('E → •E + ( E ), $');
+		expect(closureItemText(view(1, 0, '+'))).toBe('E → •int, +');
+		expect(closureItemText(view(0, 3, '+'), true)).toBe('[E → E + ( •E ), +]');
+		// At the end of the right side the dot stands apart (slide 8), and alone for ε.
+		expect(closureItemText(view(0, 5, '+'))).toBe('E → E + ( E ) •, +');
+		const eps = augmented('S → ε | id S');
+		expect(closureItemText(itemView(eps, { production: 0, dot: 0, lookahead: '$' }), true)).toBe(
+			'[S → •, $]'
+		);
+		// An LR(0) item has no lookahead.
+		expect(closureItemText(view(2, 0, null))).toBe('S → •E');
+	});
+
+	it('keeps the dot a part of its own, for drawing it red', () => {
+		const parts = closureItemParts(view(0, 0, '$'));
+		expect(parts.filter((p) => p.kind === 'dot')).toEqual([{ kind: 'dot', text: '•' }]);
+		expect(parts.map((p) => p.text).join('')).toBe('E → •E + ( E ), $');
 	});
 });

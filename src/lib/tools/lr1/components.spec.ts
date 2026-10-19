@@ -15,7 +15,9 @@ import ItemSetDiagram from './ItemSetDiagram.svelte';
 import LrTableView from './LrTableView.svelte';
 import { parseFrames } from './parse-steps';
 import ParsePanel from './ParsePanel.svelte';
+import { CMINUS_BNF } from '$lib/theory/cminus/parser';
 import { presetState, presets } from './presets';
+import { actionColumns } from './table-view';
 import PresetNote from './PresetNote.svelte';
 import Pseudocode from './Pseudocode.svelte';
 import { CLOSURE_CODE } from './closure-steps';
@@ -84,6 +86,11 @@ describe('ItemSetDiagram', () => {
 		expect(body).toContain('aria-pressed="true"');
 		expect(text(body)).toContain('E → E + (E) on ), +');
 		expect(text(body)).toContain('12 states');
+		// What the page scrolls into view: each state and each edge label is marked.
+		expect(attrs(body, 'data-focus')).toEqual([
+			...Array.from({ length: 12 }, (_, s) => `state:${s}`),
+			...Array.from({ length: 13 }, (_, e) => `edge:${e}`)
+		]);
 	});
 
 	it('hides the states the construction has not made yet', () => {
@@ -133,6 +140,35 @@ describe('LrTableView', () => {
 		expect(html.match(/<tbody>[\s\S]*<\/tbody>/)![0].match(/<tr/g)).toHaveLength(5);
 	});
 
+	it('orders the action columns as it is told: int + ( ) $ as on slide 19', () => {
+		const t = build.table;
+		expect(t.terminals).toEqual(['+', '(', ')', 'int', '$']);
+		const { body } = render(LrTableView, {
+			props: {
+				table: t,
+				range: [3, 7],
+				columns: actionColumns(t, build.automaton.edges),
+				lookup: { state: 5, kind: 'action', column: t.terminals.indexOf(')') },
+				caption: 'Rows 3–7'
+			}
+		});
+		const head = text(body.match(/<tr class="symbols[\s\S]*?<\/tr>/)![0]);
+		expect(head).toBe('State int + ( ) $ E');
+		// Row 4: s5 under int; the lookup is still action[5, )].
+		const row4 = attrs(body, 'aria-label').filter((n) => n.startsWith('action[4,'));
+		expect(row4).toEqual([
+			'action[4, int] = shift 5',
+			'action[4, +] is blank',
+			'action[4, (] is blank',
+			'action[4, )] is blank',
+			'action[4, $] is blank'
+		]);
+		expect(attrs(body, 'aria-label').filter((n) => n.startsWith('action[5,'))[3]).toBe(
+			'action[5, )] = reduce E → int'
+		);
+		expect(body.match(/class="[^"]*lookup/g)).toHaveLength(1);
+	});
+
 	it('marks a conflict and shows both entries', () => {
 		const amb = computeBuild({
 			grammar: 'E → E + E | E * E | int',
@@ -170,6 +206,57 @@ describe('the panels', () => {
 		expect(text(body)).toContain('Items 5');
 		expect(text(body)).toContain('Abbreviated 3');
 		expect(text(body)).toContain('Items is unchanged');
+		// The items as slide 11 writes them, the dot against the symbol after it.
+		expect(text(body)).toContain(
+			'S → •E, $ E → •E + ( E ), $ E → •int, $ E → •E + ( E ), + E → •int, +'
+		);
+		expect(text(body)).toContain('S → •E, $ E → •E + ( E ), $/+ E → •int, $/+');
+		expect(text(body)).toContain('Closure({ S → •E, $ }): the start state');
+		// The lists and the pseudocode scroll inside their boxes and take focus to be scrolled.
+		expect(body.match(/<ol class="items[^"]*" aria-label="[^"]*" tabindex="0"/g)).toHaveLength(2);
+		expect(body.match(/<ol class="code[^"]*" aria-label="[^"]*" tabindex="0"/g)).toHaveLength(1);
+		stepper.dispose();
+	});
+
+	it('render the LALR(1) merges as sentences, and the range of a large automaton', () => {
+		const lalr = computeBuild({
+			grammar: 'E → E + ( E ) | int',
+			input: '',
+			order: 'grammar',
+			method: 'lalr1'
+		})!;
+		const stepper = new Stepper(() => 0);
+		const panel = (b: typeof lalr, range: [number, number], ranged: boolean) =>
+			text(
+				render(DfaPanel, {
+					props: {
+						build: b,
+						notes: stateNotes(b.automaton, b.method),
+						method: b.method,
+						view: 'boxes',
+						items: 'abbreviated',
+						range,
+						ranged,
+						onrange: () => {},
+						steps: [],
+						stepper,
+						selected: null,
+						onselect: () => {}
+					}
+				}).body
+			);
+		expect(panel(lalr, [0, 6], false)).toContain(
+			'State 1 merges LR(1) states 1, 5. State 3 merges LR(1) states 3, 8. State 4 merges LR(1) states 4, 9. State 5 merges LR(1) states 6, 10. State 6 merges LR(1) states 7, 11.'
+		);
+		const cminus = computeBuild({
+			grammar: CMINUS_BNF,
+			input: '',
+			order: 'grammar',
+			method: 'lr1'
+		})!;
+		const big = panel(cminus, [0, 15], false);
+		expect(big).toContain(`of 0–${cminus.automaton.states.length - 1}, at most 32 at a time`);
+		expect(big).toContain(`States 0–15 of ${cminus.automaton.states.length}`);
 		stepper.dispose();
 	});
 
@@ -212,6 +299,13 @@ describe('the panels', () => {
 		});
 		expect(text(note.body)).toContain('Bottom-up Parsing II · slide 17');
 		expect(text(note.body)).toContain('DFA input is ?');
+		// The slides leave these questions open, and the note says so.
+		expect(text(note.body).match(/The slide leaves this question open\./g)).toHaveLength(2);
+		const answered = render(PresetNote, {
+			props: { preset: presets.find((p) => p.id === 'shift-reduce-conflict')! }
+		});
+		expect(text(answered.body)).not.toContain('leaves this question open');
+		expect(text(answered.body)).toContain('Bottom-up Parsing III · slides 18–20');
 		stepper.dispose();
 		parseStepper.dispose();
 	});

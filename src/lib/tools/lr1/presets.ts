@@ -36,7 +36,10 @@ export interface SlideQuestion {
 	prompt: string;
 	/** The answer in words. */
 	answer: string;
+	/** The slides of the question and of its answer. */
 	cite: Citation;
+	/** The slides pose the question and leave it open: the answer is not theirs. */
+	unanswered?: boolean;
 }
 
 export interface Lr1Preset extends Preset<Lr1PresetValue> {
@@ -137,12 +140,14 @@ export const presets: readonly Lr1Preset[] = [
 			{
 				prompt: 'DFA input is ?',
 				answer: 'The stack: the symbols left of the divider.',
-				cite: { deck: '14', slide: 16 }
+				cite: { deck: '14', slide: 16 },
+				unanswered: true
 			},
 			{
 				prompt: 'DFA alphabet consists of ?',
 				answer: 'The grammar symbols, terminals and non-terminals: every edge is labeled with one.',
-				cite: { deck: '14', slide: 16 }
+				cite: { deck: '14', slide: 16 },
+				unanswered: true
 			}
 		]
 	},
@@ -151,12 +156,11 @@ export const presets: readonly Lr1Preset[] = [
 		label: 'Table rows 3–7',
 		group: DFA,
 		description:
-			'Table for a fragment of our DFA: states 3–7 and their rows. The grammar is written E → int | E + ( E ), so the columns come in the order of the slide, int + ( ) $. The slide prints the entries of row 6 one column to the left; by the DFA, s8 is under + and s7 under ).',
+			'Table for a fragment of our DFA: states 3–7 and their rows. The terminal columns come in the order the DFA first shifts the terminals, int + ( ) $, as on the slide. The slide prints the entries of row 6 one column to the left; by the DFA, s8 is under + and s7 under ).',
 		cite: { deck: '14', slide: 19 },
 		value: {
-			grammar: DECK_15_GRAMMAR,
+			grammar: DECK_14_GRAMMAR,
 			input: SLIDE_INPUT,
-			order: 'reversed',
 			view: 'circles',
 			range: [3, 7]
 		},
@@ -164,13 +168,15 @@ export const presets: readonly Lr1Preset[] = [
 			{
 				prompt: 'Rows correspond to ?',
 				answer: 'The states of the DFA.',
-				cite: { deck: '14', slide: 18 }
+				cite: { deck: '14', slide: 18 },
+				unanswered: true
 			},
 			{
 				prompt: 'Columns correspond to ?',
 				answer:
 					'The grammar symbols: the terminals and $ make up the action table, the non-terminals the goto table.',
-				cite: { deck: '14', slide: 18 }
+				cite: { deck: '14', slide: 18 },
+				unanswered: true
 			}
 		]
 	},
@@ -220,7 +226,8 @@ export const presets: readonly Lr1Preset[] = [
 				prompt: 'Reduce pops 0 or more symbols (α) and pushes a non-terminal (A). 0 ?',
 				answer:
 					'A reduction with an ε-production pops nothing: here S → ε, before the first S is pushed.',
-				cite: { deck: '14', slide: 15 }
+				cite: { deck: '14', slide: 15 },
+				unanswered: true
 			}
 		]
 	},
@@ -237,7 +244,7 @@ export const presets: readonly Lr1Preset[] = [
 				prompt: 'We have a shift/reduce on input +. Do we want a shift or reduce?',
 				answer:
 					'Reduce: E * E binds tighter than +. With %left + then %left *, the rule E → E * E has higher precedence than the terminal +, and bison reduces.',
-				cite: { deck: '15', slide: 20 }
+				cite: { deck: '15', slide: [18, 20] }
 			}
 		]
 	},
@@ -254,7 +261,7 @@ export const presets: readonly Lr1Preset[] = [
 				prompt: 'How does this confuse the parser?',
 				answer:
 					'After id with $ next, it cannot choose between reducing with S → id and reducing with S → ε (to go on with S → id S).',
-				cite: { deck: '15', slide: 24 }
+				cite: { deck: '15', slide: [24, 25] }
 			}
 		]
 	},

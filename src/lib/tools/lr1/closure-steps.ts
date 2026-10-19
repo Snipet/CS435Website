@@ -6,7 +6,7 @@
  * engine's `lrClosure` / `lrTransition` give the additions; this file only
  * spreads them over the lines of the pseudocode.
  */
-import { formatItem, joinSymbols, symbolText } from '$lib/components/grammar/lr-item';
+import { joinSymbols, symbolText } from '$lib/components/grammar/lr-item';
 import {
 	lrClosure,
 	lrTransition,
@@ -18,7 +18,7 @@ import {
 } from '$lib/theory/grammar/lr';
 import { printSet } from '$lib/theory/grammar/parse';
 import { END_MARKER } from '$lib/theory/grammar/types';
-import { itemView, readItems, type ItemsReading } from './items';
+import { closureItemText, itemView, readItems, type ItemsReading } from './items';
 
 /** Bottom-up Parsing III, slide 10, line by line. */
 export const CLOSURE_CODE: readonly string[] = [
@@ -283,9 +283,8 @@ export function closureSetup(opts: {
 
 // ───────────────────────────── words ─────────────────────────────
 
-/** An item as the definitions write it: [E → E + ( • E ), +]. */
-export const bracketedItem = (aug: Augmented, item: LrItem) =>
-	formatItem(itemView(aug, item), 'bracketed');
+/** An item as Closure and Transition write it (slides 10–13): [E → E + ( •E ), +]. */
+const stepItem = (aug: Augmented, item: LrItem) => closureItemText(itemView(aug, item), true);
 
 /** β and a of an item [X → α•Yβ, a]: the symbols after Y, and the lookahead. */
 export function betaA(aug: Augmented, item: LrItem): { beta: string[]; a: string | null } {
@@ -301,7 +300,7 @@ export function describeFrame(aug: Augmented, run: ClosureRun, f: ClosureFrame):
 		if (f.at.line === 0)
 			return `Transition(${run.state ?? 'state'}, ${y}): the items of the state with • before ${y} move the dot over it.`;
 		if (f.at.line === 1) return 'Items ← ∅';
-		return `${bracketedItem(aug, run.seed[f.moved!])} is in the state: add ${bracketedItem(aug, f.add!.item)} to Items.`;
+		return `${stepItem(aug, run.seed[f.moved!])} is in the state: add ${stepItem(aug, f.add!.item)} to Items.`;
 	}
 	switch (f.at.line) {
 		case 0:
@@ -311,7 +310,7 @@ export function describeFrame(aug: Augmented, run: ClosureRun, f: ClosureFrame):
 		case 2: {
 			const item = run.items[f.current!];
 			const next = aug.productions[item.production].rhs[item.dot];
-			return `${bracketedItem(aug, item)} has • before the non-terminal ${symbolText(next)}.`;
+			return `${stepItem(aug, item)} has • before the non-terminal ${symbolText(next)}.`;
 		}
 		case 3:
 			return `A production of ${symbolText(aug.productions[f.production!].lhs)}: ${printProduction(aug.productions[f.production!])}.`;
@@ -321,8 +320,8 @@ export function describeFrame(aug: Augmented, run: ClosureRun, f: ClosureFrame):
 		}
 		case 5:
 			return f.add!.added
-				? `Add ${bracketedItem(aug, f.add!.item)} to Items.`
-				: `${bracketedItem(aug, f.add!.item)} is already in Items.`;
+				? `Add ${stepItem(aug, f.add!.item)} to Items.`
+				: `${stepItem(aug, f.add!.item)} is already in Items.`;
 		default: {
 			const repeats =
 				run.repeats > 0

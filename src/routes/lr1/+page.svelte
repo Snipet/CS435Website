@@ -27,8 +27,9 @@
 		type BuildRequest,
 		type BuildResult
 	} from '$lib/tools/lr1/build';
+	import ClosureItem from '$lib/tools/lr1/ClosureItem.svelte';
 	import ClosurePanel from '$lib/tools/lr1/ClosurePanel.svelte';
-	import { bracketedItem, closureSetup } from '$lib/tools/lr1/closure-steps';
+	import { closureSetup } from '$lib/tools/lr1/closure-steps';
 	import { buildSteps } from '$lib/tools/lr1/construction';
 	import DfaPanel from '$lib/tools/lr1/DfaPanel.svelte';
 	import { DRAW_ALL, inRange, shownRange, stateNotes, windowAround } from '$lib/tools/lr1/diagram';
@@ -52,7 +53,7 @@
 		type DfaSelection
 	} from '$lib/tools/lr1/selection';
 	import { DEFAULT_STATE, isLr1Hash, stateFromHash, type Lr1State } from '$lib/tools/lr1/state';
-	import { actionEntry } from '$lib/tools/lr1/table-view';
+	import { actionColumns, actionEntry } from '$lib/tools/lr1/table-view';
 	import { createBuildWorker } from '$lib/tools/lr1/worker';
 	import { syncToHash } from '$lib/url-state';
 
@@ -236,6 +237,12 @@
 		selection = same ? null : next;
 	}
 
+	/** Selects a state, and shows the states around it when it is not drawn. */
+	function showState(s: number) {
+		if (!inRange(range, s)) form.range = [...windowAround(s, states)];
+		selection = { kind: 'state', state: s };
+	}
+
 	// ── links ──
 	const linkState = $derived(
 		form.input.trim() ? { grammar: form.grammar, input: form.input } : { grammar: form.grammar }
@@ -287,14 +294,20 @@
 				{#if aug && grammar}
 					<div class="augmented">
 						<h3>Augmented grammar</h3>
-						<pre class="grammar-text"><span class="added">{startProduction}</span>
+						<!-- A long grammar scrolls inside this box, so the box takes focus for keyboard scrolling. -->
+						<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+						<pre
+							class="grammar-text"
+							tabindex="0"
+							role="region"
+							aria-label="Augmented grammar"><span class="added">{startProduction}</span>
 {printGrammar(grammar)}</pre>
 						<p class="hint">
 							The new start symbol {aug.start} has the one production {startProduction}{aug.start !==
 							'S'
 								? ` (S is a symbol of the grammar, so the new one is ${aug.start})`
 								: ''}. State 0 is Closure(&#123;
-							{#if startView}<LrItem item={startView} style="spaced" />{/if}
+							{#if startView}<ClosureItem item={startView} />{/if}
 							&#125;).
 						</p>
 					</div>
@@ -430,6 +443,7 @@
 				<div class={['table-body', { 'stale-data': stale }]} aria-busy={stale}>
 					<LrTableView
 						table={build.table}
+						columns={actionColumns(build.table, build.automaton.edges)}
 						{range}
 						row={build ? selectedRow(build.automaton, shown) : null}
 						cell={build ? selectedCell(build.automaton, build.table, shown) : null}
@@ -454,10 +468,15 @@
 									{@const aug2 = build.table.augmented}
 									<li>
 										<span class="where"
-											>State {c.state}, on {symbolText(c.terminal)}: {c.kind}.</span
+											><button
+												type="button"
+												class="to-state"
+												aria-label="Show state {c.state} in the DFA and the table"
+												onclick={() => showState(c.state)}>State {c.state}</button
+											>, on {symbolText(c.terminal)}: {c.kind}.</span
 										>
-										<span class="mono">{bracketedItem(aug2, c.items[0])}</span>
-										and <span class="mono">{bracketedItem(aug2, c.items[1])}</span>; the table keeps
+										<LrItem item={itemView(aug2, c.items[0])} /> and
+										<LrItem item={itemView(aug2, c.items[1])} />; the table keeps
 										{actionEntry(aug2, c.resolution.action).words}.
 									</li>
 								{/each}
@@ -527,6 +546,10 @@
 		gap: var(--space-1);
 		min-width: 0;
 	}
+	.grammar-text:focus-visible {
+		outline: 2px solid var(--focus);
+		outline-offset: 2px;
+	}
 	.grammar-text {
 		max-height: 14rem;
 		margin: 0;
@@ -537,8 +560,12 @@
 		font-size: var(--text-sm);
 		line-height: 1.6;
 	}
+	/* The production the augmenting adds, marked by its background (text keeps full contrast). */
 	.added {
-		color: var(--accept);
+		padding: 0 2px;
+		border-radius: 2px;
+		background: var(--accept-soft);
+		color: var(--text);
 		font-weight: 600;
 	}
 	.hint,
@@ -599,9 +626,27 @@
 		color: var(--reject);
 		font-weight: 600;
 	}
-	.mono {
-		font-family: var(--font-mono);
-		font-variant-ligatures: none;
+	.to-state {
+		padding: 0;
+		border: 0;
+		background: none;
+		color: inherit;
+		font: inherit;
+		text-decoration: underline;
+		text-underline-offset: 2px;
+		cursor: pointer;
+	}
+	.to-state:hover {
+		text-decoration-thickness: 2px;
+	}
+	.to-state:focus-visible {
+		border-radius: 2px;
+		outline: 2px solid var(--focus);
+		outline-offset: 2px;
+	}
+	/* A long item wraps rather than widen the page. */
+	.conflicts :global(.lr-item) {
+		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 	}
 </style>

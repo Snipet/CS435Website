@@ -5,6 +5,7 @@ import { parseGrammar } from '$lib/theory/grammar/parse';
 import {
 	actionCell,
 	actionCellName,
+	actionColumns,
 	actionEntry,
 	conflictCells,
 	edgeCell,
@@ -90,5 +91,29 @@ describe('conflicts', () => {
 			method: 'lr0'
 		});
 		expect(lr0.action[1].every((a) => a?.kind === 'reduce')).toBe(true);
+	});
+});
+
+describe('actionColumns', () => {
+	const order = (text: string) => {
+		const a = lr1Automaton(parseGrammar(text).grammar!);
+		const tt = lrTable(a);
+		return actionColumns(tt, a.edges).map((k) => tt.terminals[k]);
+	};
+
+	it('puts the terminals in the order the DFA first shifts them, then $', () => {
+		expect(t.terminals).toEqual(['+', '(', ')', 'int', '$']);
+		expect(order('E → E + ( E ) | int')).toEqual(['int', '+', '(', ')', '$']);
+		expect(order('E → int | E + ( E )')).toEqual(['int', '+', '(', ')', '$']);
+		expect(order('E → E + E | E * E | int')).toEqual(['int', '+', '*', '$']);
+	});
+
+	it('puts a terminal no edge carries after the others, in grammar order', () => {
+		// The order of the edges of state 0 (b, then c), then a; y is never shifted (D is
+		// unreachable, so the DFA has no edge on y), so it comes last before $.
+		const cols = order('S → C a | b\nC → c\nD → y');
+		expect(cols).toEqual(['b', 'c', 'a', 'y', '$']);
+		// Every column once.
+		expect(new Set(cols).size).toBe(cols.length);
 	});
 });

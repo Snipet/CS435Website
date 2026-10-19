@@ -5,7 +5,7 @@
  * Parsing III, slide 11), and items typed by the user, read back with the
  * grammar's own symbols (`E → E + ( •E ), +`).
  */
-import type { ItemView } from '$lib/components/grammar/lr-item';
+import { itemParts, type ItemPart, type ItemView } from '$lib/components/grammar/lr-item';
 import type { Diagnostic } from '$lib/theory/diagnostics';
 import { mergeItems, type Augmented, type LrItem } from '$lib/theory/grammar/lr';
 import { tokenizeInput } from '$lib/theory/grammar/parse';
@@ -24,6 +24,24 @@ export function itemView(aug: Augmented, item: LrItem): ItemView {
 		lookaheads: item.lookahead === null ? [] : [item.lookahead]
 	};
 }
+
+/**
+ * An item as Bottom-up Parsing III writes the items of Closure and Transition
+ * (slides 10, 11 and 13): every symbol spaced, the dot against the symbol after
+ * it, `S → •E, $`, `E → •E + ( E ), $/+`, `[Y → •γ, b]`; at the end of the
+ * right side it stands apart, `E → E + ( E ) •, +` (slide 8), and alone for an
+ * ε-production, `S → •, $`.
+ */
+export function closureItemParts(view: ItemView, brackets = false): ItemPart[] {
+	const parts = itemParts(view, brackets ? 'bracketed' : 'spaced');
+	return parts.filter((p, i) => !(p.kind === 'space' && parts[i - 1]?.kind === 'dot'));
+}
+
+/** `closureItemParts` as text. */
+export const closureItemText = (view: ItemView, brackets = false): string =>
+	closureItemParts(view, brackets)
+		.map((p) => p.text)
+		.join('');
 
 /** A line of an item list: the item drawn, and the indices of the items it stands for. */
 export interface ItemLine {
