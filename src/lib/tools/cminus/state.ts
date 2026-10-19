@@ -3,12 +3,21 @@
  * validation. The hash also accepts `LinkStates['cminus']`
  * (`{ source, input? }`), the shape other tools link with.
  */
-import type { IdentifierMode } from '$lib/theory/cminus';
+import { VISITOR_IDS, type IdentifierMode, type VisitorId } from '$lib/theory/cminus';
 import type { LinkStates } from '$lib/tools/links';
 import { DEFAULT_PRESET } from './presets';
 
-/** The tabs beside the source, in the order of the phases. */
-export const TABS = ['tokens', 'syntax', 'semantics', 'ir', 'code', 'run', 'language'] as const;
+/** The tabs beside the source, in the order of the phases (the visitors walk the syntax tree). */
+export const TABS = [
+	'tokens',
+	'syntax',
+	'visitor',
+	'semantics',
+	'ir',
+	'code',
+	'run',
+	'language'
+] as const;
 export type TabId = (typeof TABS)[number];
 
 /** Which of the two versions a tab with two shows: as generated, or after its optimizing pass. */
@@ -40,6 +49,8 @@ export interface CminusState {
 	code: Version;
 	/** List comments in the token table. */
 	comments: boolean;
+	/** The visitor the Visitor tab runs on the syntax tree. */
+	visitor: VisitorId;
 	/** The selected range of the source `[start, end)`; null when nothing is selected. */
 	sel: [start: number, end: number] | null;
 }
@@ -54,6 +65,7 @@ export function defaultState(): CminusState {
 		ir: 'before',
 		code: 'before',
 		comments: false,
+		visitor: 'print',
 		sel: null
 	};
 }
@@ -89,6 +101,7 @@ export function isCminusHash(v: unknown): v is CminusHash {
 		optional(v.ir, oneOf(VERSIONS)) &&
 		optional(v.code, oneOf(VERSIONS)) &&
 		optional(v.comments, isBoolean) &&
+		optional(v.visitor, oneOf(VISITOR_IDS)) &&
 		optional(v.sel, isRange)
 	);
 }
@@ -124,6 +137,7 @@ export function stateFromHash(v: CminusHash): CminusState {
 		ir: v.ir ?? base.ir,
 		code: v.code ?? base.code,
 		comments: v.comments ?? base.comments,
+		visitor: v.visitor ?? base.visitor,
 		// A selection saved by this page counts in the text as the editor holds it.
 		sel: source === v.source ? clampSelection(v.sel, source.length) : null
 	};

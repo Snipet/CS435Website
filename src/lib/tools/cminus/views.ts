@@ -91,6 +91,7 @@ export const PHASE_TAB: Record<Phase, TabId> = {
 export const TAB_LABEL: Record<TabId, string> = {
 	tokens: 'Tokens',
 	syntax: 'Syntax tree',
+	visitor: 'Visitor',
 	semantics: 'Semantics',
 	ir: 'Intermediate code',
 	code: 'Target code',
@@ -266,6 +267,8 @@ export function stageOfTab(tab: TabId, ir: Version, code: Version): StageId | nu
 const READY: Record<TabId, (c: Compilation) => boolean> = {
 	tokens: () => true,
 	syntax: (c) => c.parse !== null,
+	// The visitors walk a whole tree: a program with syntax errors has only part of one.
+	visitor: (c) => c.parse !== null && c.parse.ok,
 	semantics: (c) => c.semantic !== null,
 	ir: (c) => c.ir !== null,
 	code: (c) => c.codegen !== null,
@@ -303,6 +306,8 @@ export function phaseDiagnostics(c: Compilation, phase: Phase): PhaseDiagnostic[
 export const SELECTED_CLASS = 'cm-sel';
 /** Class of the lines the selected range touches. */
 export const SELECTED_LINE_CLASS = 'cm-sel-line';
+/** Class of the node the Visitor tab's step is at, in the editor. */
+export const CURRENT_CLASS = 'cm-cur';
 
 const OPERATORS = new Set<TokenType>([
 	'PLUS',
@@ -343,12 +348,14 @@ export function tokenClass(type: TokenType): string | null {
 /**
  * Colors for the editor, from the scanner's tokens and trivia: keywords,
  * identifiers, numbers, symbols and comments. The selected range gets
- * `SELECTED_CLASS` on top (white space included).
+ * `SELECTED_CLASS` on top (white space included), and the node a visitor's
+ * step is at, `current`, gets `CURRENT_CLASS`.
  */
 export function highlightSource(
 	text: string,
 	identifiers: IdentifierMode,
-	selection: SourceRange | null = null
+	selection: SourceRange | null = null,
+	current: SourceRange | null = null
 ): HighlightToken[] {
 	const scanned = scan(text, { identifiers });
 	const pieces: HighlightToken[] = [];
@@ -361,15 +368,32 @@ export function highlightSource(
 		const className = tokenClass(t.type);
 		if (className) pieces.push({ from: t.span.start, to: t.span.end, className });
 	}
-	if (!selection || selection.end <= selection.start) return pieces;
-	// Later ranges win: the plain mark first, then the colored text inside it again.
-	const marked: HighlightToken[] = [
-		{ from: selection.start, to: selection.end, className: SELECTED_CLASS }
-	];
-	for (const p of pieces) {
-		const from = Math.max(p.from, selection.start);
-		const to = Math.min(p.to, selection.end);
-		if (to > from) marked.push({ from, to, className: `${p.className} ${SELECTED_CLASS}` });
+	const overlays: { range: SourceRange; className: string }[] = [];
+	if (selection && selection.end > selection.start)
+		overlays.push({ range: selection, className: SELECTED_CLASS });
+	if (current && current.end > current.start)
+		overlays.push({ range: current, className: CURRENT_CLASS });
+	if (!overlays.length) return pieces;
+	// Between two ends of the ranges the same marks apply. Later ranges win: the
+	// plain mark first, then the colored text inside it again.
+	const cuts = [...new Set(overlays.flatMap((o) => [o.range.start, o.range.end]))].sort(
+		(a, b) => a - b
+	);
+	const marked: HighlightToken[] = [];
+	for (let k = 0; k + 1 < cuts.length; k++) {
+		const from = cuts[k];
+		const to = cuts[k + 1];
+		const marks = overlays
+			.filter((o) => o.range.start <= from && to <= o.range.end)
+			.map((o) => o.className)
+			.join(' ');
+		if (!marks) continue;
+		marked.push({ from, to, className: marks });
+		for (const p of pieces) {
+			const a = Math.max(p.from, from);
+			const b = Math.min(p.to, to);
+			if (b > a) marked.push({ from: a, to: b, className: `${p.className} ${marks}` });
+		}
 	}
 	return [...pieces, ...marked];
 }
