@@ -1,5 +1,6 @@
 // Grammar components. See docs/ARCHITECTURE.md §5.2a.
 export { default as DerivationChain } from './DerivationChain.svelte';
+export { default as GrammarClasses } from './GrammarClasses.svelte';
 export { default as GrammarEditor } from './GrammarEditor.svelte';
 export { default as LrItem } from './LrItem.svelte';
 export { default as LrState } from './LrState.svelte';
@@ -91,3 +92,19 @@ export {
 	type ChainSymbol
 } from './derivation-chain';
 export type { ChainStep, TreeHighlight, TreeTone } from './types';
+export {
+	AMBIGUOUS_X,
+	LL0_REGION,
+	LL_REGIONS,
+	LR_REGIONS,
+	MARKER_RADIUS,
+	classPoint,
+	cornerRadius,
+	insideLl0,
+	insideRegion,
+	placeText,
+	type ClassRegion,
+	type GrammarPlace,
+	type LlPlace,
+	type LrPlace
+} from './grammar-classes';

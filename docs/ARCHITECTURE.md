@@ -2086,6 +2086,13 @@ startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
   (marks the whole state), `numberSide?`. Its accessible name lists the
   state, its items and its labels, and speaks the marks:
   `State 4, current; E → E+(•E), $/+; marked: E → •int, )/+; …`.
+- `GrammarClasses.svelte` — the Venn diagram of grammar classes (Bottom-up
+  Parsing III, slide 26), on the notation page and in tools. The optional
+  `highlight` (a `GrammarPlace`, `{ lr, ll, ambiguous }`: the smallest LR and
+  LL class a grammar is in) draws a marker where the grammar falls and names
+  it in the accessible name. `grammar-classes.ts` holds the regions, `classPoint` (null
+  where the diagram has no region: not LR(1) and not known to be ambiguous)
+  and `placeText`.
 - `GrammarEditor.svelte` — `CodeEditor` for grammar text with a `→ | ε` palette,
   highlighting of non-terminals / terminals / metasymbols, and diagnostics.
 - `TokenStream.svelte` — a token string with an input pointer (`↑` under the
