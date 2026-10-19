@@ -18,6 +18,7 @@
 	import type { Diagnostic } from '$lib/theory/diagnostics';
 	import { tool } from '$lib/tools/catalog/cminus';
 	import '$lib/tools/cminus/cminus.css';
+	import DiagnosticList from '$lib/tools/cminus/DiagnosticList.svelte';
 	import IrView from '$lib/tools/cminus/IrView.svelte';
 	import LanguageView from '$lib/tools/cminus/LanguageView.svelte';
 	import PhaseStrip from '$lib/tools/cminus/PhaseStrip.svelte';
@@ -29,6 +30,8 @@
 		describeSelection,
 		marksFor,
 		rangeOfCaret,
+		sameRange,
+		selectionKey,
 		type SourceRange
 	} from '$lib/tools/cminus/selection';
 	import SelectionBar from '$lib/tools/cminus/SelectionBar.svelte';
@@ -55,13 +58,16 @@
 		type RunRequest
 	} from '$lib/tools/cminus/tasks';
 	import TokensView from '$lib/tools/cminus/TokensView.svelte';
+	import VisitorView from '$lib/tools/cminus/VisitorView.svelte';
 	import {
+		CURRENT_CLASS,
 		SELECTED_CLASS,
 		TAB_LABEL,
 		blockedBy,
 		editorDiagnostics,
 		highlightSource,
 		irVersionShown,
+		phaseDiagnostics,
 		selectionLineClasses,
 		stageOfTab,
 		stageViews,
@@ -154,7 +160,7 @@
 	const selection = $derived<SourceRange | null>(
 		model.sel ? { start: model.sel[0], end: model.sel[1] } : null
 	);
-	const selKey = $derived(model.sel ? `${model.sel[0]}:${model.sel[1]}` : '');
+	const selKey = $derived(selectionKey(selection));
 	const marks = $derived(c && sameText ? marksFor(c, selection) : NO_MARKS);
 	const summary = $derived(
 		c && sameText && selection ? describeSelection(c, selection, marks) : null
@@ -225,13 +231,41 @@
 		return () => cancelAnimationFrame(frame);
 	});
 
+	// ---- The Visitor tab -----------------------------------------------------------
+	// Its step and the node the step is at live here, so the step is kept while
+	// another tab is open and the editor can mark the node.
+
+	let visitStep = $state(0);
+	let visitCurrent = $state.raw<SourceRange | null>(null);
+	const visitNode = $derived(model.tab === 'visitor' && sameText ? visitCurrent : null);
+	const visitKey = $derived(visitNode ? `${visitNode.start}:${visitNode.end}` : '');
+
+	function showVisit(range: SourceRange | null) {
+		if (
+			!sameRange(
+				range,
+				untrack(() => visitCurrent)
+			)
+		)
+			visitCurrent = range;
+	}
+
+	// The node of the step is brought into view in the editor (the editor scrolls, not the page).
+	$effect(() => {
+		if (!visitKey || !editorBox) return;
+		const box = editorBox;
+		const frame = requestAnimationFrame(() => revealRange(box, `.${CURRENT_CLASS}`));
+		return () => cancelAnimationFrame(frame);
+	});
+
 	// ---- The editor --------------------------------------------------------------
 
 	const highlight = $derived.by(() => {
 		const identifiers = model.identifiers;
 		const selected = selection;
+		const node = visitNode;
 		return (text: string) =>
-			text.length > MAX_SOURCE ? [] : highlightSource(text, identifiers, selected);
+			text.length > MAX_SOURCE ? [] : highlightSource(text, identifiers, selected, node);
 	});
 	const lineClasses = $derived(selectionLineClasses(model.source, selection));
 	const diagnostics = $derived(editorDiagnostics(c, { stale: !sameText }));
@@ -244,6 +278,7 @@
 		model.input = p.value.input;
 		model.sel = null;
 		if (p.value.tab) model.tab = p.value.tab;
+		if (p.value.visitor) model.visitor = p.value.visitor;
 	}
 
 	const identifierOptions: { value: IdentifierMode; label: string; title: string }[] = [
@@ -280,6 +315,7 @@
 	const WHAT: Record<TabId, string> = {
 		tokens: 'token list',
 		syntax: 'syntax tree',
+		visitor: 'traversal',
 		semantics: 'symbol table',
 		ir: 'three-address code',
 		code: 'TINY Machine code',
@@ -425,7 +461,18 @@
 								</p>
 							{:else}
 								{@const blocked = blockedBy(c, tab)}
-								{#if blocked}
+								{#if blocked && tab === 'visitor'}
+									<!-- The visitors need the whole tree: what keeps the parser from building it. -->
+									<div class="cm-stack">
+										<StoppedNote {c} phase={blocked} what={WHAT[tab]} onopen={openTab} />
+										<DiagnosticList
+											{c}
+											diagnostics={phaseDiagnostics(c, blocked)}
+											label="Diagnostics of the {blocked}"
+											onselect={select}
+										/>
+									</div>
+								{:else if blocked}
 									<StoppedNote {c} phase={blocked} what={WHAT[tab]} onopen={openTab} />
 								{:else if tab === 'tokens'}
 									<TokensView
@@ -437,6 +484,16 @@
 									/>
 								{:else if tab === 'syntax'}
 									<SyntaxView {c} {marks} {selection} {selKey} {grammarHref} onselect={select} />
+								{:else if tab === 'visitor'}
+									<VisitorView
+										{c}
+										{marks}
+										{selKey}
+										bind:visitor={model.visitor}
+										bind:step={visitStep}
+										oncurrent={showVisit}
+										onselect={select}
+									/>
 								{:else if tab === 'semantics'}
 									<SemanticsView {c} {marks} {selection} {selKey} onselect={select} />
 								{:else if tab === 'ir'}

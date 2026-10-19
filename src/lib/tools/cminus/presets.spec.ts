@@ -3,9 +3,12 @@ import { formatCitation } from '$lib/lectures';
 import {
 	SAMPLES,
 	UNDECLARED_SOURCE,
+	VISITOR_IDS,
 	compile,
+	courseAst,
 	interpretCompilation,
 	runCompilation,
+	traceVisitor,
 	type Phase
 } from '$lib/theory/cminus';
 import { parseInputs } from '$lib/tools/tiny-vm/input';
@@ -30,6 +33,7 @@ const EXPECTED: Record<string, Expected> = {
 	blocks: { stoppedAt: null, output: [3, 2, 1] },
 	sum: { stoppedAt: null, output: [108] },
 	reverse: { stoppedAt: null, output: [5, 1, 4, 1, 3, 14] },
+	constants: { stoppedAt: null, output: [864000, 1] },
 	undeclared: { stoppedAt: 'semantic', errors: [/\by\b/, /\bz\b/] },
 	'missing-semicolon': { stoppedAt: 'parser', errors: [/;/] },
 	'illegal-character': { stoppedAt: 'scanner', errors: [/%/] }
@@ -55,6 +59,7 @@ describe('presets', () => {
 			expect(parseInputs(p.value.input).invalid, p.id).toEqual([]);
 			expect(p.value.source.length, p.id).toBeLessThan(MAX_SOURCE);
 			if (p.value.tab) expect(TABS, p.id).toContain(p.value.tab);
+			if (p.value.visitor) expect(VISITOR_IDS, p.id).toContain(p.value.visitor);
 			// Lines fit the editor beside the views without scrolling sideways.
 			if (p.id !== 'undeclared') {
 				for (const line of p.value.source.split('\n'))
@@ -144,6 +149,29 @@ describe('presets', () => {
 		expect(text('sum')).toContain('while ((n = input()) != 0)');
 		expect(text('reverse')).toContain('for (i = 0; i < 5; ++i)');
 		expect(text('reverse')).toContain('for (i = 4; i >= 0; --i)');
+
+		// ConstantFolder folds the products of literals, and nothing with a variable in it.
+		const constants = presetById('constants')!;
+		expect(constants.value).toMatchObject({ tab: 'visitor', visitor: 'fold' });
+		const folds = traceVisitor(
+			courseAst(compile(text('constants')).parse!.program),
+			'fold'
+		).output.flatMap((r) =>
+			r.kind === 'fold' ? [`${r.left} ${r.op} ${r.right} = ${r.value}`] : []
+		);
+		expect(folds).toEqual([
+			'24 * 60 = 1440',
+			'1440 * 60 = 86400',
+			'7 * 24 = 168',
+			'168 * 60 = 10080',
+			'10080 * 60 = 604800'
+		]);
+		// The other programs have no constant operator.
+		for (const p of PRESETS) {
+			if (p.id === 'constants' || compile(p.value.source).parse?.ok !== true) continue;
+			const trace = traceVisitor(courseAst(compile(p.value.source).parse!.program), 'fold');
+			expect(trace.output, p.id).toEqual([]);
+		}
 
 		const sort = compile(text('sort')).semantic!;
 		expect(sort.symbols.find((s) => s.name === 'numbers')).toMatchObject({
