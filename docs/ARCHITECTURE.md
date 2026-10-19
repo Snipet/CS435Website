@@ -35,28 +35,107 @@ src/
     theory/                   pure TS engine (no Svelte, no DOM)
       charset.ts              CharSet (sets of code points) + partitionCharSets
       chars.ts                showChar, formatString, formatStringSet, formatLabel, formatClass
+      diagnostics.ts          Diagnostic, shared by every parser
       regex/                  AST, lecture + flex parsers, printer, analysis
       automata/               automaton model and algorithms
-      grammar/                CFG model, parser, derivations, Earley parser, analysis
+      grammar/                context-free grammars (§4.4)
+        types.ts parse.ts     CFG model; lecture-notation and EBNF parsers and printers
+        analyze.ts            nullable, FIRST/FOLLOW, useless symbols, recursion, cycles, Chomsky
+                              type, sentence lengths
+        derive.ts earley.ts   derivations and trees; Earley recognizer, parse trees, L(G)
+        ll1.ts                First and Follow step by step, the LL(1) table, the LL(1) driver
+        lr.ts                 augmenting, LR(1)/LR(0) items, Closure, Transition, LR(1), LR(0)
+                              and LALR(1) automata
+        lr-table.ts           action/goto tables (LR(0), SLR(1), LR(1)), conflicts, precedence
+        lr-parse.ts           the LR driver, shift-reduce rows, configurations
+        handles.ts            the handles of a bottom-up parse
+        lr-classes.ts         LL(1), LR(0), SLR(1), LALR(1), LR(1) membership (slide 26)
+      cminus/                 the C- compiler (§4.5): tokens, scanner, ast, parser, semantic, ir,
+                              optimize, codegen, run, interpret, compile, runtime, samples;
+                              courseAst.ts (the tree in the course's AST classes) and visitor.ts
+                              (IVisitor, accept, and traces of three visitors)
     components/
       layout/                 header, footer, theme toggle
       ui/                     generic UI kit (buttons, panels, tabs, inputs, stepper…)
       graph/                  AutomatonView, TransitionTable, layout
+      grammar/                grammar views (§5.2a): GrammarEditor, ParseTreeView + tree-layout.ts,
+                              DerivationChain, TokenStream, lr-item.ts + LrItem + LrState (LR items
+                              and state boxes), grammar-classes.ts + GrammarClasses (slide 26)
     tools/
       types.ts                ToolMeta
       registry.ts             glob-imports catalog/*.ts
+      links.ts                LinkStates and toolLink (§5.1a)
       catalog/<slug>.ts       one file per tool: `export const tool: ToolMeta`
+      <slug>/                 a tool's own components, presets, state, views and workers
     url-state.ts              share-link state in the URL hash (re-exports url-state.svelte.ts,
                               which holds the code because syncToHash uses runes)
     checklist.ts              checklists kept in the browser (localStorage, versioned keys)
   routes/
     +page.svelte              home: tools grouped by compiler stage
-    notation/+page.svelte     notation reference
+    notation/+page.svelte     notation reference; grammar-notation.ts and parsing-notation.ts
+                              hold its grammar and parsing examples
     midterm/+page.svelte      midterm review list; topics.ts holds the list and its links,
                               checklist.ts the line ids and views of its checklist
     <slug>/+page.svelte       one route per tool
 docs/ARCHITECTURE.md          this file
 ```
+
+The tools, by route, in the order of the home page (`ToolMeta.stage`, then
+`order`):
+
+- `cminus` (C- Compiler): the phases of `theory/cminus` on a program, one tab
+  each (`views.ts`), compiled and run in workers; the Visitor tab
+  (`visitor-view.ts`, `Visitor*.svelte`) steps a visitor over the course tree;
+  `grammar-links.ts` opens the BNF in the grammar tools.
+- `phases` (Compiler Phases): one statement through every phase.
+- `t-diagrams` (T-Diagrams): compilers drawn as T-diagrams and composed.
+- `regex` (Regular Expressions): an RE's structure, its strings, tests and
+  comparisons.
+- `automata` (Finite Automata): an editable DFA or NFA and its runs.
+- `thompson` (Thompson's Construction): the NFA of an RE, fragment by fragment.
+- `subset` (Subset Construction): the DFA of an NFA, a table row at a time.
+- `minimize` (DFA Minimization): partition refinement and distinguishing
+  strings.
+- `lexer` (Scanner Rules): token rules and maximal munch.
+- `scanner-dfa` (Scanner DFAs): a scanner's DFA run by the table-driven loop or
+  as switch statements.
+- `flex` (Flex Playground): a flex specification and the matches of yylex().
+- `grammar` (Context-Free Grammars): the four-tuple, derivations, membership and
+  L(G) of a grammar; `parsing-links.ts` opens the parsing tools.
+- `ambiguity` (Ambiguity and Precedence): every parse tree of a string, the
+  rewrite and the declarations that remove the ambiguity; `conflicts-link.ts`
+  opens Conflicts & Precedence.
+- `rd-backtracking` (Recursive Descent with Backtracking): the backtracking
+  parser, step by step.
+- `rd-predictive` (Predictive Recursive Descent): the EBNF rewrite and the
+  generated predictive parser; `links.ts` gives the rewrite in BNF for the LL(1)
+  table.
+- `ll1` (LL(1) Parsing Table): First and Follow stepped pass by pass or filled
+  in and checked (`sets.ts`), the table in grammar order or an order typed in,
+  why a grammar is not LL(1), a rewrite without EBNF (`rewrite.ts`), and the
+  Stack | Input | Action trace beside the top-down tree (`trace.ts`); the
+  analysis and the parse run in workers (`model.ts`).
+- `shift-reduce` (Shift-Reduce Parsing): the parse with the canonical LR(1)
+  table (in a worker, `model.ts`) as the trace with the divider I (`view.ts`),
+  the forest over the tokens, the handles of the reductions beside the rightmost
+  derivation, finding a handle by hand (`handle-check.ts`), and the table's
+  conflicts with bison's default.
+- `lr1` (LR(1) Parser Builder): Closure and Transition stepped over their
+  pseudocode (`closure-steps.ts`), the DFA built state by state
+  (`construction.ts`) and drawn as item-set boxes or circles (`box-layout.ts`,
+  `diagram.ts`; a window of `WINDOW` states above `DRAW_ALL`, `range.ts`), the
+  action/goto table (`table-view.ts`), and the LR parsing algorithm line by line
+  (`parse-steps.ts`); LR(0), SLR(1) and LALR(1) for comparison; built in a
+  worker.
+- `conflicts` (Conflicts & Precedence): the LR(1) table with bison's
+  declarations (`precedence.ts`), each conflict with its items, the ⇒ view and
+  the stack where it arises (`context.ts`) and how it is settled
+  (`resolution.ts`), the parse as resolved and with other actions chosen
+  (`override.ts`), bison's Parser.output (`bison-report.ts`), reading a bison
+  file (`bison-import.ts`), and the grammar's classes (`classes.ts`); computed
+  in a worker.
+- `tiny-vm` (TINY Machine): TM programs, their registers and memory, step by
+  step; `machine.ts` is the machine the C- compiler runs.
 
 A tool owns `src/routes/<slug>/`, `src/lib/tools/catalog/<slug>.ts`, and (if
 needed) `src/lib/tools/<slug>/` for tool-specific components, presets and
@@ -65,6 +144,10 @@ logic. Tools never edit each other's folders. Anything two tools need goes into
 
 `notation/` and `midterm/` are reference pages, not tools: no catalog entry, no
 `ToolPage`, no `syncToHash` state (their URL hash is an in-page anchor). The
+notation page ends each section of "LL(1) and bottom-up parsing" with a link
+that opens the section's example in the tool that runs it (`sectionTools` in
+`notation/parsing-notation.ts`, built with `toolLink` from `LinkStates` shapes
+only); its spec checks each state against the tool's validator. The
 midterm page links each topic of the review list to the tools and notation
 sections that cover it. To open a tool on one of that tool's own presets or
 views, `src/routes/midterm/topics.ts` imports from tool folders, read-only, and
@@ -286,13 +369,21 @@ The notation page ("LL(1) and bottom-up parsing") shows each item below.
   `[E, int]`, and the algorithm looks up `T[N, a]`. A cell with two
   right-hand sides is _multiply defined_: the grammar is not LL(1). The table
   is filled by: for `A → α`, `T[A, b] = α` for each terminal `b ∈ First(α)`,
-  and, if `α →* ε`, for each `b ∈ Follow(A)` (`$` included).
+  and, if `α →* ε`, for each `b ∈ Follow(A)` (`$` included). Rows and
+  columns are in grammar order (N; T, then `$`); the LL(1) Parsing Table also
+  takes an order typed as symbols, the slides' being `T E X Y` and
+  `int * + ( ) $`. Its rewrite for LL(1) without EBNF (slides 5–6) names a new
+  non-terminal after the one it comes from, `E’`, `E’’`, …; the slides' `X`
+  and `Y` are names given to them.
 - **LL(1) traces** (slides 10–12): three columns headed Stack, Input, Action.
   The stack is written with its top on the left and `$` at the bottom
   (`int Y X $`); the input is the rest of the tokens ending with `$`. The
   action on a row is what is done to that row: the right-hand side pushed
   (`T X`), `terminal` for a match, `ε` for an ε-production, and `ACCEPT` on
-  the last row (`$ | $`). In pseudocode the stack is `< S $ >`.
+  the last row (`$ | $`). In pseudocode the stack is `< S $ >`. Beside a
+  trace the tree grows top-down, the non-terminals not yet expanded as leaves,
+  with the matched prefix, the non-terminal on top of the stack and the next
+  token marked (slides 14–17).
 - **Handles** (Bottom-Up Parsing, slides 2–11): LR = tokens read left to
   right, a rightmost derivation built in reverse. The handle β satisfies
   `A → β` and `S →* α A γ → α β γ = sent`, and is drawn in red (`--reject`).
@@ -327,7 +418,9 @@ The notation page ("LL(1) and bottom-up parsing") shows each item below.
   that are color only are also spoken: the divider's `I` is `aria-hidden`
   beside visually hidden text "divider", and visually hidden text frames a
   handle ("handle: …, end of handle") and the tokens of a shift ("to shift:
-  …, end of shift").
+  …, end of shift"). Shift-Reduce Parsing can write the DFA state of each
+  stack symbol under it, the bottom pair's `0` first (the pairs of the LR
+  stack, below).
 - **LR(1) items** (Bottom-up Parsing III, slides 5–14): `[X → α•β, a]`, the
   dot a red bullet (`--reject`) wherever an item is written, pseudocode
   included (`Closure`, `Transition`). Three forms (`formatItem`): bracketed, every
@@ -335,7 +428,13 @@ The notation page ("LL(1) and bottom-up parsing") shows each item below.
   (`[E → E + • ( E ), +]`, `[S → •, $]`); the same without brackets in
   running text; compact inside a state box (`E → E+(•E), $/+`), where items
   that differ only in their lookahead share one line and their lookaheads are
-  joined by `/` in order of first appearance (`$/+`, `)/+`). The grammar is
+  joined by `/` in order of first appearance (`$/+`, `)/+`). Closure and
+  Transition (slides 10, 11 and 13) write their items with the dot against
+  the symbol after it: `S → •E, $`, `E → •E + ( E ), $/+`, `[Y → •γ, b]`; at
+  the end of a right-hand side the dot stands apart (`E → E + ( E ) •, +`,
+  slide 8), and alone in an ε-production (`S → •, $`). The LR(1) Parser
+  Builder writes the items of its Closure and Transition steps and item lists
+  this way (`closureItemParts` in `tools/lr1/items.ts`). The grammar is
   augmented with a new start symbol `S` and `S → E` (`S’ → S` when `S` is
   taken, slide 25); the start state is `Closure({ S → •E, $ })`. States are
   numbered from 0 as Bottom-up Parsing II, slide 17 numbers them: breadth
@@ -347,7 +446,9 @@ The notation page ("LL(1) and bottom-up parsing") shows each item below.
   item of a start symbol that never occurs on a right-hand side (the
   augmented `S`) accepts, and only on `$`; a start symbol that also occurs on
   a right-hand side is reduced like any other non-terminal (`S → id on $`,
-  slide 25). DFA edges carry one grammar symbol each.
+  slide 25). DFA edges carry one grammar symbol each. The DFA is drawn as
+  item-set boxes (Bottom-up Parsing III, slide 14) or as numbered circles
+  (Bottom-up Parsing II, slide 17), each state's labels beside it.
 - **LR tables** (Bottom-up Parsing II, slides 16–21): rows are states; the
   terminal columns and `$` form the _action_ table, then a vertical rule and
   the non-terminal columns, the _goto_ table. Cells: `sN` (shift, go to state
@@ -356,12 +457,22 @@ The notation page ("LL(1) and bottom-up parsing") shows each item below.
   prints row 6 one column to the left; its entries are `+ s8` and `) s7`. The
   LR stack holds pairs `< sym, state >` and starts as `< dummy, 0 >`; the
   pseudocode names are `action[top_state(stack), I[j]]`,
-  `Goto[top_state(stack), X]`, `shift k`, `reduce X → α`, `pop |α| pairs`.
+  `Goto[top_state(stack), X]`, `shift k`, `reduce X → α`, `pop |α| pairs`,
+  and a cell is named `action[4, int]` or `Goto[4, E]`. The action columns
+  are the terminals in the order the DFA first shifts them (its edges in the
+  order they are made), then any other terminal in grammar order, then `$`:
+  `int + ( ) $` for `E → E + ( E ) | int`, as on slide 19, whichever order
+  its alternatives are written in (`actionColumns` in
+  `tools/lr1/table-view.ts`; the engine's `LrTable.terminals` keep grammar
+  order). A cell with a conflict lists every action in it, the shift first,
+  then the reductions in grammar order, and names the one the table keeps.
 - **Conflicts** (Bottom-up Parsing III, slides 16–25): shift/reduce is
   `[X → α•aβ, b]` and `[Y → γ•, a]` in one state; reduce/reduce is
   `[X → α•, a]` and `[Y → β•, a]`. Part of a state and part of its successor
   are joined by `⇒` with the symbol as a superscript (`⇒E`, `⇒id`), with `…`
-  for items left out.
+  for items left out. Where a conflict arises is the configuration with the
+  next terminal and `…` for the rest of the input, `E * E I + …`, and the two
+  moves from it, `⇒ E * E + I …` (shift) and `⇒ E I + …` (reduce).
 - **Precedence in bison** (slides 19–22): `%left '+'` then `%left '*'` (bison
   quotes character terminals; these are the declarations `%left +`,
   `%left *` above). A later line binds tighter; a rule's precedence is that of
@@ -369,7 +480,12 @@ The notation page ("LL(1) and bottom-up parsing") shows each item below.
   precedence is declared for either rule or terminal, if the input terminal
   has higher precedence than the rule, or if the precedences are the same and
   right associative, and with a reduce otherwise (slide 20; `%nonassoc` is
-  beyond the decks).
+  beyond the decks). A terminal in a declaration is written as bison writes
+  it: one character other than a letter in single quotes (`'+'`), a longer
+  terminal that is not a name in double quotes (`"=="`), a name bare (`then`,
+  `INT`); a line that starts with `//` is turned off. bison's report
+  (Parser.output, slide 28) is for the LALR(1) automaton, its states numbered
+  as bison numbers them and rule 0 `$accept: E $end`.
 - **Grammar classes** (slide 26): Unambiguous | Ambiguous Grammars;
   `LR(k) ⊃ LR(1) ⊃ LALR(1) ⊃ SLR ⊃ LR(0)`; `LL(k) ⊂ LR(k)`, `LL(1) ⊂ LR(1)`,
   `LL(0) ⊂ LR(0)`, the LL classes crossing the LR classes in between; "Simple
@@ -1399,8 +1515,9 @@ function grammarClasses(
   `'slr1'` table methods and `lalr1Automaton` build them the standard way so
   that `grammarClasses` can place a grammar in that diagram. Its inclusions
   hold for grammars whose non-terminals are all reachable and productive.
-- **Cost.** Canonical LR(1) automata can be large: the 29 rules of C- give 308
-  states in about 15 ms; `maxStates` (default 5000) cuts the construction off
+- **Cost.** Canonical LR(1) automata can be large: the 29 rules of C- (66
+  productions, with the for loop and `++`/`--`) give 372 states in a few tens
+  of milliseconds; `maxStates` (default 5000) cuts the construction off
   with an error and `truncated`, and `trace: false` skips the steps.
 
 ### 4.5 C- compiler (`theory/cminus/`)
@@ -2103,6 +2220,30 @@ The parsing tools share one shape: `{ grammar, input? }`, where `grammar` is
 grammar text in lecture notation (§3.10) and `input` a space-separated token
 string. `conflicts` adds `precedence`, bison declarations one per line
 (`%left '+'`, later lines binding tighter, as in Bottom-up Parsing III).
+
+The parsing tools open each other on their grammar, and on their token string
+while it has no errors (an "Open in …" line under the grammar, or a link
+beside the result it is about):
+
+- Shift-Reduce Parsing, LR(1) Parser Builder and Conflicts & Precedence link
+  to each other and to LL(1) Parsing Table, which links to the first two, to
+  Context-Free Grammars and Predictive Recursive Descent, and, for a string
+  with two parse trees, to Ambiguity and Precedence.
+- Context-Free Grammars links to the four of them (`grammar/parsing-links.ts`).
+- Recursive Descent with Backtracking and Predictive Recursive Descent link to
+  LL(1) Parsing Table with BNF only, which is all it reads: the grammar as
+  written, and the predictive tool's rewrite, written in BNF by
+  `ebnfToGrammar` when it has `{ }` or `[ ]` (`rd-predictive/links.ts`).
+- Ambiguity and Precedence opens Conflicts & Precedence with its declarations
+  written as bison writes them, lines without operators left out
+  (`ambiguity/conflicts-link.ts`).
+- The C- Compiler opens its BNF (`CMINUS_BNF`, which `parseGrammar` reads as
+  it is) in Context-Free Grammars, and in LR(1) Parser Builder and Conflicts &
+  Precedence on the token strings of those tools' C- presets, so that each
+  opens on its preset (`cminus/grammar-links.ts`).
+
+The spec of each of these modules decodes its links and checks them with the
+target tool's hash validator.
 
 ### 5.2 Graph components (`$lib/components/graph/`)
 
