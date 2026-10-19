@@ -15,6 +15,7 @@ import { nodeById, rangeOf, rangeOfUse, type SourceRange } from './selection';
 import { MAX_SOURCE, TABS } from './state';
 import { runProgram, type RunOutput } from './tasks';
 import {
+	CURRENT_CLASS,
 	MAX_DRAWN,
 	MAX_EDITOR_DIAGNOSTICS,
 	PASS_NAME,
@@ -245,7 +246,8 @@ describe('the phase strip', () => {
 describe('tabs of a compilation that stopped', () => {
 	it('are blocked by the phase that stopped it, from the tab after that phase on', () => {
 		const blocked = (id: string) => TABS.map((tab) => blockedBy(compile(source(id)), tab));
-		expect(blocked('gcd')).toEqual(Array(7).fill(null));
+		expect(blocked('gcd')).toEqual(Array(8).fill(null));
+		// Columns: tokens, syntax, visitor, semantics, ir, code, run, language.
 		expect(blocked('illegal-character')).toEqual([
 			null,
 			'scanner',
@@ -253,8 +255,10 @@ describe('tabs of a compilation that stopped', () => {
 			'scanner',
 			'scanner',
 			'scanner',
+			'scanner',
 			null
 		]);
+		// The visitors need the whole tree: a syntax error keeps them from running.
 		expect(blocked('missing-semicolon')).toEqual([
 			null,
 			null,
@@ -262,9 +266,12 @@ describe('tabs of a compilation that stopped', () => {
 			'parser',
 			'parser',
 			'parser',
+			'parser',
 			null
 		]);
+		// Semantic errors do not: the visitors walk the tree the parser built.
 		expect(blocked('undeclared')).toEqual([
+			null,
 			null,
 			null,
 			null,
@@ -365,6 +372,43 @@ describe('the editor', () => {
 			['e', 'hl-keyword']
 		]);
 		expect(highlightSource(text, 'letters', { start: 3, end: 3 })).toEqual(
+			highlightSource(text, 'letters')
+		);
+	});
+
+	it('marks the node of the Visitor tab’s step, on top of the selection', () => {
+		const text = 'a = b + 1;';
+		const node = layoutLines(text, highlightSource(text, 'letters', null, { start: 4, end: 9 }));
+		expect(node[0].segments.map((s) => [s.text, s.className])).toEqual([
+			['a', 'hl-name'],
+			[' ', undefined],
+			['=', 'hl-operator'],
+			[' ', undefined],
+			['b', `hl-name ${CURRENT_CLASS}`],
+			[' ', CURRENT_CLASS],
+			['+', `hl-operator ${CURRENT_CLASS}`],
+			[' ', CURRENT_CLASS],
+			['1', `hl-number ${CURRENT_CLASS}`],
+			[';', 'hl-punct']
+		]);
+		// Both: each piece gets the marks of the ranges it lies in.
+		const both = layoutLines(
+			text,
+			highlightSource(text, 'letters', { start: 0, end: 5 }, { start: 4, end: 9 })
+		);
+		expect(both[0].segments.map((s) => [s.text, s.className])).toEqual([
+			['a', `hl-name ${SELECTED_CLASS}`],
+			[' ', SELECTED_CLASS],
+			['=', `hl-operator ${SELECTED_CLASS}`],
+			[' ', SELECTED_CLASS],
+			['b', `hl-name ${SELECTED_CLASS} ${CURRENT_CLASS}`],
+			[' ', CURRENT_CLASS],
+			['+', `hl-operator ${CURRENT_CLASS}`],
+			[' ', CURRENT_CLASS],
+			['1', `hl-number ${CURRENT_CLASS}`],
+			[';', 'hl-punct']
+		]);
+		expect(highlightSource(text, 'letters', null, { start: 2, end: 2 })).toEqual(
 			highlightSource(text, 'letters')
 		);
 	});

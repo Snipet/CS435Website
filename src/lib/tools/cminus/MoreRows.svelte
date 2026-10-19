@@ -1,20 +1,32 @@
-<!-- Under a long list that shows only its first rows: how many there are, and a button for the rest. -->
+<!--
+	Under a long list that shows only some of its rows: which rows are listed
+	(the first ones, or a stretch from row `from` on), and a button for the rest.
+-->
 <script lang="ts">
 	interface Props {
 		shown: number;
 		total: number;
 		/** What the rows are: "tokens", "nodes". */
 		noun: string;
+		/** The index of the first row listed; 0: the list starts at the first row. */
+		from?: number;
 		onshowall: () => void;
 	}
 
-	let { shown, total, noun, onshowall }: Props = $props();
+	let { shown, total, noun, from = 0, onshowall }: Props = $props();
+
+	const n = (k: number) => k.toLocaleString('en-US');
 </script>
 
 {#if total > shown}
 	<p class="more">
-		The first {shown.toLocaleString('en-US')} of {total.toLocaleString('en-US')}
-		{noun} are listed.
+		{#if from > 0}
+			{n(shown)} of {n(total)}
+			{noun} are listed, {n(from + 1)} to {n(from + shown)}.
+		{:else}
+			The first {n(shown)} of {n(total)}
+			{noun} are listed.
+		{/if}
 		<button type="button" onclick={onshowall}>List all</button>
 	</p>
 {/if}

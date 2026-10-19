@@ -151,3 +151,45 @@ export function centerOn(key: unknown, selectors: readonly string[]): Attachment
 		};
 	};
 }
+
+/** The sizes that tell whether a box scrolls. */
+export type BoxSize = Pick<
+	HTMLElement,
+	'scrollHeight' | 'clientHeight' | 'scrollWidth' | 'clientWidth'
+>;
+
+/** True when a box has more content than it shows, down or across. */
+export function overflows(box: BoxSize): boolean {
+	return box.scrollHeight > box.clientHeight + 1 || box.scrollWidth > box.clientWidth + 1;
+}
+
+/**
+ * Tells `onchange` whether a box scrolls, when it is created and whenever
+ * that changes (the box or one of its children is resized, a child comes or
+ * goes). A box that scrolls takes keyboard focus, so it can be scrolled
+ * without a mouse.
+ */
+export function watchOverflow(onchange: (scrolls: boolean) => void): Attachment<HTMLElement> {
+	return (box) => {
+		if (typeof ResizeObserver === 'undefined' || typeof MutationObserver === 'undefined') return;
+		let last: boolean | null = null;
+		const check = () => {
+			const now = overflows(box);
+			if (now !== last) onchange((last = now));
+		};
+		const resize = new ResizeObserver(check);
+		const observe = () => {
+			resize.disconnect();
+			resize.observe(box);
+			for (const child of box.children) resize.observe(child);
+			check();
+		};
+		const children = new MutationObserver(observe);
+		children.observe(box, { childList: true });
+		observe();
+		return () => {
+			resize.disconnect();
+			children.disconnect();
+		};
+	};
+}

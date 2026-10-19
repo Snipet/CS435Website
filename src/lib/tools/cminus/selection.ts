@@ -79,6 +79,13 @@ export function sameRange(a: SourceRange | null, b: SourceRange | null): boolean
 	return a === null || b === null ? a === b : a.start === b.start && a.end === b.end;
 }
 
+/**
+ * The key the page passes to the views for its selection: "start:end", or ""
+ * when nothing is selected (an empty range selects nothing).
+ */
+export const selectionKey = (range: SourceRange | null): string =>
+	range && range.end > range.start ? `${range.start}:${range.end}` : '';
+
 // --- The tree, indexed once per program -----------------------------------
 
 interface TreeIndex {
