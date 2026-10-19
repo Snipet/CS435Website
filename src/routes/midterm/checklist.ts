@@ -10,6 +10,9 @@
  *
  * Each line is checked by itself: checking a line does not check the points
  * under it. A line is complete when it and every line under it are checked.
+ *
+ * A few lines share their text ("Predictive RD", "Bottom-Up"); `distinctions`
+ * gives each of them the words that tell it apart, for its checkbox's name.
  */
 import { sections, type Section, type Topic } from './topics';
 
@@ -171,4 +174,44 @@ export function linesUnder(line: Line): Line[] {
 export function tallyText(t: Tally, view: View): string {
 	const what = view.starredOnly ? 'starred lines' : 'lines';
 	return `${t.checked} of ${t.total} ${t.total === 1 ? what.slice(0, -1) : what} checked`;
+}
+
+/** The texts of the lines above a line, nearest first (from its id). */
+const above = (line: Line): string[] => line.id.split(ID_SEPARATOR).slice(0, -1).reverse();
+
+/**
+ * What tells a line from the other lines with the same text, by line id:
+ * "under Top-Down" for one "Predictive RD" and "under Parsing Algorithms" for
+ * the other. It names the lines above it, nearest first, as few as it takes
+ * (two lines with the same id cannot occur, so their paths always differ).
+ * Lines whose text is their own are left out. Read after the text, it gives
+ * every checkbox a name of its own.
+ */
+export function distinctions(list: readonly Line[] = lines): Map<string, string> {
+	const byText = new Map<string, Line[]>();
+	for (const l of list) byText.set(l.topic.text, [...(byText.get(l.topic.text) ?? []), l]);
+	const out = new Map<string, string>();
+	for (const same of byText.values()) {
+		if (same.length < 2) continue;
+		const paths = same.map(above);
+		const deepest = Math.max(...paths.map((p) => p.length));
+		for (let n = 1; n <= deepest; n++) {
+			const names = paths.map((p) => p.slice(0, n).join(', under '));
+			if (new Set(names).size < names.length) continue;
+			same.forEach((l, i) => {
+				if (names[i]) out.set(l.id, `under ${names[i]}`);
+			});
+			break;
+		}
+	}
+	return out;
+}
+
+/**
+ * The text of a live region that is to read out `message`: the message, or,
+ * when the region holds it already, the message with a no-break space after
+ * it, so that the region changes and the message is read out again.
+ */
+export function announcement(previous: string, message: string): string {
+	return previous === message ? `${message}\u00a0` : message;
 }

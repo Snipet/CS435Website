@@ -15,7 +15,9 @@
 	import { pageTitle } from '$lib/site';
 	import {
 		DEFAULT_VIEW,
+		announcement,
 		completeLines,
+		distinctions,
 		groups,
 		knownIds,
 		lines,
@@ -43,6 +45,8 @@
 	} from './topics';
 
 	const STAR_TEXT: Record<Stars, string> = { 0: '', 1: 'One asterisk', 2: 'Two asterisks' };
+	/** For lines that share their text: what tells them apart ("under Top-Down"), read after it. */
+	const DISTINCT = distinctions();
 
 	/** Where the checks and the view options are kept in the browser. */
 	const CHECKS_KEY = storageKey('midterm-checklist', 1);
@@ -66,6 +70,7 @@
 
 	let content: HTMLElement | undefined = $state();
 	let countEl: HTMLElement | undefined = $state();
+	let clearGroup: HTMLElement | undefined = $state();
 	let clearEl: HTMLButtonElement | undefined = $state();
 	let cancelEl: HTMLButtonElement | undefined = $state();
 
@@ -78,6 +83,25 @@
 
 	const percent = (t: Tally) => (t.total === 0 ? 0 : (100 * t.checked) / t.total);
 	const isFull = (t: Tally) => t.total > 0 && t.checked === t.total;
+
+	/**
+	 * Sets the checks; every change of them goes through here. With none left
+	 * there is nothing to clear: a question to clear them is dropped, and the
+	 * focus, if it was on its buttons, goes to the count (the Clear button is
+	 * disabled then). Checks cleared in another tab do this too.
+	 */
+	function setChecked(next: ReadonlySet<string>) {
+		checked = next;
+		if (next.size > 0 || !confirming) return;
+		const focused = clearGroup?.contains(document.activeElement) ?? false;
+		confirming = false;
+		if (focused) void tick().then(() => countEl?.focus());
+	}
+
+	/** Has the status region read out `message`, also when it holds the same message already. */
+	function announce(message: string) {
+		status = announcement(status, message);
+	}
 
 	function saveChecks() {
 		if (!writeIds(store, CHECKS_KEY, checked)) saving = false;
@@ -102,12 +126,12 @@
 			on && view.hideChecked && content
 				? [...content.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
 				: null;
-		checked = next;
+		setChecked(next);
 		saveChecks();
 		if (!boxes) return;
 		await tick();
 		if (input.isConnected) return;
-		status = `Checked and hidden: ${line.topic.text}`;
+		announce(`Checked and hidden: ${line.topic.text}`);
 		if (!focused) return;
 		const at = boxes.indexOf(input);
 		const target =
@@ -138,10 +162,9 @@
 	}
 
 	async function clearChecks() {
-		checked = new Set();
+		setChecked(new Set());
 		saveChecks();
-		confirming = false;
-		status = 'Checks cleared.';
+		announce('Checks cleared.');
 		await tick();
 		countEl?.focus();
 	}
@@ -152,7 +175,7 @@
 		const flags = readFlags(store, VIEW_KEY, DEFAULT_VIEW);
 		saving = ids !== null && canWrite(store);
 		// Ids of lines that are no longer on the list are left out.
-		if (ids?.size) checked = knownIds(ids);
+		if (ids?.size) setChecked(knownIds(ids));
 		if (flags) Object.assign(view, flags);
 		// The browser has scrolled to a group named in the URL before lines above it were left out.
 		const target = location.hash.length > 1 ? location.hash.slice(1) : null;
@@ -165,7 +188,7 @@
 			if (!store || e.storageArea !== store) return;
 			if (e.key === null || e.key === CHECKS_KEY) {
 				const stored = readIds(store, CHECKS_KEY);
-				if (stored) checked = knownIds(stored);
+				if (stored) setChecked(knownIds(stored));
 			}
 			if (e.key === null || e.key === VIEW_KEY) {
 				const stored = readFlags(store, VIEW_KEY, DEFAULT_VIEW);
@@ -216,9 +239,10 @@
 		>{/if}
 {/snippet}
 
-<!-- A line's checkbox, labeled with the line's text. -->
+<!-- A line's checkbox, labeled with the line's text (and, for a text that several lines share, the words that tell it apart). -->
 {#snippet check(line: Line)}
 	{@const on = checked.has(line.id)}
+	{@const apart = DISTINCT.get(line.id)}
 	<label class="check">
 		<input
 			type="checkbox"
@@ -227,7 +251,7 @@
 			onchange={(e) => toggle(line, e.currentTarget)}
 		/><span class="print-box" aria-hidden="true">{on ? '☑' : '☐'}</span><span class="text"
 			>{line.topic.text}</span
-		>
+		>{#if apart}<span class="visually-hidden">({apart})</span>{/if}
 	</label>
 {/snippet}
 
@@ -389,7 +413,7 @@
 				This browser does not keep the checks: they last until the page is closed or reloaded.
 			{/if}
 		</p>
-		<div class="clear" role="group" aria-label="Clear checks">
+		<div class="clear" role="group" aria-label="Clear checks" bind:this={clearGroup}>
 			{#if confirming && checked.size > 0}
 				<span class="confirm" id="clear-question"
 					>Clear all {checked.size}
@@ -464,7 +488,7 @@
 						{/each}
 						<p class="group-tally">
 							{#if t.total > 0}
-								<span>{tallyText(t, view)}</span>
+								<span class="group-count">{tallyText(t, view)}</span>
 								{@render meter(t)}
 							{:else}
 								<span>No starred lines.</span>
@@ -778,19 +802,28 @@
 		list-style: none;
 	}
 
-	/* How many lines of a group are checked, under its heading. */
+	/*
+	 * How many lines of a group are checked, under its heading: the count on one
+	 * line, and the bar beside it, or under it where the two do not fit.
+	 */
 	.group-tally {
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
-		gap: var(--space-3);
+		gap: 4px var(--space-3);
 		margin: calc(-1 * var(--space-2)) 0 0;
 		padding-left: calc(var(--mark) + var(--indent));
 		color: var(--text-3);
 		font-size: var(--text-xs);
 		font-variant-numeric: tabular-nums;
 	}
+	.group-count {
+		flex: none;
+		white-space: nowrap;
+	}
 	.group-tally .meter {
-		flex: 0 1 8rem;
+		flex: 1 1 3rem;
+		max-width: 8rem;
 		height: 4px;
 	}
 
@@ -872,11 +905,16 @@
 	.complete > .check .text {
 		color: var(--text-3);
 	}
-	/* Shown only for the lines under it that the view shows. */
-	.context > .line,
-	.line.context,
-	.points > .context {
-		opacity: 0.6;
+	/*
+	 * Shown only for the lines under it that the view shows: the text is a
+	 * little quieter (nested lines and points are in --text-2 already). Its
+	 * checkbox and chips are not dimmed: they work as on any other line. A
+	 * complete line keeps the color of complete lines.
+	 */
+	.row.context:not(.complete) > .line > .what > .check > .text,
+	.line.context:not(.complete) > h2 > .check > .text,
+	.line.context > h2 > .text {
+		color: var(--text-2);
 	}
 
 	/* Points under a topic: on one line, or as rows of their own. */
@@ -1059,13 +1097,16 @@
 			font-size: 1.15em;
 			line-height: 1;
 		}
-		.context > .line,
-		.line.context,
-		.points > .context {
-			opacity: 1;
-		}
+		/* The chips are left out: the text runs the whole width. */
 		.line {
+			grid-template-columns: var(--mark) minmax(0, 1fr);
 			break-inside: avoid;
+		}
+		.line > h2 {
+			grid-column: 1 / -1;
+		}
+		.line > .what {
+			grid-column: 2 / -1;
 		}
 	}
 </style>
