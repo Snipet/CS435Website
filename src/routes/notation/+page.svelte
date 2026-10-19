@@ -5,6 +5,7 @@
 	import Callout from '$lib/components/ui/Callout.svelte';
 	import CharStream from '$lib/components/ui/CharStream.svelte';
 	import CitationTag from '$lib/components/ui/CitationTag.svelte';
+	import Icon from '$lib/components/ui/Icon.svelte';
 	import StringSetView from '$lib/components/ui/StringSetView.svelte';
 	import TokenPairs from '$lib/components/ui/TokenPairs.svelte';
 	import type { HighlightRange, TokenPair } from '$lib/components/ui/types';
@@ -66,11 +67,13 @@
 		lrStates,
 		lrTableRows,
 		lrTerminals,
+		sectionLink,
 		shiftReduceForestRow,
 		shiftReduceTrace,
 		shiftRules,
 		transitionCode,
-		type FormPiece
+		type FormPiece,
+		type ParsingSectionId
 	} from './parsing-notation';
 
 	const groups = [
@@ -410,6 +413,17 @@
 		{#each items as item, i (i)}<li><LrItem {item} /></li>{/each}
 		{#if partial}<li class="omitted">…</li>{/if}
 	</ul>
+{/snippet}
+
+<!-- The tool that runs the section's example, opened on it. -->
+{#snippet toolLine(id: ParsingSectionId)}
+	{@const link = sectionLink(id)}
+	{#if link}
+		<p class="tool-line">
+			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path (toolHref) -->
+			<a href={link.href}>Open {link.what} in {link.title} <Icon name="arrow-right" size={14} /></a>
+		</p>
+	{/if}
 {/snippet}
 
 {#snippet sectionHead(id: SectionId, title: string)}
@@ -1744,6 +1758,7 @@
 						<CitationTag cite={{ deck: '12', slide: [21, 23] }} />
 					</figcaption>
 				</figure>
+				{@render toolLine('first-follow')}
 			</section>
 
 			<!-- LL(1) parsing tables -->
@@ -1820,6 +1835,7 @@
 					A grammar is LL(1) when no cell is multiply defined. An ambiguous, left-recursive, or not
 					left-factored grammar is not LL(1), and neither are most programming-language grammars.
 				</p>
+				{@render toolLine('ll1-tables')}
 			</section>
 
 			<!-- LL(1) parse traces -->
@@ -1881,6 +1897,7 @@
 						<CitationTag cite={{ deck: '12', slide: 12 }} />
 					</figcaption>
 				</figure>
+				{@render toolLine('ll1-traces')}
 			</section>
 
 			<!-- Handles -->
@@ -1947,6 +1964,7 @@
 					The bottom-up decks write sentential forms with each parenthesis next to what it encloses:
 					<span class="f">{formText(['E', '+', '(', 'int', ')'])}</span>.
 				</p>
+				{@render toolLine('handles')}
 			</section>
 
 			<!-- Shift-reduce parsing -->
@@ -2045,6 +2063,7 @@
 						<CitationTag cite={{ deck: '14', slide: [4, 14] }} />
 					</figcaption>
 				</figure>
+				{@render toolLine('shift-reduce')}
 			</section>
 
 			<!-- LR(1) items -->
@@ -2132,6 +2151,7 @@
 						<CitationTag cite={{ deck: '15', slide: 14 }} />
 					</figcaption>
 				</figure>
+				{@render toolLine('lr-items')}
 			</section>
 
 			<!-- LR parsing tables -->
@@ -2214,6 +2234,7 @@
 					<pre class="code">{lrAlgorithm}</pre>
 					<figcaption><CitationTag cite={{ deck: '14', slide: 21 }} /></figcaption>
 				</figure>
+				{@render toolLine('lr-tables')}
 			</section>
 
 			<!-- Conflicts -->
@@ -2268,6 +2289,7 @@
 					<span class="f">id</span>. Rewritten as <span class="f">S → ε | id S</span>, it has none
 					of these conflicts.
 				</p>
+				{@render toolLine('conflicts')}
 			</section>
 
 			<!-- Precedence in bison -->
@@ -2307,6 +2329,7 @@
 					than the terminal +, so the parser reduces. The dangling-else conflict goes away when else
 					is declared with a higher precedence than then, or by the default shift.
 				</p>
+				{@render toolLine('bison')}
 			</section>
 
 			<!-- Grammar classes -->
@@ -2325,6 +2348,7 @@
 						<CitationTag cite={{ deck: '15', slide: 26 }} />
 					</figcaption>
 				</figure>
+				{@render toolLine('grammar-classes')}
 			</section>
 		</div>
 	</div>
@@ -2477,6 +2501,19 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: var(--space-2);
+	}
+	.tool-line {
+		font-size: var(--text-sm);
+	}
+	.tool-line a {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-weight: 500;
+		text-decoration: none;
+	}
+	.tool-line a:hover {
+		text-decoration: underline;
 	}
 	h3 {
 		margin: var(--space-2) 0 0;

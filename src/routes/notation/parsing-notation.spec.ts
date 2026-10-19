@@ -20,6 +20,7 @@ import {
 	makeGrammar,
 	parseGrammar,
 	parseTrees,
+	tokenizeInput,
 	treeEquals,
 	yieldOf,
 	EPSILON,
@@ -47,10 +48,24 @@ import {
 	lrTableRows,
 	lrTerminals,
 	shiftReduceForestRow,
+	sectionLink,
+	sectionTools,
 	shiftReduceTrace,
 	type LrCell,
+	type ParsingSectionId,
+	type SectionTool,
 	type ShiftReduceRow
 } from './parsing-notation';
+import { presetFor as conflictsPresetFor } from '$lib/tools/conflicts/presets';
+import { isConflictsHash, stateFromHash as conflictsState } from '$lib/tools/conflicts/state';
+import { isLL1Hash, stateFromHash as ll1State } from '$lib/tools/ll1/state';
+import { isLr1Hash, stateFromHash as lr1State } from '$lib/tools/lr1/state';
+import { toolBySlug } from '$lib/tools/registry';
+import {
+	isShiftReduceHash,
+	stateFromHash as shiftReduceState
+} from '$lib/tools/shift-reduce/state';
+import { decode } from '$lib/url-state';
 
 function grammar(text: string): Grammar {
 	const { grammar } = parseGrammar(text);
@@ -470,5 +485,54 @@ describe('LR(1) items and tables (Bottom-up Parsing II and III)', () => {
 				expect([...all].sort()).toEqual(full(ex.to).sort());
 			}
 		}
+	});
+});
+
+describe('section tools', () => {
+	/** What each tool makes of a link, or null when it refuses the hash. */
+	const opens: Record<
+		SectionTool['slug'],
+		(value: unknown) => { grammar: string; input: string; precedence?: string } | null
+	> = {
+		ll1: (v) => (isLL1Hash(v) ? ll1State(v) : null),
+		'shift-reduce': (v) => (isShiftReduceHash(v) ? shiftReduceState(v) : null),
+		lr1: (v) => (isLr1Hash(v) ? lr1State(v) : null),
+		conflicts: (v) => (isConflictsHash(v) ? conflictsState(v) : null)
+	};
+	const ids = Object.keys(sectionTools) as ParsingSectionId[];
+
+	it('opens each section’s tool on its example, as the tool reads it', () => {
+		expect(ids).toHaveLength(10);
+		for (const id of ids) {
+			const { slug, state } = sectionTools[id];
+			const link = sectionLink(id)!;
+			expect(link.title, id).toBe(toolBySlug(slug)!.title);
+			const [path, hash] = link.href.split('#');
+			expect(path, id).toBe(`/${slug}`);
+			const opened = opens[slug](decode(hash));
+			expect(opened, id).toMatchObject(state);
+			const g = grammar(opened!.grammar);
+			expect(tokenizeInput(opened!.input, g.terminals).diagnostics, id).toEqual([]);
+		}
+	});
+
+	it('uses the grammars and strings of the sections', () => {
+		expect(sectionTools['ll1-traces'].state).toEqual({ grammar: ll1Grammar, input: 'int * int' });
+		expect(ll1Trace[0].input.join(' ')).toBe('int * int $');
+		expect(sectionTools.handles.state).toEqual({
+			grammar: bottomUpGrammar,
+			input: handleRows[0].form.join(' ')
+		});
+		expect(sectionTools['shift-reduce'].state.input).toBe(shiftReduceTrace[0].input.join(' '));
+		expect(sectionTools.conflicts.state.grammar).toBe(conflictExamples[0].grammar);
+	});
+
+	it('opens the conflicts examples on the presets of the same slides', () => {
+		const presetOf = (id: ParsingSectionId) => {
+			const value = decode(sectionLink(id)!.href.split('#')[1]);
+			return conflictsPresetFor(conflictsState(value as never))?.id;
+		};
+		expect(presetOf('conflicts')).toBe('ambiguous');
+		expect(presetOf('bison')).toBe('precedence');
 	});
 });
