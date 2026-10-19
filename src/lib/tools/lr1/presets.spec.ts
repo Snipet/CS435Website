@@ -323,6 +323,39 @@ describe('LR parsing', () => {
 		expect(onPlus).toBeDefined();
 	});
 
+	it('has the states of slide 18: [E → E * • E, +] … ⇒E [E → E * E •, +], [E → E • + E, +]', () => {
+		const { build } = load('shift-reduce-conflict');
+		const a = build.automaton;
+		const full = (s: number) =>
+			itemLines(a.augmented, a.states[s].items, 'full').map((l) => formatItem(l.view, 'bracketed'));
+		const from = a.states.find((s) => full(s.id).includes('[E → E * • E, +]'))!;
+		expect(full(from.id)).toContain('[E → • E + E, +]');
+		const to = from.transitions.find((t) => t.symbol === 'E')!.to;
+		expect(full(to)).toEqual(expect.arrayContaining(['[E → E * E •, +]', '[E → E • + E, +]']));
+		expect(
+			build.table.conflicts.some(
+				(c) => c.state === to && c.terminal === '+' && c.kind === 'shift/reduce'
+			)
+		).toBe(true);
+	});
+
+	it('has the states of slide 25 and their reduce/reduce conflict on $', () => {
+		const { build } = load('reduce-reduce-conflict');
+		const a = build.automaton;
+		const full = (s: number) =>
+			itemLines(a.augmented, a.states[s].items, 'full').map((l) => formatItem(l.view, 'bracketed'));
+		expect(full(0)).toEqual(['[S’ → • S, $]', '[S → •, $]', '[S → • id, $]', '[S → • id S, $]']);
+		const after = a.states[0].transitions.find((t) => t.symbol === 'id')!.to;
+		expect(full(after)).toEqual([
+			'[S → id •, $]',
+			'[S → id • S, $]',
+			'[S → •, $]',
+			'[S → • id, $]',
+			'[S → • id S, $]'
+		]);
+		expect(build.table.conflicts.find((c) => c.kind === 'reduce/reduce')?.state).toBe(after);
+	});
+
 	it('reports the reduce/reduce conflict of S → ε | id | id S on $', () => {
 		const { build } = load('reduce-reduce-conflict');
 		const rr = build.table.conflicts.filter((c) => c.kind === 'reduce/reduce');

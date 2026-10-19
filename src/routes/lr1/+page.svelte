@@ -350,7 +350,15 @@
 
 	<Panel title="Parsing DFA" subtitle="each state a closed set of items">
 		{#if build}
-			{#if stale}
+			{#if task.status === 'timed-out' || task.status === 'error'}
+				<Callout tone="warn">
+					<p>
+						{task.status === 'timed-out'
+							? 'This grammar takes too long to build. Showing the last automaton built.'
+							: `The automaton could not be built: ${task.error}`}
+					</p>
+				</Callout>
+			{:else if stale}
 				<p class="stale-note" role="status">
 					<Icon name="info" size={16} />
 					<span
@@ -377,9 +385,9 @@
 					stepper={buildStepper}
 					selected={shown}
 					onselect={select}
-					current={parserState}
-					{followed}
-					marks={itemMarks}
+					current={buildStepper.atEnd ? parserState : null}
+					followed={buildStepper.atEnd ? followed : null}
+					marks={buildStepper.atEnd ? itemMarks : undefined}
 					onmethod={() => {
 						pause();
 						form.buildStep = null;

@@ -6,8 +6,7 @@
 	states at a time.
 -->
 <script lang="ts">
-	import type { StateAnnotation } from '$lib/components/grammar';
-	import { symbolText } from '$lib/components/grammar';
+	import { LrState, symbolText, type StateAnnotation } from '$lib/components/grammar';
 	import {
 		Button,
 		CitationTag,
@@ -20,7 +19,7 @@
 	import CircleDiagram from './CircleDiagram.svelte';
 	import { describeBuildStep, type BuildStep } from './construction';
 	import { DRAW_ALL, WINDOW, type StateRange } from './diagram';
-	import type { ItemForm } from './items';
+	import { itemLines, linesOf, type ItemForm } from './items';
 	import ItemSetDiagram from './ItemSetDiagram.svelte';
 	import type { DfaSelection } from './selection';
 	import type { DfaView } from './state';
@@ -96,6 +95,24 @@
 		const first = Math.max(0, Math.min(total - 1, range[0] + by));
 		onrange([first, Math.min(total - 1, first + size - 1)]);
 	}
+
+	/**
+	 * The circles show no items: the selected state's box is drawn under them, with the
+	 * items that move over a selected edge's symbol marked.
+	 */
+	const selectedBox = $derived.by(() => {
+		if (view !== 'circles' || !selected) return null;
+		const edge = selected.kind === 'edge' ? a.edges[selected.edge] : null;
+		const s = selected.kind === 'state' ? selected.state : edge?.from;
+		if (s === undefined || !a.states[s]) return null;
+		const lines = itemLines(a.augmented, a.states[s].items, items);
+		const moved = edge
+			? a.states[s].items.flatMap((item, k) =>
+					a.augmented.productions[item.production].rhs[item.dot] === edge.symbol ? [k] : []
+				)
+			: [];
+		return { state: s, lines, highlight: linesOf(lines, moved), notes: notes[s] ?? [] };
+	});
 
 	const selectionText = $derived.by(() => {
 		if (!selected) return '';
@@ -189,15 +206,7 @@
 
 	<div class="options">
 		<SegmentedControl options={viewOptions} bind:value={view} label="Drawing" showLabel size="sm" />
-		{#if view === 'boxes'}
-			<SegmentedControl
-				options={formOptions}
-				bind:value={items}
-				label="Items"
-				showLabel
-				size="sm"
-			/>
-		{/if}
+		<SegmentedControl options={formOptions} bind:value={items} label="Items" showLabel size="sm" />
 	</div>
 
 	{#if windowed}
@@ -279,6 +288,18 @@
 			ariaLabel="Parsing DFA, {METHOD_NAMES[method]}"
 		/>
 	{/if}
+	{#if selectedBox}
+		<div class="selected-box">
+			<LrState
+				number={selectedBox.state}
+				items={selectedBox.lines.map((l) => l.view)}
+				merge={false}
+				annotations={selectedBox.notes}
+				highlight={selectedBox.highlight}
+				highlightName="moved over the edge"
+			/>
+		</div>
+	{/if}
 	<p class="selection" aria-live="polite">
 		{selectionText || 'Select a state or an edge label to mark its row or its entry in the table.'}
 	</p>
@@ -346,6 +367,10 @@
 	.of {
 		color: var(--text-3);
 		font-size: var(--text-sm);
+	}
+	.selected-box {
+		max-width: 100%;
+		overflow-x: auto;
 	}
 	.caption,
 	.selection {
