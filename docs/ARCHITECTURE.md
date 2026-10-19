@@ -2035,7 +2035,10 @@ startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
   `highlight?` (paths of nodes to mark as current / new / matched),
   `rejected?` (draw the X), `labels?` (per-node label override, e.g. instance
   subscripts `E0`, `T1`), `onnodeclick?`, `ariaLabel`. Scales to its container
-  and scrolls inside its own box when very wide.
+  and scrolls inside its own box when very wide; with `maxHeight?` (a CSS
+  length) a taller tree scrolls up and down in that same box, and `reveal?`
+  (a path) scrolls the box to that node (centered across, near the top) whenever the tree or
+  the path changes (`revealScroll` in `tree-layout.ts`).
   Bottom-up options: `layout?: 'tree' | 'baseline'` (default `'tree'`; §3.10
   baseline layout), `forest?` in place of `tree` (several trees over one
   baseline, always baseline; paths in `highlight`, `labels` and `onnodeclick`
@@ -2090,9 +2093,13 @@ startLabel? })`) returning node geometry, one edge per (from, to, ε) keyed by
   Parsing III, slide 26), on the notation page and in tools. The optional
   `highlight` (a `GrammarPlace`, `{ lr, ll, ambiguous }`: the smallest LR and
   LL class a grammar is in) draws a marker where the grammar falls and names
-  it in the accessible name. `grammar-classes.ts` holds the regions, `classPoint` (null
-  where the diagram has no region: not LR(1) and not known to be ambiguous)
-  and `placeText`.
+  it in the accessible name. `ll` is `ll0`, `ll1`, `llk` (LL(k) but not
+  LL(1)), `none` (no LL(k)), or null when the grammar is not LL(1) and its
+  LL(k) membership is not decided: the marker is then a bar across the LL(k)
+  border. `grammar-classes.ts` holds the regions, `classPoint` (null where the
+  diagram has no region: not LR(1) and not known to be ambiguous; `x2` for the
+  bar) and `placeText`. The drawing scales with its box (larger labels in a
+  box under 480 px) and never scrolls.
 - `GrammarEditor.svelte` — `CodeEditor` for grammar text with a `→ | ε` palette,
   highlighting of non-terminals / terminals / metasymbols, and diagnostics.
 - `TokenStream.svelte` — a token string with an input pointer (`↑` under the

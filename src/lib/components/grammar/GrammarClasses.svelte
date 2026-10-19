@@ -78,7 +78,22 @@
 			<text class="name ll-name" x={r.lx} y={r.ly}>{r.label}</text>
 		{/each}
 		<text class="name ll-name" x={LL0_REGION.cx} y={LL0_REGION.cy + 5}>{LL0_REGION.label}</text>
-		{#if point}
+		{#if point?.x2 !== undefined}
+			<!-- Not decided: a bar across the LL(k) border, a dot at either end. -->
+			<g class="marker">
+				<rect
+					class="halo undecided"
+					x={point.x - MARKER_RADIUS}
+					y={point.y - MARKER_RADIUS}
+					width={point.x2 - point.x + 2 * MARKER_RADIUS}
+					height={2 * MARKER_RADIUS}
+					rx={MARKER_RADIUS}
+				/>
+				<line class="bar" x1={point.x} y1={point.y} x2={point.x2} y2={point.y} />
+				<circle class="dot" cx={point.x} cy={point.y} r="4.5" />
+				<circle class="dot" cx={point.x2} cy={point.y} r="4.5" />
+			</g>
+		{:else if point}
 			<g class="marker">
 				<circle class="halo" cx={point.x} cy={point.y} r={MARKER_RADIUS} />
 				<circle class="dot" cx={point.x} cy={point.y} r="4.5" />
@@ -88,14 +103,14 @@
 </div>
 
 <style>
+	/* The drawing scales with its box; in a narrow box the labels are drawn larger. */
 	.classes {
 		max-width: 100%;
-		overflow-x: auto;
+		container-type: inline-size;
 	}
 	svg {
 		display: block;
 		width: 100%;
-		min-width: 440px;
 		max-width: 640px;
 		height: auto;
 		margin-inline: auto;
@@ -137,10 +152,25 @@
 		fill: var(--accent);
 		font-weight: 600;
 	}
+	@container (max-width: 480px) {
+		text {
+			font-size: 18px;
+		}
+		.title {
+			font-size: 20px;
+		}
+	}
 	.halo {
 		fill: var(--active-soft);
 		stroke: var(--active);
 		stroke-width: 1.5;
+	}
+	.halo.undecided {
+		stroke-dasharray: 4 3;
+	}
+	.bar {
+		stroke: var(--active);
+		stroke-width: 2;
 	}
 	.dot {
 		fill: var(--active);

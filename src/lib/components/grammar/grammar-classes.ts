@@ -28,9 +28,12 @@ export const LR_REGIONS: readonly ClassRegion[] = [
 	{ label: 'LR(0)', x: 78, y: 270, width: 300, height: 118, lx: 316, ly: 336 }
 ];
 
-/** LL(k) and LL(1), drawn as tall ovals. */
+/**
+ * LL(k) and LL(1), drawn as tall ovals. LL(k) is wide enough to leave room
+ * for the marker beside LL(1).
+ */
 export const LL_REGIONS: readonly ClassRegion[] = [
-	{ label: 'LL(k)', x: 104, y: 64, width: 132, height: 346, lx: 170, ly: 90 },
+	{ label: 'LL(k)', x: 92, y: 64, width: 156, height: 346, lx: 170, ly: 90 },
 	{ label: 'LL(1)', x: 118, y: 112, width: 104, height: 284, lx: 170, ly: 144 }
 ];
 
@@ -59,16 +62,29 @@ export const insideLl0 = (p: { x: number; y: number }): boolean =>
 
 /** The smallest LR class drawn that a grammar is in. */
 export type LrPlace = 'lr0' | 'slr' | 'lalr1' | 'lr1';
-/** The smallest LL class drawn that a grammar is in. */
-export type LlPlace = 'll0' | 'll1';
+/**
+ * The smallest LL class drawn that a grammar is known to be in: LL(0),
+ * LL(1), or LL(k) for some k > 1; `none`: in no LL(k).
+ */
+export type LlPlace = 'll0' | 'll1' | 'llk' | 'none';
 
 export interface GrammarPlace {
 	/** The smallest LR class the grammar is in; null: not LR(1). */
 	lr: LrPlace | null;
-	/** LL(0) or LL(1); null: not LL(1). */
+	/** Its LL class (LlPlace); null: not LL(1), and whether it is LL(k) is not decided. */
 	ll: LlPlace | null;
 	/** A string of the grammar has two parse trees. */
 	ambiguous: boolean;
+}
+
+/**
+ * Where the marker stands: a dot at (x, y); with `x2`, a bar from x to x2
+ * across the LL(k) border, for a grammar not known to be in LL(k) or out of it.
+ */
+export interface ClassMarker {
+	x: number;
+	y: number;
+	x2?: number;
 }
 
 /** Radius of the marker's halo; the whole halo lies in the marked classes' band. */
@@ -76,32 +92,44 @@ export const MARKER_RADIUS = 8;
 
 /** The y of each LR class's own band: below its top border, above the next class's. */
 const LR_BAND: Record<LrPlace, number> = { lr1: 135, lalr1: 195, slr: 246, lr0: 300 };
+/** The x of a point inside LL(k), right of LL(1). */
+const LL_K_X = 235;
 /** The x of a point outside the LL ovals, right of them and left of the LR labels. */
 const OUTSIDE_LL = 290;
 /** The x of the LL ovals' axis. */
 const LL_AXIS = 170;
 
 /**
- * The point of the diagram where a grammar of this place falls, or null when
- * the diagram has no region for it: a grammar that is not LR(1) but not known
- * to be ambiguous (it may be LR(k) for a larger k), an LR(1) grammar called
- * ambiguous, or one placed in LL(1) but not in LR(1), LL(0) but not LR(0),
- * which happens only for a grammar with non-terminals that derive nothing.
+ * Where the diagram marks a grammar of this place, or null when it has no
+ * region for it: a grammar that is not LR(1) but not known to be ambiguous
+ * (it may be LR(k) for a larger k), an LR(1) grammar called ambiguous, or
+ * one placed in an LL class but not in LR(1), LL(0) but not LR(0), which
+ * happens only for a grammar with non-terminals that derive nothing. A
+ * grammar that is not LL(1) and not known to be in LL(k) or out of it is
+ * marked by a bar across the LL(k) border.
  */
-export function classPoint(place: GrammarPlace): { x: number; y: number } | null {
+export function classPoint(place: GrammarPlace): ClassMarker | null {
 	if (place.lr === null) {
-		if (place.ll !== null || !place.ambiguous) return null;
+		const inLl = place.ll !== null && place.ll !== 'none';
+		if (inLl || !place.ambiguous) return null;
 		return { x: 554, y: 250 };
 	}
 	if (place.ambiguous) return null;
-	if (place.ll === 'll0') return place.lr === 'lr0' ? { x: LL_AXIS, y: 347 } : null;
-	if (place.ll === 'll1') {
-		// In the LL(1) oval: in the LR(0) band above the LL(0) ellipse, in the LR(1) band under
-		// the LL(1) label.
-		const y = place.lr === 'lr0' ? 287 : place.lr === 'lr1' ? 158 : LR_BAND[place.lr];
-		return { x: LL_AXIS, y };
+	const y = LR_BAND[place.lr];
+	switch (place.ll) {
+		case 'll0':
+			return place.lr === 'lr0' ? { x: LL_AXIS, y: 347 } : null;
+		case 'll1':
+			// In the LL(1) oval: in the LR(0) band above the LL(0) ellipse, in the LR(1) band under
+			// the LL(1) label.
+			return { x: LL_AXIS, y: place.lr === 'lr0' ? 287 : place.lr === 'lr1' ? 158 : y };
+		case 'llk':
+			return { x: LL_K_X, y };
+		case 'none':
+			return { x: OUTSIDE_LL, y };
+		case null:
+			return { x: LL_K_X, y, x2: OUTSIDE_LL };
 	}
-	return { x: OUTSIDE_LL, y: LR_BAND[place.lr] };
 }
 
 const LR_TEXT: Record<LrPlace, string> = {
@@ -111,15 +139,22 @@ const LR_TEXT: Record<LrPlace, string> = {
 	lr1: 'LR(1) but not LALR(1)'
 };
 
+const LL_TEXT: Record<LlPlace, string> = {
+	ll0: 'LL(0)',
+	ll1: 'LL(1) but not LL(0)',
+	llk: 'LL(k) but not LL(1)',
+	none: 'not LL(k)'
+};
+
 /**
  * The place in words, for the diagram's accessible name: "Marked: a grammar
- * that is LALR(1) but not SLR, and not LL(1)." Empty when `classPoint` has no
- * point for it.
+ * that is LALR(1) but not SLR, and not LL(k)." Empty when `classPoint` has
+ * no point for it.
  */
 export function placeText(place: GrammarPlace): string {
 	if (classPoint(place) === null) return '';
 	if (place.lr === null) return 'Marked: an ambiguous grammar.';
 	const ll =
-		place.ll === 'll0' ? 'LL(0)' : place.ll === 'll1' ? 'LL(1) but not LL(0)' : 'not LL(1)';
+		place.ll === null ? 'not LL(1); whether it is LL(k) is not decided' : LL_TEXT[place.ll];
 	return `Marked: a grammar that is ${LR_TEXT[place.lr]}, and ${ll}.`;
 }

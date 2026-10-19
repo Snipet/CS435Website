@@ -103,6 +103,7 @@ export {
 	insideLl0,
 	insideRegion,
 	placeText,
+	type ClassMarker,
 	type ClassRegion,
 	type GrammarPlace,
 	type LlPlace,

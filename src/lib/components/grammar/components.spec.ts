@@ -78,6 +78,17 @@ describe('ParseTreeView', () => {
 		expect(names).toContain('int, child 1 of 1 of E');
 	});
 
+	it('bounds the height of its box only when asked to', () => {
+		const tall = render(ParseTreeView, {
+			props: { tree: bottomUpSlideTree, layout: 'baseline', maxHeight: '20rem', reveal: [0] }
+		}).body;
+		expect(tall).toMatch(/class="parse-tree bounded/);
+		expect(tall).toContain('--tree-max-h: 20rem;');
+		const free = render(ParseTreeView, { props: { tree: bottomUpSlideTree } }).body;
+		expect(free).not.toContain('bounded');
+		expect(free).not.toContain('--tree-max-h');
+	});
+
 	it('describes where the marker stands at either end', () => {
 		const at = (marker: number) =>
 			ariaLabels(
