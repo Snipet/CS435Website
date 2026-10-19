@@ -5,7 +5,7 @@ import {
 	PHASES,
 	allNodes,
 	compile,
-	nodeLabel,
+	courseLabel,
 	type Compilation,
 	type TmCode
 } from '$lib/theory/cminus';
@@ -28,6 +28,7 @@ import {
 	TAB_LABEL,
 	blockedBy,
 	capGroups,
+	courseTree,
 	declaredSymbols,
 	drawingOf,
 	drawnRoot,
@@ -320,6 +321,19 @@ describe('the editor', () => {
 		expect(tokenClass('ERROR')).toBeNull();
 		expect(tokenClass('ENDFILE')).toBeNull();
 		expect(tokenClass('WHILE')).toBe('hl-keyword');
+		expect(tokenClass('FOR')).toBe('hl-keyword');
+		expect(tokenClass('INCREMENT')).toBe('hl-operator');
+		expect(tokenClass('DECREMENT')).toBe('hl-operator');
+		expect(highlightSource('for (;;) ++i;', 'letters').map((t) => t.className)).toEqual([
+			'hl-keyword',
+			'hl-paren',
+			'hl-punct',
+			'hl-punct',
+			'hl-paren',
+			'hl-operator',
+			'hl-name',
+			'hl-punct'
+		]);
 	});
 
 	it('follows the identifier rule', () => {
@@ -476,11 +490,23 @@ describe('the outline of the tree', () => {
 		const rows = outlineRows(program);
 		expect(rows).toHaveLength(38);
 		expect(rows.slice(0, 5).map((r) => [r.depth, r.label, r.line])).toEqual([
-			[0, 'Program', 5],
-			[1, 'FunDecl int gcd', 5],
-			[2, 'Param int u', 5],
-			[2, 'Param int v', 5],
-			[2, 'Compound', 6]
+			[0, 'ProgramNode', 5],
+			[
+				1,
+				'declarations[0]: FunctionDeclarationNode, valueType INT, identifier gcd, nestLevel not set',
+				5
+			],
+			[
+				2,
+				'parameters[0]: ParameterNode, valueType INT, identifier u, nestLevel not set, isArray false, framePointerOffset not set',
+				5
+			],
+			[
+				2,
+				'parameters[1]: ParameterNode, valueType INT, identifier v, nestLevel not set, isArray false, framePointerOffset not set',
+				5
+			],
+			[2, 'functionBody: CompoundStatementNode, localDeclarations empty', 6]
 		]);
 		expect(rows.every((r, i) => r.id === i)).toBe(true);
 		expect(rows[0]).toMatchObject({ hasChildren: true, expanded: true, type: null });
@@ -490,9 +516,16 @@ describe('the outline of the tree', () => {
 	it('leaves out the rows under a collapsed node', () => {
 		const first = program.decls[0];
 		const rows = outlineRows(program, new Set([first.id]));
-		expect(rows.map((r) => r.label)).toContain('FunDecl void main');
-		expect(rows.map((r) => r.label)).not.toContain('Param int u');
-		expect(rows[1]).toMatchObject({ label: 'FunDecl int gcd', hasChildren: true, expanded: false });
+		const named = (r: (typeof rows)[number]) =>
+			`${r.node} ${r.attrs.find((a) => a.name === 'identifier')?.text ?? ''}`;
+		expect(rows.map(named)).toContain('FunctionDeclarationNode main');
+		expect(rows.map(named)).not.toContain('ParameterNode u');
+		expect(rows[1]).toMatchObject({
+			field: 'declarations[0]',
+			node: 'FunctionDeclarationNode',
+			hasChildren: true,
+			expanded: false
+		});
 		expect(rows).toHaveLength(38 - (allNodes(first).length - 1));
 		expect(outlineRows(program, new Set([0]))).toHaveLength(1);
 		// A leaf that is "collapsed" changes nothing.
@@ -503,9 +536,65 @@ describe('the outline of the tree', () => {
 		const rows = outlineRows(program, new Set(), gcd.semantic!.types);
 		const typed = rows.filter((r) => r.type !== null);
 		expect(typed).toHaveLength(gcd.semantic!.types.size);
-		expect(rows.find((r) => r.label === 'Binary ==')!.type).toBe('int');
-		expect(rows.find((r) => r.label === 'Call output')!.type).toBe('void');
-		expect(rows.find((r) => r.label === 'If')!.type).toBeNull();
+		expect(rows.find((r) => r.node === 'RelationalExpressionNode')!.type).toBe('int');
+		expect(
+			rows.find((r) => r.label === 'expression: CallExpressionNode, identifier output')!.type
+		).toBe('void');
+		expect(rows.find((r) => r.node === 'IfStatementNode')!.type).toBeNull();
+	});
+
+	it('with a compilation: the fields set by the phases it reached', () => {
+		const rows = outlineRows(courseTree(gcd)!);
+		const row = (field: string) => rows.find((r) => r.field === field)!;
+		expect(row('declarations[0]').attrs.map((a) => [a.name, a.text, a.tone])).toEqual([
+			['valueType', 'INT', 'enum'],
+			['identifier', 'gcd', 'name'],
+			['nestLevel', '0', 'number']
+		]);
+		expect(row('parameters[1]').label).toBe(
+			'parameters[1]: ParameterNode, valueType INT, identifier v, nestLevel 1, isArray false, framePointerOffset -3'
+		);
+		// The parser stopped: nothing later is set, and the outline says which phase sets it.
+		const stopped = compile('void main(void) { int x; x = ; }');
+		const unset = outlineRows(courseTree(stopped)!).find(
+			(r) => r.node === 'VariableDeclarationNode'
+		)!;
+		expect(unset.attrs.slice(2)).toEqual([
+			{
+				name: 'nestLevel',
+				text: 'not set',
+				tone: 'unset',
+				note: 'Set when the symbol table is built (semantic analyzer)'
+			},
+			{
+				name: 'framePointerOffset',
+				text: 'not set',
+				tone: 'unset',
+				note: 'Set by the code generator'
+			}
+		]);
+		expect(courseTree(compile('int'))).not.toBeNull();
+		expect(courseTree(compile('void main(void) { $ }'))).toBeNull();
+		// One tree per compilation.
+		expect(courseTree(gcd)).toBe(courseTree(gcd));
+	});
+
+	it('shows a for loop and ++ with the fields of their classes', () => {
+		const c = compile('void main(void) { int i; int a[2]; for (i = 0; ; ++i) --a[i]; }');
+		const rows = outlineRows(courseTree(c)!);
+		expect(rows.slice(5).map((r) => [r.depth, r.label])).toEqual([
+			[3, 'statements[0]: ForStatementNode, condition nullptr'],
+			[4, 'initializer: AssignmentExpressionNode'],
+			[5, 'variable: VariableExpressionNode, identifier i'],
+			[5, 'expression: IntegerLiteralExpressionNode, value 0'],
+			[4, 'updater: UnaryExpressionNode, unaryOperator INCREMENT'],
+			[5, 'variable: VariableExpressionNode, identifier i'],
+			[4, 'body: ExpressionStatementNode'],
+			[5, 'expression: UnaryExpressionNode, unaryOperator DECREMENT'],
+			[6, 'variable: SubscriptExpressionNode, identifier a'],
+			[7, 'index: VariableExpressionNode, identifier i']
+		]);
+		expect(rows.every((r, i) => r.id === i)).toBe(true);
 	});
 
 	it('keeps a collapsed id only while it names a node with children', () => {
@@ -524,10 +613,10 @@ describe('the tree drawing', () => {
 		expect(drawing.root).toBe(program);
 		expect(drawing.caption).toBe('The whole program');
 		expect(drawing.size).toBe(38);
-		expect(drawing.tree!.symbol).toBe('Program');
+		expect(drawing.tree!.symbol).toBe('ProgramNode');
 		expect(drawing.tree!.children.map((c) => c.symbol)).toEqual([
-			'FunDecl int gcd',
-			'FunDecl void main'
+			'FunctionDeclarationNode gcd',
+			'FunctionDeclarationNode main'
 		]);
 	});
 
@@ -540,7 +629,7 @@ describe('the tree drawing', () => {
 			expect(drawing.ids.get(pathKey(path))).toBe(node.id);
 			let at = drawing.tree!;
 			for (const i of path) at = at.children[i];
-			expect(at.symbol).toBe(nodeLabel(node));
+			expect(at.symbol).toBe(courseLabel(node));
 			expect(at.terminal).toBe(at.children.length === 0);
 		}
 		expect(drawing.paths.get(0)).toEqual([]);
@@ -559,8 +648,22 @@ describe('the tree drawing', () => {
 		if (body.kind !== 'FunDecl') throw new Error('gcd is a function');
 		expect(caption(rangeOf(body.body.span))).toBe('The block on line 6');
 		const statement = drawingOf(drawnRoot(program, find(GCD, 'u / v')));
-		expect(statement.tree!.symbol).toBe('Return');
+		expect(statement.tree!.symbol).toBe('ReturnStatementNode');
 		expect(statement.size).toBe(10);
+	});
+
+	it('is the for loop around a selection in its head', () => {
+		const text = 'void main(void) { int i; for (i = 0; i < 3; ++i) output(i); }';
+		const p = compile(text).parse!.program;
+		const drawing = drawingOf(drawnRoot(p, find(text, '++i')));
+		expect(drawing.caption).toBe('The statement on line 1');
+		expect(drawing.tree!.symbol).toBe('ForStatementNode');
+		expect(drawing.tree!.children.map((c) => c.symbol)).toEqual([
+			'AssignmentExpressionNode',
+			'RelationalExpressionNode LT',
+			'UnaryExpressionNode INCREMENT',
+			'ExpressionStatementNode'
+		]);
 	});
 
 	it('is the last function of a larger program without a selection', () => {
@@ -579,7 +682,7 @@ describe('the tree drawing', () => {
 		expect(drawing.ids.size).toBe(0);
 		// One statement of it is drawn.
 		const one = drawingOf(drawnRoot(big, { start: 20, end: 24 }));
-		expect(one.tree!.symbol).toBe('ExprStmt');
+		expect(one.tree!.symbol).toBe('ExpressionStatementNode');
 	});
 });
 

@@ -1,7 +1,8 @@
 <!--
-	The parser's result: the abstract syntax tree as an outline, and beside it
-	a subtree drawn as a tree (the whole program when it is small, else the
-	function or statement around the selection).
+	The parser's result: the abstract syntax tree as an outline in the classes
+	and fields of the course's C- AST, and below it a subtree drawn as a tree
+	(the whole program when it is small, else the function or statement around
+	the selection).
 -->
 <script lang="ts">
 	import { ParseTreeView } from '$lib/components/grammar';
@@ -16,6 +17,7 @@
 	import {
 		MAX_DRAWN,
 		SMALL_TREE,
+		courseTree,
 		drawingOf,
 		drawnRoot,
 		nodeCount,
@@ -35,6 +37,7 @@
 	let { c, marks, selection, selKey = '', grammarHref, onselect }: Props = $props();
 
 	const program = $derived(c.parse!.program);
+	const tree = $derived(courseTree(c));
 	const diagnostics = $derived(phaseDiagnostics(c, 'parser'));
 	const total = $derived(nodeCount(program));
 	const drawing = $derived(drawingOf(drawnRoot(program, selection)));
@@ -67,7 +70,20 @@
 			<h3 class="cm-heading">
 				Abstract syntax tree <span class="cm-sub">{plural(total, 'node')}</span>
 			</h3>
-			<AstOutline {program} marked={marks.nodes} {selKey} label="Abstract syntax tree" {onselect} />
+			<AstOutline
+				{program}
+				{tree}
+				marked={marks.nodes}
+				{selKey}
+				label="Abstract syntax tree"
+				{onselect}
+			/>
+			<p class="cm-note cm-muted">
+				Node classes and fields of the C- AST: each row is the field that holds the node, its class
+				and its other fields. <code>nestLevel</code> is set when the symbol table is built, and
+				<code>framePointerOffset</code> (of a local or a parameter) by the code generator. A field
+				the compilation did not reach is <em>not set</em>.
+			</p>
 		</section>
 
 		<section class="cm-section">
@@ -111,17 +127,12 @@
 </div>
 
 <style>
+	/* The outline above the drawing: rows in the course's classes are long, and so are the labels. */
 	.split {
 		display: grid;
 		grid-template-columns: minmax(0, 1fr);
-		gap: var(--space-4);
+		gap: var(--space-5);
 		min-width: 0;
-	}
-	@container cm-view (min-width: 40rem) {
-		.split {
-			grid-template-columns: minmax(16rem, 5fr) minmax(0, 6fr);
-			align-items: start;
-		}
 	}
 	.drawing {
 		min-width: 0;

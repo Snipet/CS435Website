@@ -65,8 +65,17 @@ const CONSTANTS = [0, 0, 1, 1, 2, 3, 4, 5, 7, 10, 13, 100, 255, 46341, 65536, 10
  * before it is read, and no subscript is past the end of its array. It may
  * divide by zero, use a negative subscript or read past the end of the input:
  * all three are defined ways to stop.
+ *
+ * With `extensions` the program also has for loops (with and without each of
+ * their three parts) and the prefix operators ++ and -- on variables and
+ * elements. Without it the generator draws exactly the numbers it always did,
+ * so a seed gives the same program as before the extensions.
  */
-export function randomProgram(rnd: () => number): { source: string; inputs: number[] } {
+export function randomProgram(
+	rnd: () => number,
+	opts: { extensions?: boolean } = {}
+): { source: string; inputs: number[] } {
+	const ext = opts.extensions === true;
 	const int = (n: number) => Math.floor(rnd() * n);
 	const pick = <T>(list: readonly T[]): T => list[int(list.length)];
 	const chance = (p: number) => rnd() < p;
@@ -103,7 +112,21 @@ export function randomProgram(rnd: () => number): { source: string; inputs: numb
 		return `${f.name}(${args.join(', ')})`;
 	};
 
+	/** `++x`, `--x`, `++a[i]` or `--a[i]`: a factor that changes what it names. */
+	const step = (ctx: Context): string | null => {
+		const op = chance(0.6) ? '++' : '--';
+		if (ctx.arrays.length && chance(0.4)) {
+			const a = pick(ctx.arrays);
+			return `${op}${a.name}[${subscript(ctx, a)}]`;
+		}
+		return ctx.assignable.length ? `${op}${pick(ctx.assignable)}` : null;
+	};
+
 	const atom = (ctx: Context, depth: number): Text => {
+		if (ext && chance(0.08)) {
+			const text = step(ctx);
+			if (text) return { text, kind: 'atom' };
+		}
 		const k = rnd();
 		const ints = ctx.functions.filter((f) => f.returns === 'int');
 		if (k < 0.05 && depth > 0 && ints.length) {
@@ -146,6 +169,10 @@ export function randomProgram(rnd: () => number): { source: string; inputs: numb
 	// --- Statements ----------------------------------------------------------
 
 	const simple = (ctx: Context, depth: number): string => {
+		if (ext && chance(0.12)) {
+			const text = step(ctx);
+			if (text) return `${text};`;
+		}
 		const k = rnd();
 		if (k < 0.38 && ctx.assignable.length) {
 			return `${pick(ctx.assignable)} = ${expr(ctx, depth).text};`;
@@ -216,10 +243,55 @@ export function randomProgram(rnd: () => number): { source: string; inputs: numb
 				readable: [...ctx.readable, name],
 				loops: ctx.loops + 1
 			};
-			const out = [`${pad}${name} = 0;`, `${pad}while (${name} < ${bound}) {`];
-			for (let n = 1 + int(3); n > 0; n--) out.push(...statement(inner, depth - 1, `${pad}  `));
-			out.push(`${pad}  ${name} = ${name} + 1;`, `${pad}}`);
-			return out;
+			const form = ext ? int(5) : 0;
+			const body = (): string[] => {
+				const lines: string[] = [];
+				for (let n = 1 + int(3); n > 0; n--) lines.push(...statement(inner, depth - 1, `${pad}  `));
+				return lines;
+			};
+			switch (form) {
+				case 1:
+					return [`${pad}for (${name} = 0; ${name} < ${bound}; ++${name}) {`, ...body(), `${pad}}`];
+				case 2:
+					// Downward: the counter still runs over 0 … bound − 1.
+					return [
+						`${pad}for (${name} = ${bound - 1}; ${name} >= 0; --${name}) {`,
+						...body(),
+						`${pad}}`
+					];
+				case 3:
+					return [
+						`${pad}${name} = 0;`,
+						`${pad}for (; ${name} < ${bound};) {`,
+						...body(),
+						`${pad}  ${name} = ${name} + 1;`,
+						`${pad}}`
+					];
+				case 4:
+					// No condition: the loop ends by the test at the end of its body.
+					if (ctx.returns !== null) {
+						const value = ctx.returns === 'int' ? ` ${expr(ctx, 1).text}` : '';
+						return [
+							`${pad}for (${name} = 0; ; ++${name}) {`,
+							...body(),
+							`${pad}  if (${name} >= ${bound - 1})`,
+							`${pad}    return${value};`,
+							`${pad}}`
+						];
+					}
+					return [
+						`${pad}for (${name} = 0; ${name} < ${bound}; ) {`,
+						...body(),
+						`${pad}  ++${name};`,
+						`${pad}}`
+					];
+				default: {
+					const out = [`${pad}${name} = 0;`, `${pad}while (${name} < ${bound}) {`];
+					out.push(...body());
+					out.push(`${pad}  ${name} = ${name} + 1;`, `${pad}}`);
+					return out;
+				}
+			}
 		}
 		if (depth > 0 && k < 0.33) {
 			return [`${pad}{`, ...scoped(ctx, depth - 1, 1 + int(3), `${pad}  `), `${pad}}`];

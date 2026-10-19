@@ -13,18 +13,25 @@ import {
 	PHASES,
 	astLines,
 	childrenOf,
-	nodeLabel,
+	courseAst,
+	courseAttributes,
+	courseLabel,
+	courseValueText,
 	quadColumns,
 	quadText,
 	registerName,
 	scan,
 	typeText,
 	walk,
+	walkCourse,
 	type AstLine,
 	type AstNode,
 	type CType,
 	type CodegenResult,
 	type Compilation,
+	type CourseClass,
+	type CourseNode,
+	type CourseValue,
 	type FrameLayout,
 	type GlobalLayout,
 	type IdentifierMode,
@@ -308,7 +315,9 @@ const OPERATORS = new Set<TokenType>([
 	'GTE',
 	'EQ',
 	'NEQ',
-	'ASSIGN'
+	'ASSIGN',
+	'INCREMENT',
+	'DECREMENT'
 ]);
 const BRACKETS = new Set<TokenType>([
 	'LPAREN',
@@ -488,11 +497,30 @@ function linesOf(program: Program): AstLine[] {
 	return lines;
 }
 
+/** How a field's value is shown in the outline. */
+export type AttrTone = 'enum' | 'name' | 'number' | 'none' | 'unset';
+
+/** A field of a node shown on the node's own row: a value, a null pointer, an empty vector. */
+export interface OutlineAttr {
+	name: string;
+	/** "INT", "gcd", "-2", "nullptr", "empty", "not set". */
+	text: string;
+	tone: AttrTone;
+	/** For a field that is not set: the phase that sets it. */
+	note: string | null;
+}
+
 export interface OutlineRow {
 	/** Id of the AST node. */
 	id: number;
 	depth: number;
-	/** "Binary +", "Var x". */
+	/** The field of the parent that holds the node ("conditionalExpression", "statements[0]"); null at the root. */
+	field: string | null;
+	/** The node's class in the course's C- AST: "IfStatementNode". */
+	node: CourseClass;
+	/** Its other fields. */
+	attrs: OutlineAttr[];
+	/** The row in words: "statements[0]: IfStatementNode, elseStatement nullptr". */
 	label: string;
 	/** Source line of the node's first character. */
 	line: number;
@@ -504,16 +532,94 @@ export interface OutlineRow {
 	type: string | null;
 }
 
+const SET_BY: Record<'semantic' | 'codegen', string> = {
+	semantic: 'Set when the symbol table is built (semantic analyzer)',
+	codegen: 'Set by the code generator'
+};
+
+function attrOf(name: string, value: CourseValue): OutlineAttr {
+	const text = courseValueText(value);
+	switch (value.kind) {
+		case 'enum':
+		case 'bool':
+			return { name, text, tone: 'enum', note: null };
+		case 'string':
+			return { name, text, tone: 'name', note: null };
+		case 'int':
+			return { name, text, tone: 'number', note: null };
+		case 'unset':
+			return { name, text, tone: 'unset', note: SET_BY[value.phase] };
+		default:
+			return { name, text, tone: 'none', note: null };
+	}
+}
+
+interface CourseLine {
+	id: number;
+	depth: number;
+	field: string | null;
+	node: CourseClass;
+	attrs: OutlineAttr[];
+	label: string;
+	span: SourceSpan;
+}
+
+const courseLineCache = new WeakMap<CourseNode, CourseLine[]>();
+const programTrees = new WeakMap<Program, CourseNode>();
+const compilationTrees = new WeakMap<Compilation, CourseNode>();
+
+function courseLinesOf(tree: CourseNode): CourseLine[] {
+	let lines = courseLineCache.get(tree);
+	if (!lines) {
+		const out: CourseLine[] = [];
+		walkCourse(tree, (node, depth, field) => {
+			const attrs = courseAttributes(node).map((f) => attrOf(f.name, f.value));
+			const label = `${field ? `${field}: ` : ''}${node.node}${attrs.map((a) => `, ${a.name} ${a.text}`).join('')}`;
+			out.push({ id: node.id, depth, field, node: node.node, attrs, label, span: node.span });
+		});
+		lines = out;
+		courseLineCache.set(tree, lines);
+	}
+	return lines;
+}
+
 /**
- * The AST as an outline: one row per node in preorder, without the rows
- * under a collapsed node. With `types`, expression nodes carry their type.
+ * The syntax tree of a compilation in the classes of the course's C- AST,
+ * with nestLevel and framePointerOffset as far as the phases that set them
+ * were reached; null without a tree.
+ */
+export function courseTree(c: Compilation): CourseNode | null {
+	if (!c.parse) return null;
+	let tree = compilationTrees.get(c);
+	if (!tree) {
+		tree = courseAst(c.parse.program, { semantic: c.semantic, codegen: c.codegen });
+		compilationTrees.set(c, tree);
+	}
+	return tree;
+}
+
+/** The tree of a program alone: the fields later phases set are not set. */
+function treeOfProgram(program: Program): CourseNode {
+	let tree = programTrees.get(program);
+	if (!tree) {
+		tree = courseAst(program);
+		programTrees.set(program, tree);
+	}
+	return tree;
+}
+
+/**
+ * The AST as an outline in the course's classes: one row per node in
+ * preorder, without the rows under a collapsed node. With `types`, expression
+ * nodes carry their type. Given a program rather than a `courseTree`, the
+ * fields set by later phases are not set.
  */
 export function outlineRows(
-	program: Program,
+	tree: Program | CourseNode,
 	collapsed: ReadonlySet<number> = new Set(),
 	types?: ReadonlyMap<number, CType>
 ): OutlineRow[] {
-	const lines = linesOf(program);
+	const lines = courseLinesOf('kind' in tree ? treeOfProgram(tree) : tree);
 	const rows: OutlineRow[] = [];
 	/** Depth of the collapsed node whose subtree is being skipped. */
 	let hidden = Infinity;
@@ -527,6 +633,9 @@ export function outlineRows(
 		rows.push({
 			id: line.id,
 			depth: line.depth,
+			field: line.field,
+			node: line.node,
+			attrs: line.attrs,
 			label: line.label,
 			line: line.span.line,
 			span: line.span,
@@ -574,7 +683,15 @@ function sizeOf(node: AstNode): number {
 	return n;
 }
 
-const STATEMENT_KINDS = new Set(['Compound', 'If', 'While', 'Return', 'ExprStmt', 'VarDecl']);
+const STATEMENT_KINDS = new Set([
+	'Compound',
+	'If',
+	'While',
+	'For',
+	'Return',
+	'ExprStmt',
+	'VarDecl'
+]);
 
 function captionOf(node: AstNode): string {
 	if (node.kind === 'Program') return 'The whole program';
@@ -606,7 +723,11 @@ export function drawnRoot(program: Program, selection: SourceRange | null): AstN
 	return program;
 }
 
-/** The subtree under `root` as a tree to draw, with the maps between its paths and node ids. */
+/**
+ * The subtree under `root` as a tree to draw, with the maps between its paths
+ * and node ids. Nodes are labeled with their class in the course's C- AST
+ * (`courseLabel`).
+ */
 export function drawingOf(root: AstNode): Drawing {
 	const size = sizeOf(root);
 	const ids = new Map<string, number>();
@@ -616,7 +737,7 @@ export function drawingOf(root: AstNode): Drawing {
 		ids.set(pathKey(path), node.id);
 		paths.set(node.id, path);
 		const children = childrenOf(node).map((child, i) => build(child, [...path, i]));
-		return { symbol: nodeLabel(node), terminal: children.length === 0, children };
+		return { symbol: courseLabel(node), terminal: children.length === 0, children };
 	};
 	return { root, caption: captionOf(root), size, tree: build(root, []), ids, paths };
 }

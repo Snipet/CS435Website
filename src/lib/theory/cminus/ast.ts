@@ -5,6 +5,10 @@
  * before its children, children left to right), so the same source text always
  * gives the same ids and the id of a node is also its line in `astLines`.
  * Parentheses leave no node: `(a + b) * c` is a `*` whose left child is the `+`.
+ *
+ * Kinds: Program VarDecl FunDecl Param Compound If While For Return ExprStmt
+ * Assign Binary Unary Var Index Call Num. `courseAst.ts` maps the tree to the
+ * node classes and fields of the course's C- AST (ProgramNode, IfStatementNode, …).
  */
 import type { SourceSpan } from './tokens';
 
@@ -12,6 +16,8 @@ export type TypeSpec = 'int' | 'void';
 export type ArithOp = '+' | '-' | '*' | '/';
 export type RelOp = '<' | '<=' | '>' | '>=' | '==' | '!=';
 export type BinaryOp = ArithOp | RelOp;
+/** The operator of a prefix increment or decrement. */
+export type IncOp = '++' | '--';
 
 interface NodeBase {
 	id: number;
@@ -82,6 +88,20 @@ export interface While extends NodeBase {
 	headSpan: SourceSpan;
 }
 
+/**
+ * `for ( init ; test ; update ) body`: each of the three expressions may be
+ * left out (a missing test is always true).
+ */
+export interface For extends NodeBase {
+	kind: 'For';
+	init: Expr | null;
+	test: Expr | null;
+	update: Expr | null;
+	body: Stmt;
+	/** `for ( … ; … ; … )`. */
+	headSpan: SourceSpan;
+}
+
 export interface Return extends NodeBase {
 	kind: 'Return';
 	value: Expr | null;
@@ -105,6 +125,17 @@ export interface Binary extends NodeBase {
 	opSpan: SourceSpan;
 	left: Expr;
 	right: Expr;
+}
+
+/**
+ * `++ var` or `-- var` (prefix only): adds or subtracts 1, stores the result
+ * back, and has the updated value.
+ */
+export interface Unary extends NodeBase {
+	kind: 'Unary';
+	op: IncOp;
+	opSpan: SourceSpan;
+	target: Var | Index;
 }
 
 /** A name used alone: a variable, or a whole array passed as an argument. */
@@ -136,8 +167,8 @@ export interface Num extends NodeBase {
 }
 
 export type Decl = VarDecl | FunDecl;
-export type Stmt = Compound | If | While | Return | ExprStmt;
-export type Expr = Assign | Binary | Var | Index | Call | Num;
+export type Stmt = Compound | If | While | For | Return | ExprStmt;
+export type Expr = Assign | Binary | Unary | Var | Index | Call | Num;
 export type AstNode = Program | Decl | Param | Stmt | Expr;
 export type NodeKind = AstNode['kind'];
 
@@ -158,6 +189,14 @@ export function childrenOf(node: AstNode): AstNode[] {
 			return node.else ? [node.test, node.then, node.else] : [node.test, node.then];
 		case 'While':
 			return [node.test, node.body];
+		case 'For': {
+			const out: AstNode[] = [];
+			if (node.init) out.push(node.init);
+			if (node.test) out.push(node.test);
+			if (node.update) out.push(node.update);
+			out.push(node.body);
+			return out;
+		}
 		case 'Return':
 			return node.value ? [node.value] : [];
 		case 'ExprStmt':
@@ -166,6 +205,8 @@ export function childrenOf(node: AstNode): AstNode[] {
 			return [node.target, node.value];
 		case 'Binary':
 			return [node.left, node.right];
+		case 'Unary':
+			return [node.target];
 		case 'Index':
 			return [node.index];
 		case 'Call':
@@ -224,7 +265,7 @@ export function nodeAt(root: AstNode, offset: number): AstNode | null {
 	return best;
 }
 
-/** One line of the printed tree: "VarDecl int a[10]", "Binary +", "Var x". */
+/** One line of the printed tree: "VarDecl int a[10]", "Binary +", "Unary ++", "Var x". */
 export function nodeLabel(node: AstNode): string {
 	switch (node.kind) {
 		case 'Program':
@@ -241,6 +282,8 @@ export function nodeLabel(node: AstNode): string {
 			return 'If';
 		case 'While':
 			return 'While';
+		case 'For':
+			return 'For';
 		case 'Return':
 			return 'Return';
 		case 'ExprStmt':
@@ -249,6 +292,8 @@ export function nodeLabel(node: AstNode): string {
 			return 'Assign =';
 		case 'Binary':
 			return `Binary ${node.op}`;
+		case 'Unary':
+			return `Unary ${node.op}`;
 		case 'Var':
 			return `Var ${node.name}`;
 		case 'Index':
@@ -287,7 +332,7 @@ export function printAst(root: AstNode, opts: { indent?: string } = {}): string 
 
 /**
  * The expression as C- text with the least parentheses that keep its
- * structure: `a - (b - c)`, `(a = b) + 1`, `x = y = 3`.
+ * structure: `a - (b - c)`, `(a = b) + 1`, `x = y = 3`, `++a[i] * 2`.
  */
 export function printExpr(e: Expr): string {
 	const level = (x: Expr): number => {
@@ -308,6 +353,8 @@ export function printExpr(e: Expr): string {
 			return `${e.name}(${e.args.map(printExpr).join(', ')})`;
 		case 'Assign':
 			return `${printExpr(e.target)} = ${printExpr(e.value)}`;
+		case 'Unary':
+			return `${e.op}${printExpr(e.target)}`;
 		case 'Binary': {
 			const l = level(e);
 			// + - * / associate to the left; a relational operator takes additive operands.

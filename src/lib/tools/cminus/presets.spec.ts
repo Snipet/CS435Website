@@ -29,6 +29,7 @@ const EXPECTED: Record<string, Expected> = {
 	sort: { stoppedAt: null, output: [1, 2, 5, 7, 23, 32, 32, 34, 62, 78] },
 	blocks: { stoppedAt: null, output: [3, 2, 1] },
 	sum: { stoppedAt: null, output: [108] },
+	reverse: { stoppedAt: null, output: [5, 1, 4, 1, 3, 14] },
 	undeclared: { stoppedAt: 'semantic', errors: [/\by\b/, /\bz\b/] },
 	'missing-semicolon': { stoppedAt: 'parser', errors: [/;/] },
 	'illegal-character': { stoppedAt: 'scanner', errors: [/%/] }
@@ -141,6 +142,8 @@ describe('presets', () => {
 		expect(text('factorial-recursive')).toMatch(/factorial\(n - 1\)/);
 		expect(text('fibonacci')).toMatch(/fib\(k - 1\) \+ fib\(k - 2\)/);
 		expect(text('sum')).toContain('while ((n = input()) != 0)');
+		expect(text('reverse')).toContain('for (i = 0; i < 5; ++i)');
+		expect(text('reverse')).toContain('for (i = 4; i >= 0; --i)');
 
 		const sort = compile(text('sort')).semantic!;
 		expect(sort.symbols.find((s) => s.name === 'numbers')).toMatchObject({

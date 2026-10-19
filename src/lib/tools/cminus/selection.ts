@@ -9,8 +9,8 @@
  *   AST nodes      the nodes whose text lies in the range
  *   quads          the quads generated from those nodes (`Quad.node`), and the
  *                  quads of a head that lies in the range: the jumps and labels
- *                  of `if ( … )` and `while ( … )`, the `begin` of a function
- *                  header, the `end` of its closing brace (`Quad.span`)
+ *                  of `if ( … )`, `while ( … )` and `for ( … )`, the `begin` of
+ *                  a function header, the `end` of its closing brace (`Quad.span`)
  *   instructions   the instructions generated from those quads
  *                  (`TmInstruction.quad`)
  *
@@ -223,7 +223,7 @@ const touches = (span: SourceRange, offset: number) => span.start <= offset && o
 
 /**
  * The piece of the program a caret at `offset` stands in: the statement or
- * declaration around it; for `if` and `while` the head (or the `else`); in a
+ * declaration around it; for `if`, `while` and `for` the head (or the `else`); in a
  * function header the header; on the closing brace of a function that brace.
  * Null between declarations, on a blank line and in a comment.
  */
@@ -243,6 +243,7 @@ export function pieceAt(program: Program, offset: number): SourceRange | null {
 					node.elseSpan && touches(node.elseSpan, offset) ? node.elseSpan : node.headSpan
 				);
 			case 'While':
+			case 'For':
 			case 'FunDecl':
 				return rangeOf(node.headSpan);
 			case 'Compound': {
