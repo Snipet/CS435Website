@@ -2,6 +2,9 @@
 	A parse tree drawn as on the lecture slides (docs/ARCHITECTURE.md §3.10): root
 	at the top, children left to right, plain lines fanning out from a point under
 	the parent, labels without boxes, every leaf one level below its own parent.
+	With layout="baseline" (bottom-up trees) every leaf sits on one bottom row and
+	the tree grows upward; `forest` draws several trees over one baseline (a
+	partial bottom-up parse), and `marker` puts an up-arrow under the divider.
 -->
 <script lang="ts">
 	import { untrack } from 'svelte';
@@ -13,9 +16,13 @@
 		EDGE_INSET,
 		FONT_SIZE,
 		LABEL_HEIGHT,
+		MARKER_HALF,
+		MARKER_LENGTH,
 		SUB_SCALE,
 		boxWidth,
+		describeForest,
 		describeTree,
+		layoutForest,
 		layoutTree,
 		neighborOf,
 		pathKey,
@@ -23,12 +30,43 @@
 		type TreeDirection,
 		type TreeLabeler,
 		type TreeLayout,
+		type TreeLayoutKind,
 		type TreeLayoutNode
 	} from './tree-layout';
 	import type { TreeHighlight, TreeTone } from './types';
 
-	interface Props {
-		tree: ParseNode;
+	/** One tree, or several side by side over one baseline. */
+	type Source =
+		| { tree: ParseNode; forest?: undefined }
+		| {
+				tree?: undefined;
+				/**
+				 * Trees side by side over one baseline, e.g. a partial bottom-up parse:
+				 * the subtrees of the stack symbols, then bare leaves for the tokens
+				 * still to come. Always drawn with the baseline layout. Paths (in
+				 * `highlight`, `labels` and `onnodeclick`) start with the tree's index.
+				 */
+				forest: readonly ParseNode[];
+		  };
+
+	type Props = Source & {
+		/**
+		 * `tree` (default): top-down, every leaf one level below its parent.
+		 * `baseline`: the leaves on one bottom row, the tree growing upward
+		 * (bottom-up trees).
+		 */
+		layout?: TreeLayoutKind;
+		/**
+		 * Baseline layouts: an up-arrow under the leaves after this many of them
+		 * (the divider of a shift-reduce parse; 0 = before the first leaf). Room
+		 * for it is kept at both ends, so moving it does not resize the drawing.
+		 */
+		marker?: number;
+		/**
+		 * Baseline layouts: the least number of rows, so a tree that grows step by
+		 * step keeps its height (pass the finished tree's `rows`).
+		 */
+		minRows?: number;
 		/** Color of every label, so two trees for one string can be told apart. */
 		tone?: TreeTone;
 		/** Nodes to mark, by path (child indices from the root). */
@@ -51,10 +89,14 @@
 		 * target of at least 24 px a side (see `treeSizing`).
 		 */
 		minLabelSize?: number;
-	}
+	};
 
 	let {
 		tree,
+		forest,
+		layout: kind = 'tree',
+		marker,
+		minRows,
 		tone,
 		highlight,
 		labels,
@@ -78,9 +120,12 @@
 
 	const interactive = $derived(!!onnodeclick);
 	const sizing = $derived(treeSizing(labelSize, minLabelSize, interactive));
-	const layout = $derived(
-		layoutTree(tree, { labels, gap: sizing.gap, levelHeight: sizing.levelHeight })
-	);
+	const layout = $derived.by(() => {
+		const opts = { labels, gap: sizing.gap, levelHeight: sizing.levelHeight, marker, minRows };
+		if (forest) return layoutForest(forest, opts);
+		// The props type rules out a view with neither.
+		return layoutTree(tree as ParseNode, { ...opts, layout: kind });
+	});
 
 	type Mark = 'current' | 'matched' | 'fresh';
 	const MARK_TONE = { current: 'active', matched: 'accept', fresh: 'info' } as const;
@@ -103,6 +148,8 @@
 		at: Map<string, { x: number; y: number }>;
 		width: number;
 		height: number;
+		/** Where the marker's tip was, if there was one. */
+		marker: { x: number; y: number } | null;
 	}
 	let origin = $state.raw<Origin | null>(null);
 	const progress = new Tween(1, { duration: 220, easing: cubicOut });
@@ -117,10 +164,16 @@
 	}
 
 	function frameOf(l: TreeLayout, from: Origin | null, t: number) {
+		const m = l.marker;
 		return {
 			nodes: l.nodes.map((n) => place(n, from, t)),
 			width: from ? mix(from.width, l.width, t) : l.width,
-			height: from ? mix(from.height, l.height, t) : l.height
+			height: from ? mix(from.height, l.height, t) : l.height,
+			marker: !m
+				? null
+				: from?.marker
+					? { x: mix(from.marker.x, m.x, t), y: mix(from.marker.y, m.y1, t) }
+					: { x: m.x, y: m.y1 }
 		};
 	}
 
@@ -145,7 +198,8 @@
 			origin = {
 				at: new Map(prev.nodes.map((n, i) => [n.key, shown.nodes[i]])),
 				width: shown.width,
-				height: shown.height
+				height: shown.height,
+				marker: shown.marker
 			};
 			void progress.set(0, { duration: 0 });
 			void progress.set(1);
@@ -154,24 +208,40 @@
 
 	const color = $derived(tone === undefined ? null : toneColors(tone).fg);
 
+	/** Where the marker stands, by the leaves around it. */
+	const markerText = $derived.by(() => {
+		const m = layout.marker;
+		if (!m) return '';
+		const text = (k: number) => layout.nodes[layout.leaves[k]]?.text;
+		const before = m.leaves > 0 ? text(m.leaves - 1) : undefined;
+		const after = text(m.leaves);
+		if (before !== undefined && after !== undefined) return `; ↑ between ${before} and ${after}`;
+		if (after !== undefined) return `; ↑ before ${after}`;
+		return before !== undefined ? `; ↑ after ${before}` : '';
+	});
+
 	const label = $derived.by(() => {
 		const crossed = rejected ? ' (crossed out)' : '';
-		if (interactive) return ariaLabel + crossed;
+		if (interactive) return ariaLabel + crossed + markerText;
 		const current = (highlight?.current ?? [])
 			.map((p) => layout.nodes.find((n) => n.id === pathKey(p))?.text)
 			.filter((text) => text !== undefined);
 		const body =
-			layout.nodes.length <= DESCRIBE_MAX
-				? describeTree(tree, labels)
-				: `${layout.nodes.length} nodes`;
-		return `${ariaLabel}${crossed}: ${body}${current.length ? `; current: ${current.join(', ')}` : ''}`;
+			layout.nodes.length > DESCRIBE_MAX
+				? `${layout.nodes.length} nodes`
+				: forest
+					? describeForest(forest, labels)
+					: describeTree(tree as ParseNode, labels);
+		return `${ariaLabel}${crossed}: ${body}${current.length ? `; current: ${current.join(', ')}` : ''}${markerText}`;
 	});
 
 	function nodeName(n: TreeLayoutNode): string {
 		const parent = n.parent === null ? null : layout.nodes[n.parent];
 		const where = parent
 			? `child ${n.path[n.path.length - 1] + 1} of ${parent.children.length} of ${parent.text}`
-			: 'root';
+			: forest
+				? `tree ${n.root + 1} of ${forest.length}`
+				: 'root';
 		const mark = marks.get(n.id);
 		return `${n.text}, ${where}${mark ? `, ${MARK_NAME[mark]}` : ''}`;
 	}
@@ -328,6 +398,13 @@
 				</g>
 			{/if}
 		{/each}
+		{#if frame.marker}
+			{@const m = frame.marker}
+			<g class="marker" aria-hidden="true">
+				<line x1={m.x} y1={m.y + 6} x2={m.x} y2={m.y + MARKER_LENGTH} />
+				<path d="M {m.x} {m.y} l -{MARKER_HALF} 9 h {2 * MARKER_HALF} z" />
+			</g>
+		{/if}
 		{#if rejected}
 			<g class="cross" aria-hidden="true">
 				<line x1="4" y1="4" x2={frame.width - 4} y2={frame.height - 4} />
@@ -396,6 +473,14 @@
 	.button:focus-visible .ring {
 		stroke: var(--focus);
 		stroke-width: 2;
+	}
+	.marker line {
+		stroke: var(--text);
+		stroke-width: 1.5;
+		vector-effect: non-scaling-stroke;
+	}
+	.marker path {
+		fill: var(--text);
 	}
 	.cross line {
 		stroke: var(--reject);

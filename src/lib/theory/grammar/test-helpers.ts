@@ -2,7 +2,7 @@
 import { bracketForm } from './derive';
 import { parseTrees } from './earley';
 import { makeGrammar, parseEbnf, parseGrammar, tokenizeInput } from './parse';
-import type { EbnfGrammar, Grammar } from './types';
+import type { EbnfGrammar, Grammar, ParseNode } from './types';
 
 /** Parses grammar text that must be free of errors. */
 export function grammar(text: string): Grammar {
@@ -74,6 +74,33 @@ export const EBNF_OPTION = 'E → T [ + E ]\nT → ( E ) | int [ * T ]';
 /** Top-Down Parsing, slide 38. */
 export const EBNF_REPETITION = 'E → T { + T }\nT → F { * F }\nF → ( E ) | int';
 
+/** Table-based Predictive Parsing, slides 6–7: the left-factored grammar of the LL(1) table. */
+export const LEFT_FACTORED = 'E → T X\nX → + E | ε\nT → ( E ) | int Y\nY → * T | ε';
+/** Bottom-Up Parsing, slide 3, and Bottom-up Parsing II, slide 4. */
+export const BOTTOM_UP = 'E → E + ( E ) | int';
+/** Bottom-up Parsing III, slide 4: the same grammar, E → int first. */
+export const BOTTOM_UP_REVERSED = 'E → int | E + ( E )';
+/** Bottom-up Parsing III, slide 18. */
+export const AMBIGUOUS_OPERATORS = 'E → E + E | E * E | int';
+/** Bottom-up Parsing III, slide 17 (E → OTHER so that E is a non-terminal with a sentence). */
+export const DANGLING_ELSE_S = 'S → if E then S | if E then S else S | OTHER\nE → OTHER';
+/** Bottom-up Parsing III, slide 24. */
+export const ID_SEQUENCE = 'S → ε | id | id S';
+/** Bottom-up Parsing III, slide 25: the rewrite. */
+export const ID_SEQUENCE_FIXED = 'S → ε | id S';
+
+/** The levels of a tree (the root alone is 1), without recursion. */
+export function treeDepth(root: ParseNode): number {
+	let depth = 0;
+	const open: [ParseNode, number][] = [[root, 1]];
+	while (open.length > 0) {
+		const [node, level] = open.pop()!;
+		depth = Math.max(depth, level);
+		for (const child of node.children) open.push([child, level + 1]);
+	}
+	return depth;
+}
+
 /** A small deterministic pseudo-random generator (mulberry32). */
 export function random(seed: number): () => number {
 	let a = seed >>> 0;
@@ -99,6 +126,13 @@ export function randomGrammar(next: () => number): Grammar {
 		}))
 	);
 	return makeGrammar(productions, { terminals });
+}
+
+/** A random token string of at most `max` terminals of `g`. */
+export function randomTokens(next: () => number, g: Grammar, max: number): string[] {
+	if (g.terminals.length === 0) return [];
+	const length = Math.floor(next() * (max + 1));
+	return Array.from({ length }, () => g.terminals[Math.floor(next() * g.terminals.length)]);
 }
 
 /** Sentences of at most `max` tokens straight from the definition: the least fixed point of the productions. */

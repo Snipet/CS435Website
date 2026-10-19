@@ -1,13 +1,22 @@
 /**
- * Layout for parse trees drawn as on the lecture slides (docs/ARCHITECTURE.md
- * §3.10): root at the top, children left to right, every node one level below
- * its own parent, so leaves do not share a baseline.
+ * Layouts for parse trees drawn as on the lecture slides (docs/ARCHITECTURE.md
+ * §3.10). Two kinds:
  *
- * The layout is a tidy tree: subtrees never overlap, a parent is centered over
- * its first and last child (a single child sits directly below it), and
- * children between two wide subtrees are spread over the room between them.
+ * - `tree` (top-down trees, the default): root at the top, children left to
+ *   right, every node one level below its own parent, so leaves do not share a
+ *   baseline. A tidy tree: subtrees never overlap, a parent is centered over
+ *   its first and last child (a single child sits directly below it), and
+ *   children between two wide subtrees are spread over the room between them.
+ * - `baseline` (bottom-up trees, Bottom-Up Parsing slides 5–10, Bottom-up
+ *   Parsing II slides 4–14): every leaf sits on one bottom row in input order,
+ *   evenly spaced, and every interior node is centered over its first and last
+ *   child, at least one row above the highest of them, so the tree grows
+ *   upward. A node is raised further when a line from it to a child would
+ *   otherwise pass through or under another child's subtree. Several trees can
+ *   share one baseline (`layoutForest`): the partial tree of a shift-reduce
+ *   parse, with an optional marker under the divider.
+ *
  * Label widths come from the text length; the labels are set in the mono font.
- *
  * Pure and deterministic. Lengths are in layout units: the label font size is
  * FONT_SIZE units, so one unit is one CSS pixel at the natural size.
  */
@@ -104,7 +113,15 @@ export interface TreeLayoutNode {
 	x: number;
 	y: number;
 	width: number;
+	/** Number of ancestors (in a forest, within the node's own tree). */
 	depth: number;
+	/**
+	 * Row of the drawing, counted from the top from 0. In a `tree` layout it is
+	 * the depth; in a `baseline` layout every leaf is on the last row.
+	 */
+	row: number;
+	/** Index of the node's tree in a forest; 0 in a single tree. */
+	root: number;
 	parent: number | null;
 	children: number[];
 }
@@ -121,9 +138,31 @@ export interface TreeLayoutEdge {
 	y2: number;
 }
 
+/** `tree`: top-down, leaves under their parents; `baseline`: leaves on one bottom row. */
+export type TreeLayoutKind = 'tree' | 'baseline';
+
+/** The up-arrow under the baseline that marks the divider of a shift-reduce parse. */
+export interface TreeMarker {
+	/** Number of leaves to the left of the arrow. */
+	leaves: number;
+	x: number;
+	/** Tip of the arrow (top) … */
+	y1: number;
+	/** … and the end of its shaft. */
+	y2: number;
+}
+
 export interface TreeLayout {
+	kind: TreeLayoutKind;
 	nodes: TreeLayoutNode[];
 	edges: TreeLayoutEdge[];
+	/** Indices of the nodes without children (terminals, ε leaves, unexpanded non-terminals), left to right. */
+	leaves: number[];
+	/** Number of rows. */
+	rows: number;
+	/** y of the leaves' centers in a `baseline` layout; null in a `tree` layout. */
+	baseline: number | null;
+	marker: TreeMarker | null;
 	width: number;
 	height: number;
 }
@@ -135,6 +174,20 @@ export interface TreeLayoutOptions {
 	gap?: number;
 	/** Space around the drawing. */
 	padding?: number;
+	/** `tree` (default) or `baseline`; `layoutForest` always uses `baseline`. */
+	layout?: TreeLayoutKind;
+	/**
+	 * Baseline layouts: draw an up-arrow under the baseline after this many
+	 * leaves (0 = before the first). Every leaf counts, ε leaves included. When
+	 * it is set, the drawing keeps room for the arrow at either end, so moving
+	 * it never changes the size.
+	 */
+	marker?: number;
+	/**
+	 * Baseline layouts: the least number of rows, so a tree that grows from a
+	 * partial parse keeps its height (pass the row count of the finished tree).
+	 */
+	minRows?: number;
 }
 
 const round = (v: number) => Math.round(v * 100) / 100;
@@ -186,26 +239,36 @@ function placeChildren(lefts: number[][], rights: number[][], gap: number): numb
 	return pos;
 }
 
-export function layoutTree(tree: ParseNode, opts: TreeLayoutOptions = {}): TreeLayout {
-	const levelHeight = opts.levelHeight ?? LEVEL_HEIGHT;
-	const gap = opts.gap ?? LABEL_GAP;
-	const padding = opts.padding ?? 8;
-
-	// Preorder list, built with a stack: derivations of long inputs are deep.
+/**
+ * The nodes of one tree, or of several side by side, in preorder (a parent
+ * before its subtree, the trees in order), with an ε leaf under each
+ * ε-production. In a forest every path starts with the index of its tree.
+ */
+function collectNodes(
+	roots: readonly ParseNode[],
+	forest: boolean,
+	labels: TreeLabeler | undefined
+): TreeLayoutNode[] {
+	// Built with a stack: derivations of long inputs are deep.
 	const nodes: TreeLayoutNode[] = [];
 	interface Pending {
 		node: ParseNode | null;
 		path: number[];
 		parent: number | null;
 		depth: number;
+		root: number;
 	}
-	const stack: Pending[] = [{ node: tree, path: [], parent: null, depth: 0 }];
+	const stack: Pending[] = [];
+	// Pushed right to left, so the leftmost tree is laid out first.
+	for (let r = roots.length - 1; r >= 0; r--) {
+		stack.push({ node: roots[r], path: forest ? [r] : [], parent: null, depth: 0, root: r });
+	}
 	while (stack.length) {
 		const item = stack.pop()!;
-		const { node, path } = item;
+		const { node, path, root } = item;
 		const index = nodes.length;
 		const id = pathKey(path);
-		const override = node ? opts.labels?.(node, path) : null;
+		const override = node ? labels?.(node, path) : null;
 		const text = override ?? (node ? node.symbol : EPSILON);
 		// Only an override is split: a grammar symbol such as x1 is drawn as written.
 		const label =
@@ -223,18 +286,75 @@ export function layoutTree(tree: ParseNode, opts: TreeLayoutOptions = {}): TreeL
 			y: 0,
 			width: labelWidth(label),
 			depth: item.depth,
+			row: item.depth,
+			root,
 			parent: item.parent,
 			children: []
 		});
 		if (item.parent !== null) nodes[item.parent].children.push(index);
 		if (!node) continue;
 		const depth = item.depth + 1;
-		if (isEpsilonNode(node)) stack.push({ node: null, path: [...path, 0], parent: index, depth });
+		if (isEpsilonNode(node)) {
+			stack.push({ node: null, path: [...path, 0], parent: index, depth, root });
+		}
 		// Pushed right to left, so the leftmost child is laid out next.
 		for (let i = node.children.length - 1; i >= 0; i--) {
-			stack.push({ node: node.children[i], path: [...path, i], parent: index, depth });
+			stack.push({ node: node.children[i], path: [...path, i], parent: index, depth, root });
 		}
 	}
+	return nodes;
+}
+
+/** One edge per child, from the point under the parent's label to the point above the child's. */
+function edgesOf(nodes: readonly TreeLayoutNode[]): TreeLayoutEdge[] {
+	const reachY = LABEL_HEIGHT / 2 + EDGE_INSET;
+	const edges: TreeLayoutEdge[] = [];
+	for (const child of nodes) {
+		if (child.parent === null) continue;
+		const parent = nodes[child.parent];
+		edges.push({
+			key: child.key,
+			parent: parent.index,
+			child: child.index,
+			x1: parent.x,
+			y1: round(parent.y + reachY),
+			x2: child.x,
+			y2: round(child.y - reachY)
+		});
+	}
+	return edges;
+}
+
+const leavesOf = (nodes: readonly TreeLayoutNode[]) =>
+	nodes.filter((n) => n.children.length === 0).map((n) => n.index);
+
+/**
+ * Lays out a parse tree: top-down (`layout: 'tree'`, the default) or with the
+ * leaves on a common baseline (`layout: 'baseline'`, see `layoutForest`).
+ */
+export function layoutTree(tree: ParseNode, opts: TreeLayoutOptions = {}): TreeLayout {
+	const nodes = collectNodes([tree], false, opts.labels);
+	return opts.layout === 'baseline' ? placeBaseline(nodes, opts) : placeTopDown(nodes, opts);
+}
+
+/**
+ * Lays out several trees side by side over one baseline, e.g. the partial
+ * parse of a shift-reduce parser: a subtree for each stack symbol, then a bare
+ * leaf for each token still to come. Paths start with the index of the tree
+ * (`[2]` is the third tree's root, `[2, 0]` its first child), so highlights
+ * and labels can name nodes of every tree.
+ */
+export function layoutForest(
+	roots: readonly ParseNode[],
+	opts: Omit<TreeLayoutOptions, 'layout'> = {}
+): TreeLayout {
+	return placeBaseline(collectNodes(roots, true, opts.labels), opts);
+}
+
+function placeTopDown(nodes: TreeLayoutNode[], opts: TreeLayoutOptions): TreeLayout {
+	const levelHeight = opts.levelHeight ?? LEVEL_HEIGHT;
+	const gap = opts.gap ?? LABEL_GAP;
+	const padding = opts.padding ?? 8;
 
 	// Bottom up: place the children of each node, then record the subtree's
 	// extent per level (relative to the node) for its own parent.
@@ -293,27 +413,193 @@ export function layoutTree(tree: ParseNode, opts: TreeLayoutOptions = {}): TreeL
 		node.y = round(padding + LABEL_HEIGHT / 2 + node.depth * levelHeight);
 	}
 
-	const reachY = LABEL_HEIGHT / 2 + EDGE_INSET;
-	const edges: TreeLayoutEdge[] = [];
-	for (let i = 1; i < n; i++) {
-		const child = nodes[i];
-		const parent = nodes[child.parent!];
-		edges.push({
-			key: child.key,
-			parent: parent.index,
-			child: i,
-			x1: parent.x,
-			y1: round(parent.y + reachY),
-			x2: child.x,
-			y2: round(child.y - reachY)
-		});
+	return {
+		kind: 'tree',
+		nodes,
+		edges: edgesOf(nodes),
+		leaves: leavesOf(nodes),
+		rows: maxDepth + 1,
+		baseline: null,
+		marker: null,
+		width: round(maxX - minX + 2 * padding),
+		height: round(2 * padding + LABEL_HEIGHT + maxDepth * levelHeight)
+	};
+}
+
+/**
+ * Room a line keeps from a label in a baseline layout: beyond the text on
+ * either side, and above the label's center (capitals reach about 7 units up).
+ */
+export const CLEAR_X = 2;
+export const CLEAR_TOP = 8;
+/** Distance from a label's center to the end of an edge. */
+const REACH = LABEL_HEIGHT / 2 + EDGE_INSET;
+/** Space between the leaves' labels and the tip of the marker. */
+export const MARKER_GAP = 4;
+/** Length of the marker from its tip. */
+export const MARKER_LENGTH = 22;
+/** Half the width of the marker's arrowhead. */
+export const MARKER_HALF = 5;
+
+function placeBaseline(nodes: TreeLayoutNode[], opts: TreeLayoutOptions): TreeLayout {
+	const levelHeight = opts.levelHeight ?? LEVEL_HEIGHT;
+	const gap = opts.gap ?? LABEL_GAP;
+	const padding = opts.padding ?? 8;
+	const n = nodes.length;
+	const leaves = leavesOf(nodes);
+	const m = leaves.length;
+
+	// One spacing for every pair of neighboring leaves. It also keeps any two
+	// interior nodes of one row apart: they cover different leaves, and a node
+	// sits between its first and last leaf, so they are a spacing apart or more.
+	let step = 0;
+	for (let k = 1; k < m; k++) {
+		step = Math.max(step, (nodes[leaves[k - 1]].width + nodes[leaves[k]].width) / 2 + gap);
+	}
+	for (const node of nodes) if (node.children.length) step = Math.max(step, node.width + gap);
+	if (m === 1) step = Math.max(step, nodes[leaves[0]].width + gap);
+	if (step === 0) step = 2 * gap;
+
+	// Leaves in preorder are in input order. A parent is centered over its
+	// first and last child. `first`/`last` are the leaves a node covers;
+	// `chain` counts the single-child nodes below it that cover the same leaves.
+	const xs = new Float64Array(n);
+	const first = new Int32Array(n);
+	const last = new Int32Array(n);
+	const chain = new Int32Array(n);
+	leaves.forEach((i, k) => {
+		xs[i] = k * step;
+		first[i] = last[i] = k;
+	});
+	for (let i = n - 1; i >= 0; i--) {
+		const kids = nodes[i].children;
+		if (!kids.length) continue;
+		const a = kids[0];
+		const b = kids[kids.length - 1];
+		xs[i] = (xs[a] + xs[b]) / 2;
+		first[i] = first[a];
+		last[i] = last[b];
+		chain[i] = kids.length === 1 ? chain[a] + 1 : 0;
+	}
+
+	// Rows above the baseline, bottom up. A parent starts one row above its
+	// highest child. Each line from it to a child C must pass above every node
+	// of the other children's subtrees between the parent and C (and so above
+	// their lines too); the parent is raised until it does. `lo`/`hi` are the
+	// horizontal extent of a subtree's labels with their clearance.
+	const half = (i: number) => nodes[i].width / 2 + CLEAR_X;
+	const lo = new Float64Array(n);
+	const hi = new Float64Array(n);
+	const up = new Int32Array(n);
+	const pending: number[] = [];
+	for (let i = n - 1; i >= 0; i--) {
+		const kids = nodes[i].children;
+		lo[i] = xs[i] - half(i);
+		hi[i] = xs[i] + half(i);
+		for (const c of kids) {
+			lo[i] = Math.min(lo[i], lo[c]);
+			hi[i] = Math.max(hi[i], hi[c]);
+		}
+		if (!kids.length) continue;
+		// Height of the parent's center above the leaves' centers.
+		let h = 0;
+		for (const c of kids) h = Math.max(h, (up[c] + 1) * levelHeight);
+		for (const c of kids) {
+			const dx = xs[c] - xs[i];
+			// A vertical line: the other subtrees are at least a spacing away.
+			if (Math.abs(dx) < 1e-9) continue;
+			const end = up[c] * levelHeight + REACH;
+			const spanLo = Math.min(xs[i], xs[c]);
+			const spanHi = Math.max(xs[i], xs[c]);
+			// The line falls from the parent toward C, so over an interval it is
+			// lowest at the end nearer C; `rise` is that end's share of the way up.
+			const rise = (a: number, b: number) => Math.abs(xs[c] - (dx > 0 ? b : a)) / Math.abs(dx);
+			for (const o of kids) if (o !== c) pending.push(o);
+			while (pending.length) {
+				const o = pending.pop()!;
+				const a = Math.max(lo[o], spanLo);
+				const b = Math.min(hi[o], spanHi);
+				if (a > b) continue;
+				// Above the label, and deeper in the subtree also above the end of
+				// the line that comes into the node from its own parent (a child of
+				// the parent being placed has its line from that parent). Nothing
+				// of the subtree is higher than these two.
+				const top = up[o] * levelHeight + CLEAR_TOP;
+				const attach = nodes[o].parent === i ? -Infinity : up[o] * levelHeight + REACH;
+				const highest = Math.max(top, attach);
+				if (highest <= end || end + (h - REACH - end) * rise(a, b) >= highest) continue;
+				const oa = Math.max(xs[o] - half(o), spanLo);
+				const ob = Math.min(xs[o] + half(o), spanHi);
+				if (oa <= ob) {
+					const f = rise(oa, ob);
+					if (f > 1e-9) h = Math.max(h, REACH + end + (top - end) / f);
+				}
+				if (attach > end && xs[o] >= spanLo && xs[o] <= spanHi) {
+					const f = rise(xs[o], xs[o]);
+					if (f > 1e-9) h = Math.max(h, REACH + end + (attach - end) / f);
+				}
+				for (const k of nodes[o].children) pending.push(k);
+			}
+		}
+		up[i] = Math.ceil(h / levelHeight - 1e-9);
+	}
+
+	let rows = 1;
+	for (let i = 0; i < n; i++) rows = Math.max(rows, up[i] + 1);
+	if (opts.minRows !== undefined && Number.isFinite(opts.minRows)) {
+		rows = Math.max(rows, Math.floor(opts.minRows));
+	}
+
+	const marked = opts.marker !== undefined && Number.isFinite(opts.marker);
+	const firstX = m ? xs[leaves[0]] - step / 2 : 0;
+	const lastX = m ? xs[leaves[m - 1]] + step / 2 : 0;
+	let minX = Infinity;
+	let maxX = -Infinity;
+	for (let i = 0; i < n; i++) {
+		minX = Math.min(minX, xs[i] - nodes[i].width / 2);
+		maxX = Math.max(maxX, xs[i] + nodes[i].width / 2);
+	}
+	if (marked) {
+		minX = Math.min(minX, firstX - MARKER_HALF);
+		maxX = Math.max(maxX, lastX + MARKER_HALF);
+	}
+	if (minX > maxX) minX = maxX = 0;
+
+	const top = padding + LABEL_HEIGHT / 2;
+	for (let i = 0; i < n; i++) {
+		const node = nodes[i];
+		node.row = rows - 1 - up[i];
+		node.x = round(xs[i] - minX + padding);
+		node.y = round(top + node.row * levelHeight);
+		// The leaves a node covers stay the same while a bottom-up parse grows
+		// the tree above them, so a node keeps its key from step to step.
+		node.key = `${first[i]}:${last[i]}:${chain[i]}|${node.node ? node.node.symbol : EPSILON}`;
+	}
+	const baseline = round(top + (rows - 1) * levelHeight);
+
+	let marker: TreeMarker | null = null;
+	if (marked) {
+		const k = Math.min(m, Math.max(0, Math.round(opts.marker!)));
+		const x = k === 0 ? firstX : k === m ? lastX : (xs[leaves[k - 1]] + xs[leaves[k]]) / 2;
+		const y1 = round(baseline + LABEL_HEIGHT / 2 + MARKER_GAP);
+		marker = { leaves: k, x: round(x - minX + padding), y1, y2: round(y1 + MARKER_LENGTH) };
 	}
 
 	return {
+		kind: 'baseline',
 		nodes,
-		edges,
+		edges: edgesOf(nodes),
+		leaves,
+		rows,
+		baseline,
+		marker,
 		width: round(maxX - minX + 2 * padding),
-		height: round(2 * padding + LABEL_HEIGHT + maxDepth * levelHeight)
+		height: round(
+			2 * padding +
+				LABEL_HEIGHT +
+				(rows - 1) * levelHeight +
+				(marked ? MARKER_GAP + MARKER_LENGTH : 0)
+		)
 	};
 }
 
@@ -370,7 +656,8 @@ export type TreeDirection = 'up' | 'down' | 'left' | 'right';
 
 /**
  * The node reached from `index` with an arrow key: the parent, the first
- * child, or the previous / next node on the same level. ε leaves are skipped.
+ * child, or the previous / next node on the same row. ε leaves are skipped.
+ * In a forest, a root has no parent and the leaves' row joins the trees.
  */
 export function neighborOf(
 	layout: TreeLayout,
@@ -383,11 +670,12 @@ export function neighborOf(
 	if (direction === 'down') {
 		return node.children.find((c) => layout.nodes[c].node !== null) ?? null;
 	}
-	// Preorder lists each level from left to right.
+	// Preorder lists each row from left to right: two nodes of one row are
+	// never ancestor and descendant.
 	const step = direction === 'left' ? -1 : 1;
 	for (let i = index + step; i >= 0 && i < layout.nodes.length; i += step) {
 		const other = layout.nodes[i];
-		if (other.depth === node.depth && other.node !== null) return i;
+		if (other.row === node.row && other.node !== null) return i;
 	}
 	return null;
 }
@@ -397,8 +685,20 @@ export function neighborOf(
  * followed by its children in parentheses.
  */
 export function describeTree(tree: ParseNode, labels?: TreeLabeler): string {
+	return describe(tree, [], labels);
+}
+
+/**
+ * Several trees as text, separated by commas: `E ( int ), +, (`. Paths passed
+ * to `labels` start with the index of the tree, as in `layoutForest`.
+ */
+export function describeForest(roots: readonly ParseNode[], labels?: TreeLabeler): string {
+	return roots.map((root, i) => describe(root, [i], labels)).join(', ');
+}
+
+function describe(tree: ParseNode, at: number[], labels?: TreeLabeler): string {
 	const out: string[] = [];
-	const stack: ({ node: ParseNode; path: number[] } | string)[] = [{ node: tree, path: [] }];
+	const stack: ({ node: ParseNode; path: number[] } | string)[] = [{ node: tree, path: at }];
 	while (stack.length) {
 		const item = stack.pop()!;
 		if (typeof item === 'string') {
