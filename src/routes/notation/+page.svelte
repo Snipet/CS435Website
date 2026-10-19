@@ -421,7 +421,9 @@
 	{#if link}
 		<p class="tool-line">
 			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path (toolHref) -->
-			<a href={link.href}>Open {link.what} in {link.title} <Icon name="arrow-right" size={14} /></a>
+			<a href={link.href}
+				>Open {link.what} in {link.title}&nbsp;<Icon name="arrow-right" size={14} /></a
+			>
 		</p>
 	{/if}
 {/snippet}
@@ -2506,14 +2508,16 @@
 		font-size: var(--text-sm);
 	}
 	.tool-line a {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
 		font-weight: 500;
 		text-decoration: none;
 	}
 	.tool-line a:hover {
 		text-decoration: underline;
+	}
+	/* Inline, after a no-break space: on a narrow screen the arrow wraps with the last word. */
+	.tool-line a :global(.icon) {
+		display: inline-block;
+		vertical-align: -2px;
 	}
 	h3 {
 		margin: var(--space-2) 0 0;
