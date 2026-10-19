@@ -847,6 +847,403 @@ function compareGrammars(
   `maxLength` of a few dozen at most; `maxSteps` bounds the time whatever the
   bounds are.
 
+#### LL(1) and LR parsing
+
+Table-driven LL(1) parsing as Table-based Predictive Parsing presents it, and
+bottom-up LR parsing as Bottom-Up Parsing, Bottom-up Parsing II and Bottom-up
+Parsing III present it. Every result is plain data (objects, arrays, Maps), so
+it survives a structured clone and can come from a worker (§5.4).
+
+```ts
+// ll1.ts
+function displayOrder(g: Grammar, symbols: Iterable<string>): string[]; // $, T in grammar order, ε: { $, +, ) }
+function terminalRanks(g: Grammar): Map<string, number>;
+function sortForDisplay(ranks: ReadonlyMap<string, number>, symbols: Iterable<string>): string[];
+function printTight(symbols: readonly string[]): string; // *T, (E), int Y: as in First( *T )
+type FirstFollowRule =
+	| 'first-terminal' // First(b) = { b }
+	| 'first-add' // Add First(Ai) – { ε } to First(X)
+	| 'first-self' // ignore Ai if it is X
+	| 'first-stop' // Stop: ε ∉ First(Ai)
+	| 'first-epsilon' // Add ε to First(X)
+	| 'follow-end' // Add $ to Follow(S)
+	| 'follow-add' // Add First(Ai) – { ε } to Follow(X)
+	| 'follow-stop' // Stop: ε ∉ First(Ai)
+	| 'follow-follow'; // Add Follow(Y) to Follow(X)
+interface FirstFollowStep {
+	rule: FirstFollowRule;
+	pass: number; // 0: the rules applied once; 1, 2, …: passes over the productions
+	production: number | null;
+	position: number | null; // Follow: where X is in the right-hand side
+	index: number | null; // i of Ai, from 1
+	symbol: string | null; // Ai; Y for follow-follow
+	target: string; // X
+	added: string[]; // members new to the set (display order)
+	text: string; // "Add First( T ) – { ε } to First( E )", "Stop: ε ∉ First( T )", "Add ε to First( X )"
+}
+interface FirstFollow {
+	first: Map<string, string[]>; // every symbol: N, then T; display order
+	follow: Map<string, string[]>; // terminals too: Follow( int ) (slide 23)
+	firstSteps: FirstFollowStep[];
+	followSteps: FirstFollowStep[];
+	firstPasses: number; // the last pass changes nothing
+	followPasses: number;
+	diagnostics: Diagnostic[]; // a warning per symbol named $ or ε
+}
+function firstFollow(g: Grammar): FirstFollow;
+function firstOfString(ff: FirstFollow, g: Grammar, symbols: readonly string[]): string[];
+interface LL1Placement {
+	production: number;
+	rule: 'first' | 'follow';
+	set: string[]; // First(α) (with ε when α →* ε) or Follow(A)
+	columns: string[]; // set without ε
+	text: string; // "in columns of First( *T ) = { * }", "in columns of Follow( Y ) = { $, +, ) }"
+}
+interface LL1Cell {
+	productions: number[]; // T[A, b]; none: blank (error); two or more: multiply defined
+	placements: LL1Placement[];
+}
+interface LL1Table {
+	grammar: Grammar;
+	rows: string[]; // N in grammar order
+	columns: string[]; // T in grammar order, then $
+	cells: LL1Cell[][]; // [row][column]
+	placements: LL1Placement[]; // grammar order
+	conflicts: { nonterminal: string; terminal: string; productions: number[] }[];
+	ll1: boolean;
+	firstFollow: FirstFollow;
+	diagnostics: Diagnostic[];
+}
+function ll1Table(g: Grammar, ff?: FirstFollow): LL1Table;
+function ll1Cell(t: LL1Table, nonterminal: string, terminal: string): LL1Cell | null;
+type LL1Action =
+	| { kind: 'expand'; production: number }
+	| { kind: 'match'; terminal: string }
+	| { kind: 'accept' }
+	| { kind: 'blank'; nonterminal: string; terminal: string }
+	| { kind: 'mismatch'; expected: string; found: string }
+	| { kind: 'limit' };
+interface LL1Row {
+	stack: string[]; // top first, $ last: int Y X $
+	input: string[]; // the rest of the input with the trailing $
+	action: LL1Action;
+	text: string; // "T X", "ε", "terminal", "ACCEPT", "[E,*] is blank", "Mismatch: $ is not )"
+	tree: ParseNode; // the tree of this row's stack: its non-terminals are unexpanded leaves
+	focus: number[] | null; // path of the node on top of the stack
+	cell: { row: number; column: number } | null; // the entry looked up
+}
+function ll1Parse(
+	t: LL1Table,
+	tokens: readonly string[], // with or without the closing $
+	opts?: { maxSteps?: number }
+): {
+	rows: LL1Row[];
+	outcome: 'accept' | 'error' | 'limit';
+	tree: ParseNode | null;
+	diagnostics: Diagnostic[];
+};
+const DEFAULT_PARSE_STEPS = 20_000; // rows, for ll1Parse and lrParse
+const PARSE_STACK_BUDGET = 4_000_000; // stack entries kept by all the rows of a run
+function endInput(
+	g: Grammar,
+	tokens: readonly string[]
+): { input: string[]; diagnostics: Diagnostic[] }; // I = w $
+function replaceAt(
+	root: ParseNode,
+	path: readonly number[],
+	change: (n: ParseNode) => ParseNode
+): ParseNode;
+function withRanges(root: ParseNode): ParseNode; // a copy with every node's token range
+
+// lr.ts
+interface Augmented {
+	grammar: Grammar;
+	start: string; // S, or S’, S’’, … when S is a symbol of the grammar
+	production: Production; // S → E, id = g.productions.length
+	productions: Production[]; // indexed by id
+}
+function augment(g: Grammar): Augmented;
+interface LrItem {
+	production: number;
+	dot: number;
+	lookahead: string | null; // null: an LR(0) item
+}
+interface MergedItem {
+	production: number;
+	dot: number;
+	lookaheads: string[] | null;
+}
+const ITEM_DOT = '•';
+function mergeItems(items: readonly LrItem[]): MergedItem[];
+function printItem(
+	aug: Augmented,
+	item: LrItem | MergedItem,
+	opts?: { brackets?: boolean }
+): string; // E → •E + ( E ), $/+
+function printProduction(p: Production): string; // E → E + ( E )
+interface LrClosureStep {
+	from: number; // the item [X → α•Yβ, a] extended
+	production: number; // Y → γ
+	first: string[]; // First(βa)
+	item: LrItem; // [Y → •γ, b]
+	index: number;
+	added: boolean;
+}
+function lrClosure(
+	aug: Augmented,
+	items: readonly LrItem[]
+): { items: LrItem[]; steps: LrClosureStep[] };
+function lrTransition(
+	aug: Augmented,
+	state: readonly LrItem[],
+	y: string
+): { moved: { from: number; item: LrItem }[]; items: LrItem[]; steps: LrClosureStep[] };
+interface LrState {
+	id: number;
+	items: LrItem[]; // the kernel, then the closure in the order it was added
+	kernel: number;
+	transitions: { symbol: string; to: number }[];
+	reduces: { production: number; lookaheads: string[] | null }[];
+	accept: boolean; // [S → E•, $]: accept on $
+	merged?: number[]; // LALR(1): the LR(1) states merged
+}
+type LrBuildStep =
+	| {
+			kind: 'start';
+			state: number;
+			seed: LrItem[];
+			steps: LrClosureStep[];
+			states: number;
+			edges: number;
+	  }
+	| {
+			kind: 'transition';
+			from: number;
+			symbol: string;
+			moved: { from: number; item: LrItem }[];
+			steps: LrClosureStep[];
+			to: number;
+			isNew: boolean;
+			states: number; // made through this step
+			edges: number;
+	  };
+interface LrAutomaton {
+	kind: 'lr0' | 'lr1' | 'lalr1';
+	augmented: Augmented;
+	states: LrState[];
+	edges: { from: number; symbol: string; to: number }[]; // in the order made
+	steps: LrBuildStep[];
+	truncated: boolean;
+	diagnostics: Diagnostic[];
+}
+const DEFAULT_MAX_STATES = 5000;
+function lr1Automaton(g: Grammar, opts?: { trace?: boolean; maxStates?: number }): LrAutomaton;
+function lr0Automaton(g: Grammar, opts?: { trace?: boolean; maxStates?: number }): LrAutomaton;
+function lalr1Automaton(lr1: LrAutomaton): LrAutomaton;
+function reduceLabel(aug: Augmented, reduce: LrState['reduces'][number]): string; // E → int on $, +
+
+// lr-table.ts
+type Assoc = 'left' | 'right' | 'nonassoc';
+interface PrecedenceDeclaration {
+	assoc: Assoc;
+	terminals: string[];
+} // one line, lowest first
+interface Precedence {
+	level: number; // the line, from 1
+	assoc: Assoc;
+}
+function readPrecedence(
+	g: Grammar,
+	declarations: readonly PrecedenceDeclaration[]
+): { terminals: Map<string, Precedence>; diagnostics: Diagnostic[] };
+function rulePrecedence(
+	g: Grammar,
+	terminals: ReadonlyMap<string, Precedence>,
+	production: number
+): { terminal: string | null; precedence: Precedence | null }; // its last terminal
+type LrAction =
+	| { kind: 'shift'; state: number }
+	| { kind: 'reduce'; production: number }
+	| { kind: 'accept' }
+	| { kind: 'error' }; // made by %nonassoc
+interface LrConflict {
+	state: number;
+	terminal: string;
+	kind: 'shift/reduce' | 'reduce/reduce';
+	items: [LrItem, LrItem]; // [X → α•aβ, b] and [Y → γ•, a]; [X → α•, a] and [Y → β•, a]
+	actions: [LrAction, LrAction];
+	resolution: { action: LrAction; by: 'precedence' | 'default'; reason: string };
+}
+type LrMethod = 'lr0' | 'slr1' | 'lr1';
+interface LrTable {
+	method: LrMethod;
+	augmented: Augmented;
+	terminals: string[]; // action columns: T, then $
+	nonterminals: string[]; // goto columns: N
+	action: (LrAction | null)[][]; // [state][column]; null: blank
+	goto: (number | null)[][];
+	conflicts: LrConflict[];
+	unresolved: number; // conflicts left to bison's defaults
+	diagnostics: Diagnostic[];
+}
+function lrTable(
+	a: LrAutomaton,
+	opts?: { method?: LrMethod; precedence?: readonly PrecedenceDeclaration[] }
+): LrTable;
+function printAction(aug: Augmented, a: LrAction, opts?: { style?: 'short' | 'long' }): string; // s4, r(E → int) | shift 4, reduce E → int
+
+// lr-parse.ts
+interface LrStackEntry {
+	symbol: string | null; // null: the bottom < dummy, 0 >
+	state: number;
+}
+const STACK_BOTTOM = 'dummy';
+interface LrParseRow {
+	stack: LrStackEntry[]; // before the action, bottom first (entries are shared between rows)
+	j: number;
+	lookup: { state: number; terminal: string }; // action[top_state(stack), I[j]]
+	action: LrAction | null; // null: blank
+	popped: LrStackEntry[];
+	goto: { state: number; nonterminal: string; to: number | null } | null; // Goto[top_state(stack), X]
+	pushed: LrStackEntry | null;
+	forest: ParseNode[]; // the stack's subtrees after the action
+	text: string; // "shift 1", "reduce E → int", "accept", "error: action[3, $] is blank"
+}
+interface LrParse {
+	grammar: Grammar;
+	input: string[]; // I = w $
+	rows: LrParseRow[];
+	outcome: 'accept' | 'error' | 'limit';
+	tree: ParseNode | null;
+	diagnostics: Diagnostic[];
+}
+function lrParse(t: LrTable, tokens: readonly string[], opts?: { maxSteps?: number }): LrParse;
+interface ShiftReduceRow {
+	stack: string[];
+	input: string[];
+	action: 'shift' | 'reduce' | 'accept' | 'error' | 'limit';
+	production: number | null;
+	count: number; // tokens shifted
+	text: string; // "shift", "shift 3 times", "red. E → E + (E)", "accept"
+	rows: number[]; // the LrParse rows
+}
+function shiftReduceRows(p: LrParse): ShiftReduceRow[];
+function collapseShifts(rows: readonly ShiftReduceRow[]): ShiftReduceRow[];
+function printConfiguration(
+	stack: readonly string[],
+	input: readonly string[],
+	opts?: { compact?: boolean; divider?: string } // defaults true, 'I'
+): string; // E + (int I ) + (int)$
+function printCompact(symbols: readonly string[]): string; // int + (int) + (int)$
+function printStack(stack: readonly LrStackEntry[]): string; // < dummy, 0 > < E, 2 >
+
+// handles.ts
+interface HandleStep {
+	form: SententialForm;
+	handle: { start: number; end: number } | null; // null for the start symbol
+	production: number | null;
+}
+function handlesFromParse(p: LrParse): HandleStep[] | null; // null unless accepted
+function handlesFromTree(g: Grammar, tree: ParseNode): HandleStep[];
+
+// lr-classes.ts
+interface LrClass {
+	member: boolean | null; // null: the automaton was cut off
+	conflicts: LrConflict[];
+	states: number;
+}
+interface GrammarClasses {
+	ll1: { member: boolean; conflicts: LL1Table['conflicts'] };
+	lr0: LrClass;
+	slr1: LrClass;
+	lalr1: LrClass;
+	lr1: LrClass;
+	string: { tokens: string[]; trees: number; ambiguous: boolean } | null;
+	ambiguity: 'unambiguous' | 'ambiguous' | 'unknown';
+	diagnostics: Diagnostic[];
+}
+function grammarClasses(
+	g: Grammar,
+	opts?: { tokens?: readonly string[]; maxStates?: number }
+): GrammarClasses;
+```
+
+- **First and Follow (slides 20 and 22).** `firstFollow` applies the deck's
+  rules pass by pass, productions in grammar order, until a pass changes
+  nothing (that pass is in the trace too). Pass 0 holds First(b) = { b } for
+  each terminal and Add $ to Follow(S). An Ai that is X is ignored (its add
+  changes nothing) but still stops when ε ∉ First(X). Follow is computed for
+  every occurrence of every symbol, so terminals get Follow sets too
+  (Follow( int ) = { $, +, ), * } for the left-factored grammar). The sets agree
+  with `firstSets` and `followSets`, which remain the way to compute them for
+  large grammars (the trace has a step per symbol per production per pass).
+- **The LL(1) table (slides 24–26).** A production A → α goes in the columns of
+  First(α) – { ε }, and when α →* ε also in the columns of Follow(A). Cells hold
+  production ids (the slides print only the right-hand side), with the
+  placements that put them there. An entry with two productions is a
+  conflict and `ll1` is false. Rows and columns follow N and T; the slide's
+  T, E, X, Y and int * + ( ) $ order is a tool's choice.
+- **The LL(1) driver (slides 11–12).** The stack starts as < S $ >; a row shows
+  the stack (top first), the input with its `$`, and what is done to them.
+  On the slide 12 input `int * int` it reproduces the ten rows exactly. Errors
+  are a blank entry (`[E,*] is blank`) or a terminal that does not match
+  (`Mismatch: $ is not )`). With multiply-defined entries the first
+  production is used (with a warning); only then can a run loop, and it stops
+  with outcome `'limit'`.
+- **Augmenting and numbering (Bottom-up Parsing III, slides 7–14).** The start
+  production is always added, named S unless the grammar uses S (then S’,
+  S’’, …), and given the id after the grammar's last production, so every
+  production id in tables, conflicts, trees and handles is the grammar's own.
+  State 0 is Closure({ [S → •E, $] }); states are processed in the order they
+  are made; a state's transitions on terminals come before those on
+  non-terminals, each in the order the symbols first appear after • in its
+  items; a Transition result with an existing state's items is that state.
+  Both `E → E + ( E ) | int` and `E → int | E + ( E )` give the 12 states and
+  edges of Bottom-up Parsing II, slide 17.
+- **Item order.** A state lists its kernel, then the items Closure added, in
+  the order it added them (each item is extended once; a second pass would
+  add nothing). `mergeItems` keeps the first appearance of each core and puts
+  `$` first among the lookaheads, then the order of appearance, which gives
+  the slides' `$/+` and `)/+`. `E → E + ( E ) | int` gives slide 11's order
+  exactly (`S → •E, $ ; E → •E + ( E ), $/+ ; E → •int, $/+`); with
+  `E → int | E + ( E )` the int items come first, as on slide 9.
+- **Conflicts and precedence (slides 16–23).** A cell with a shift and a
+  reduce, or two reduces, is a conflict, recorded with the two items (the
+  shift item with the conflict's terminal as lookahead when there is one, as
+  on slide 18). Declarations come one line each, lowest first; a rule's
+  precedence is that of its last terminal. A shift/reduce conflict becomes a
+  shift when no precedence is declared for the rule or the terminal (reported
+  as unresolved: bison's default), when the terminal is higher, or when they
+  are equal and `%right`; a reduce when the rule is higher or they are equal
+  and `%left`; an error entry when they are equal and `%nonassoc`. A
+  reduce/reduce conflict is reported and the earlier rule wins. The table
+  holds what won, so `lrParse` behaves as bison's parser:
+  `E → E + E | E * E | int` with `%left +` then `%left *` parses
+  `int + int * int` as `E( E(int) + E( E(int) * E(int) ) )`.
+- **The LR driver (Bottom-up Parsing II, slides 20–21).** Rows record the
+  lookup action[top_state(stack), I[j]], the pairs popped, the Goto lookup and
+  the forest of subtrees on the stack after the step; trees and stack pairs
+  are shared between rows. `shiftReduceRows` gives the I-divider view of
+  slides 4–14, `collapseShifts` merges consecutive shifts (`shift 3 times`),
+  and `printConfiguration` writes a row as on slide 14. Both drivers stop with
+  outcome `'limit'` after `maxSteps` rows or when their rows hold
+  `PARSE_STACK_BUDGET` stack entries in all (each row keeps its stack, so the
+  memory of a run grows with steps times depth: lrParse takes a thousand
+  nested parentheses). With a conflict-free table only the LR(0) table of a
+  grammar with a non-terminal that derives nothing can get there.
+- **Handles (Bottom-Up Parsing, slides 4–11).** From the reductions of an
+  accepted LR parse, or from a tree's rightmost derivation reversed; each
+  form but the last has the handle that the next reduction replaces, and
+  what lies right of it is all terminals.
+- **Not in the decks.** LR(0), SLR(1) and LALR(1) are only named, on the Venn
+  diagram of Bottom-up Parsing III, slide 26. `lr0Automaton`, the `'lr0'` and
+  `'slr1'` table methods and `lalr1Automaton` build them the standard way so
+  that `grammarClasses` can place a grammar in that diagram. Its inclusions
+  hold for grammars whose non-terminals are all reachable and productive.
+- **Cost.** Canonical LR(1) automata can be large: the 29 rules of C- give 308
+  states in about 15 ms; `maxStates` (default 5000) cuts the construction off
+  with an error and `truncated`, and `trace: false` skips the steps.
+
 ### 4.5 C- compiler (`theory/cminus/`)
 
 A compiler for C- (the language of Appendix A of the course text) that keeps
