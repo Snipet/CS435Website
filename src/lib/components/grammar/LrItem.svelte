@@ -28,8 +28,11 @@
 		font-variant-ligatures: none;
 		white-space: pre;
 	}
+	/* The decks draw a large red bullet; scaled so the line keeps its height. */
 	.dot {
+		display: inline-block;
 		color: var(--reject);
 		font-weight: 700;
+		transform: scale(1.5);
 	}
 </style>
