@@ -35,6 +35,19 @@ import {
 	stateFromHash as phasesState
 } from '$lib/tools/phases/state';
 import { toolBySlug, tools } from '$lib/tools/registry';
+import { DEFAULT_PRESET as CMINUS_DEFAULT_PRESET } from '$lib/tools/cminus/presets';
+import {
+	defaultState as cminusDefault,
+	isCminusHash,
+	stateFromHash as cminusState
+} from '$lib/tools/cminus/state';
+import { TAB_LABEL as CMINUS_TABS } from '$lib/tools/cminus/views';
+import {
+	presetFor as predictivePresetFor,
+	presetState as predictivePresetState,
+	presets as predictivePresets
+} from '$lib/tools/rd-predictive/presets';
+import { isPredictiveHash, stateFromHash as predictiveState } from '$lib/tools/rd-predictive/state';
 import {
 	DEFAULT_STATE as SCANNER_DEFAULT,
 	isSavedState as isScannerHash,
@@ -61,7 +74,9 @@ import type { ToolMeta } from '$lib/tools/types';
 import { decode } from '$lib/url-state';
 import Home from '../+page.svelte';
 import Page from './+page.svelte';
+import { ID_SEPARATOR, lines as checklistLines } from './checklist';
 import {
+	CMINUS_SYNTAX_TREE,
 	ENDS_IN_ONE,
 	EXAM,
 	FOUR_TUPLE,
@@ -71,6 +86,7 @@ import {
 	PRECEDENCE_CASCADE,
 	STAR_NOTE,
 	SUMMARY,
+	SYNTAX_TREE,
 	TITLE,
 	allTopics,
 	chipFor,
@@ -87,8 +103,10 @@ import {
 } from './topics';
 
 /**
- * The midterm review list: one block per group, a line per topic, points
- * indented under their topic, and the list's asterisks in front of a line.
+ * The midterm review list (exam on Thursday 10/22): one block per group, a line
+ * per topic, points indented under their topic, and the list's asterisks in
+ * front of a line. As handed out, "Predictive RD" and "Bottom-Up" are written
+ * twice, each time in another place.
  */
 const LIST = `
 What is compiler?
@@ -167,20 +185,41 @@ Parsing
   Parse trees and relation to derivations
     Derivation defines parse tree
     One tree can have many derivations
-  * Syntax-directed Translation (SDT)
-    Grammar + Translation rules/Semantic actions
-    Semantic values
-    * Bison
+  * Bison
   * ASTs
   Ambiguity
   * Precedence cascades
   Parsing Algorithms
     Top-Down
+      Generate-Match parsing
       RD with backtracking
       Predictive RD
-      Table Driven LL(1)
+      ** Computing First and Follow sets
+        Fixed-point computations
+      * Table Driven LL(1)
     Bottom-Up
-      LR(1)
+      Shift-Reduce parsing
+      * LR(1) algorithm
+    ** Predictive RD
+      * Left factoring (use EBNF)
+      * Remove left recursion (use EBNF)
+      Associativity
+      * Building AST
+      ** Visitor Design Pattern
+    Table Driven
+      * Remove left recursion (no EBNF)
+      * Left factor (no EBNF)
+      Explicit stack
+      Generate RHSs/match tokens
+      ** Computing First/Follow sets
+      ** Building table!
+  Bottom-Up
+    Reduce string to start symbol
+    Produce rightmost derivation in reverse
+    ** LR(1)
+      * LR(1) Items
+      * Closure(Items)
+      * Constructing DFA and table
 `;
 
 function outline(list: readonly Section[]): string {
@@ -197,11 +236,16 @@ function outline(list: readonly Section[]): string {
 
 const lines = allTopics().map((entry) => entry.topic);
 
-/** The line of the list with this text. */
+/**
+ * The line of the list with this text. A text the list has twice is named with
+ * the text of a line above it: "Top-Down › Predictive RD".
+ */
 function line(text: string): Topic {
-	const found = lines.filter((t) => t.text === text);
+	const found = checklistLines.filter(
+		(l) => l.id === text || l.id.endsWith(`${ID_SEPARATOR}${text}`)
+	);
 	if (found.length !== 1) throw new Error(`${found.length} lines read "${text}"`);
-	return found[0];
+	return found[0].topic;
 }
 
 const isTool = (link: TopicLink): link is ToolTopicLink => link.kind === 'tool';
@@ -231,7 +275,7 @@ describe('the list', () => {
 		expect(outline(sections)).toBe(LIST.trim());
 	});
 
-	it('marks the lines the list marks: two asterisks once, one asterisk fourteen times', () => {
+	it('marks the lines the list marks: two asterisks seven times, one asterisk twenty-three times', () => {
 		const starred = lines.filter((t) => t.stars > 0).map((t) => `${t.stars} ${t.text}`);
 		expect(starred).toEqual([
 			'1 Language Impl Methods',
@@ -245,10 +289,25 @@ describe('the list', () => {
 			'1 Flex',
 			'1 Chomsky Hierarchy',
 			'1 Derivations',
-			'1 Syntax-directed Translation (SDT)',
 			'1 Bison',
 			'1 ASTs',
-			'1 Precedence cascades'
+			'1 Precedence cascades',
+			'2 Computing First and Follow sets',
+			'1 Table Driven LL(1)',
+			'1 LR(1) algorithm',
+			'2 Predictive RD',
+			'1 Left factoring (use EBNF)',
+			'1 Remove left recursion (use EBNF)',
+			'1 Building AST',
+			'2 Visitor Design Pattern',
+			'1 Remove left recursion (no EBNF)',
+			'1 Left factor (no EBNF)',
+			'2 Computing First/Follow sets',
+			'2 Building table!',
+			'2 LR(1)',
+			'1 LR(1) Items',
+			'1 Closure(Items)',
+			'1 Constructing DFA and table'
 		]);
 	});
 
@@ -281,14 +340,51 @@ describe('the list', () => {
 		expect(sections.map(sectionStars)).toEqual([0, 1, 2, 0, 1, 0, 0, 0]);
 	});
 
-	it('writes every line once', () => {
-		const texts = lines.map((t) => t.text);
-		expect(new Set(texts).size).toBe(texts.length);
-		for (const text of texts) expect(text.trim()).toBe(text);
+	it('writes every line once, and no two lines under one line alike', () => {
+		expect(lines.length).toBe(104);
+		expect(new Set(lines).size).toBe(lines.length);
+		for (const t of lines) expect(t.text.trim()).toBe(t.text);
+		const siblings = [
+			...sections.map((s) => [...s.heads, ...s.topics]),
+			...lines.map((t) => t.sub)
+		];
+		for (const list of siblings) {
+			const texts = list.map((t) => t.text);
+			expect(new Set(texts).size, texts.join(', ')).toBe(texts.length);
+		}
+	});
+
+	it('has the two lines it writes twice in their two places', () => {
+		const twice = (text: string) => lines.filter((t) => t.text === text);
+		expect(twice('Predictive RD').map((t) => t.stars)).toEqual([0, 2]);
+		expect(line('Top-Down › Predictive RD').sub).toEqual([]);
+		expect(line('Parsing Algorithms › Predictive RD').sub.map((t) => t.text)).toEqual([
+			'Left factoring (use EBNF)',
+			'Remove left recursion (use EBNF)',
+			'Associativity',
+			'Building AST',
+			'Visitor Design Pattern'
+		]);
+		expect(twice('Bottom-Up')).toHaveLength(2);
+		expect(line('Parsing Algorithms › Bottom-Up').sub.map((t) => t.text)).toEqual([
+			'Shift-Reduce parsing',
+			'LR(1) algorithm'
+		]);
+		// The second stands next to Parsing Algorithms, as the list indents it.
+		const parsing = sections.find((s) => s.id === 'parsing')!;
+		expect(parsing.topics.map((t) => t.text).slice(-2)).toEqual([
+			'Parsing Algorithms',
+			'Bottom-Up'
+		]);
+		expect(line('Parsing › Bottom-Up').sub.map((t) => t.text)).toEqual([
+			'Reduce string to start symbol',
+			'Produce rightmost derivation in reverse',
+			'LR(1)'
+		]);
 	});
 
 	it('keeps the exam line and the note on the asterisks', () => {
-		expect(EXAM).toBe('Thursday 10/15');
+		expect(EXAM).toBe('Thursday 10/22');
 		expect(STAR_NOTE).toBe('Asterisks (*’s) are used to mark particularly important concepts');
 	});
 
@@ -298,6 +394,8 @@ describe('the list', () => {
 		expect(isInline(line('Disambiguation').sub)).toBe(false);
 		expect(isInline(line('Flex').sub)).toBe(false);
 		expect(isInline(line('Parsing Algorithms').sub)).toBe(false);
+		expect(isInline(line('Computing First and Follow sets').sub)).toBe(true);
+		expect(isInline(line('Parsing › Bottom-Up').sub)).toBe(false);
 	});
 });
 
@@ -384,8 +482,15 @@ describe('tool links', () => {
 			ASTs: ['rd-predictive', 'cminus', 'phases'],
 			Ambiguity: ['ambiguity'],
 			'Precedence cascades': ['ambiguity'],
+			'Generate-Match parsing': ['rd-backtracking'],
 			'RD with backtracking': ['rd-backtracking'],
-			'Predictive RD': ['rd-predictive']
+			'Top-Down › Predictive RD': ['rd-predictive'],
+			'Parsing Algorithms › Predictive RD': ['rd-predictive'],
+			'Left factoring (use EBNF)': ['rd-predictive'],
+			'Remove left recursion (use EBNF)': ['rd-predictive'],
+			Associativity: ['rd-predictive', 'rd-predictive'],
+			'Building AST': ['rd-predictive', 'cminus'],
+			'Remove left recursion (no EBNF)': ['rd-predictive']
 		};
 		for (const [text, tools] of Object.entries(expected)) expect(slugs(text), text).toEqual(tools);
 	});
@@ -429,14 +534,43 @@ describe('tool links', () => {
 			'Bytecode: Python and Java',
 			'Assembly vs. High-level',
 			'C- Scanner',
-			'Syntax-directed Translation (SDT)',
-			'Grammar + Translation rules/Semantic actions',
-			'Semantic values',
-			'Bison',
-			'Table Driven LL(1)',
+			'Top-Down',
+			'Fixed-point computations',
+			'Parsing Algorithms › Bottom-Up',
+			'Visitor Design Pattern',
+			'Table Driven',
+			'Left factor (no EBNF)',
+			'Parsing › Bottom-Up',
 			'LR(1)'
 		]) {
 			expect(line(text).links, text).toEqual([]);
+		}
+	});
+
+	it('leave out the LL(1) and bottom-up parsing tools: those topics link notation sections', () => {
+		const pending = ['ll1', 'shift-reduce', 'lr1', 'conflicts'];
+		for (const link of toolLinks) expect(pending, link.slug).not.toContain(link.slug);
+		for (const text of [
+			'Computing First and Follow sets',
+			'Table Driven LL(1)',
+			'Shift-Reduce parsing',
+			'LR(1) algorithm',
+			'Explicit stack',
+			'Generate RHSs/match tokens',
+			'Computing First/Follow sets',
+			'Building table!',
+			'Reduce string to start symbol',
+			'Produce rightmost derivation in reverse',
+			'LR(1) Items',
+			'Closure(Items)',
+			'Constructing DFA and table'
+		]) {
+			const links = line(text).links;
+			expect(links.length, text).toBeGreaterThan(0);
+			expect(
+				links.every((l) => l.kind === 'notation'),
+				text
+			).toBe(true);
 		}
 	});
 });
@@ -452,7 +586,9 @@ describe('the state a link opens its tool on', () => {
 			grammar: isGrammarHash,
 			ambiguity: isAmbiguityHash,
 			phases: isPhasesHash,
-			't-diagrams': isTDiagramsHash
+			't-diagrams': isTDiagramsHash,
+			'rd-predictive': isPredictiveHash,
+			cminus: isCminusHash
 		};
 		const withState = toolLinks.filter((l) => l.open !== undefined);
 		expect(withState.length).toBeGreaterThan(12);
@@ -604,6 +740,60 @@ describe('the state a link opens its tool on', () => {
 		expect(ambiguityPresetFor(ambiguityState(state as AmbiguityHash))?.id).toBe('cascade');
 	});
 
+	it('is a preset of the Predictive Recursive Descent tool, named by its grammar or its tokens', () => {
+		const cases = [
+			['Left factoring (use EBNF)', 'suitable', 'E → T + E | T', 'ebnf'],
+			['Remove left recursion (use EBNF)', 'left-recursion-ebnf', 'E → E + T | T', 'ebnf'],
+			['Building AST', 'ast', 'int + int + int', 'ebnf'],
+			['Remove left recursion (no EBNF)', 'general-form', 'S → S a | S b | c | d', 'bnf']
+		] as const;
+		for (const [text, id, example, form] of cases) {
+			const link = opened(text, 'rd-predictive');
+			const preset = predictivePresets.find((p) => p.id === id)!;
+			expect(link.example, text).toBe(example);
+			expect(link.code, text).toBe(true);
+			expect([preset.value.grammar.split('\n')[0], preset.value.input], text).toContain(example);
+			const state = link.state;
+			expect.assert(isPredictiveHash(state));
+			const loaded = predictiveState(state);
+			expect(loaded, text).toEqual(predictivePresetState(preset));
+			// The tool shows the preset's note and the slide's questions.
+			expect(predictivePresetFor(loaded)?.id, text).toBe(id);
+			// The result of removing left recursion is written with or without EBNF.
+			expect(loaded.form, text).toBe(form);
+		}
+		// Left recursion gives left associativity, right recursion right associativity (slides 38–39).
+		const associativity = line('Associativity').links.map((l) => {
+			const state = l.kind === 'tool' && l.open === 'link' ? l.state : null;
+			expect.assert(isPredictiveHash(state));
+			const loaded = predictiveState(state);
+			return [predictivePresetFor(loaded)?.id, l.kind === 'tool' && l.open && l.example];
+		});
+		expect(associativity).toEqual([
+			['left-recursion-ebnf', 'E → E + T | T'],
+			['right-recursion', 'A → X op A | X']
+		]);
+	});
+
+	it('is the Syntax tree tab of the C- Compiler, on the program it first loads', () => {
+		expect(CMINUS_SYNTAX_TREE.source).toBe(CMINUS_DEFAULT_PRESET.value.source);
+		expect(CMINUS_SYNTAX_TREE.input).toBe(CMINUS_DEFAULT_PRESET.value.input);
+		expect(CMINUS_TABS.syntax).toBe(SYNTAX_TREE);
+		for (const text of ['ASTs', 'Building AST']) {
+			const link = opened(text, 'cminus');
+			expect(link.state, text).toBe(CMINUS_SYNTAX_TREE);
+			expect(link.example, text).toBe('Syntax tree');
+			const state = link.state;
+			expect.assert(isCminusHash(state));
+			expect(cminusState(state), text).toEqual({ ...cminusDefault(), tab: 'syntax' });
+		}
+		expect(chipTexts('ASTs')).toEqual([
+			'tool: Predictive Recursive Descent',
+			'tool: C- Compiler · Syntax tree',
+			'tool: Compiler Phases'
+		]);
+	});
+
 	it('groups the seven-phase table the way the topic names', () => {
 		const cases = [
 			['Analysis/Synthesis Model', 'analysis', 'Analysis / Synthesis'],
@@ -680,8 +870,25 @@ describe('notation links', () => {
 			Derivations: ['derivations'],
 			'Parse trees and relation to derivations': ['trees'],
 			Ambiguity: ['declarations'],
+			Bison: ['bison', 'declarations'],
+			'Parsing Algorithms': ['grammar-classes'],
 			'RD with backtracking': ['descent'],
-			'Predictive RD': ['descent', 'ebnf']
+			'Top-Down › Predictive RD': ['descent', 'ebnf'],
+			'Computing First and Follow sets': ['first-follow'],
+			'Table Driven LL(1)': ['ll1-tables', 'll1-traces'],
+			'Shift-Reduce parsing': ['shift-reduce'],
+			'LR(1) algorithm': ['lr-tables'],
+			'Left factoring (use EBNF)': ['ebnf'],
+			'Remove left recursion (use EBNF)': ['ebnf'],
+			'Explicit stack': ['ll1-traces'],
+			'Generate RHSs/match tokens': ['ll1-traces'],
+			'Computing First/Follow sets': ['first-follow'],
+			'Building table!': ['ll1-tables'],
+			'Reduce string to start symbol': ['handles'],
+			'Produce rightmost derivation in reverse': ['handles'],
+			'LR(1) Items': ['lr-items'],
+			'Closure(Items)': ['lr-items'],
+			'Constructing DFA and table': ['lr-items', 'lr-tables', 'conflicts']
 		};
 		for (const [text, ids] of Object.entries(expected)) expect(anchors(text), text).toEqual(ids);
 	});
@@ -765,7 +972,7 @@ describe('the page', () => {
 		expect(SUMMARY).toBe(
 			'The midterm review list, with the tools and notation sections on this site for each topic.'
 		);
-		expect(body).toMatch(/Exam:<\/span>\s*Thursday 10\/15/);
+		expect(body).toMatch(/Exam:<\/span>\s*Thursday 10\/22/);
 		expect(body).toContain(STAR_NOTE);
 		expect(body).toContain('one asterisk in the list');
 		expect(body).toContain('two asterisks');
