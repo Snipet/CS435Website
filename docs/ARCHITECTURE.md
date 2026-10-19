@@ -1512,6 +1512,81 @@ function courseValueText(value: CourseValue): string; // "INT", "gcd", "nullptr"
 function walkCourse(root: CourseNode, visit: (node, depth, field: string | null) => void): void;
 function printCourseAst(root: CourseNode, opts?: { indent?: string }): string;
 
+// visitor.ts — the Visitor design pattern on the course tree (IVisitor and accept of the header).
+type HeaderClass = CourseClass | 'Node' | 'DeclarationNode' | 'StatementNode' | 'ExpressionNode';
+const BASE_CLASS: Record<HeaderClass, HeaderClass | null>; // the header's inheritance
+function isA(cls: HeaderClass, type: HeaderClass): boolean; // a type* can point to a cls
+const VISIT_OVERLOADS: HeaderClass[]; // IVisitor's 23 overloads, header order
+const CONCRETE_CLASSES: CourseClass[]; // the 20 classes a node can have
+interface ChildField {
+	name: string;
+	type: HeaderClass; // the pointer (element) type the header declares
+	kind: 'pointer' | 'optional' | 'vector'; // optional: may be nullptr
+	item?: string; // loop variable of a vector: decl, param, stmt, arg
+}
+const CHILD_FIELDS: Record<CourseClass, ChildField[]>; // header order
+interface CodeLine {
+	id: string | null;
+	text: string;
+} // C++ as data
+const IVISITOR_CODE: CodeLine[]; // class IVisitor; each overload's line has its class as id
+function acceptCode(cls: CourseClass): CodeLine[]; // void X::accept (IVisitor* visitor) { visitor->visit (this); }
+function nodeSummary(node: CourseNode): string; // "FunctionDeclarationNode INT gcd", "AdditiveExpressionNode PLUS"
+function withArticle(word: string): string; // "an IfStatementNode", "a StatementNode*"
+const VISITOR_IDS = ['print', 'symbols', 'fold'] as const;
+interface VisitorInfo {
+	id: VisitorId;
+	name: string; // PrintVisitor, SymbolTableVisitor, ConstantFolder
+	title: string;
+	summary: string;
+	driver: string; // printTree, buildSymbolTable, foldConstants
+	instance: string; // printer, builder, folder
+	members: string[]; // names of VisitEvent.members: level | scopes.size (), functionBody, errors.size () | isConstant, value, folded.size ()
+	code: CodeLine[];
+}
+const VISITORS: Record<VisitorId, VisitorInfo>;
+type VisitorOutput =
+	// records, in the order made
+	| { kind: 'print'; node; level; text } // a line of PrintVisitor's out
+	| { kind: 'scope'; scope; level; node: number | null } // enterScope (null: the global scope)
+	| { kind: 'declare'; node: number | null; name; nodeClass; level; scope } // null: input, output
+	| { kind: 'use'; node; name; declaration: number | null; level: number | null }
+	| { kind: 'error'; node; message } // "y is not declared", "a is already declared in this scope"
+	| { kind: 'fold'; node; op; left; right; value }; // left op right = value
+interface VisitEvent {
+	kind: 'accept' | 'visit' | 'line' | 'return';
+	node: number;
+	nodeClass: CourseClass;
+	pointer: HeaderClass | null; // accept: the pointer's type; visit: the type of this (the overload)
+	field: string | null; // accept, visit: "IfStatementNode::thenStatement", "CompoundStatementNode::statements[1]"
+	depth: number; // the node's depth: calls of accept open below it
+	lines: string[]; // ids of the lines that run (accept: the call, then its loop or null check)
+	helper: string[]; // lines of a helper it runs (print, declare, use, enterScope, exitScope)
+	text: string; // what it does, in words
+	top: number; // event that opened the innermost open call after it; -1: none
+	below: number; // accept, visit: event that opened the call under this one
+	members: string[]; // the visitor's member variables after it
+	locals: VisitorValue[]; // locals of the innermost visit method after it ({ name, value })
+	output: number; // records of VisitTrace.output made by then
+	scopes: number[]; // SymbolTableVisitor: the open scopes
+}
+interface VisitTrace {
+	visitor: VisitorId;
+	events: VisitEvent[];
+	output: VisitorOutput[];
+	initial: number; // records before the first event
+	members: string[]; // before the first event
+	truncated: boolean;
+}
+const DEFAULT_MAX_EVENTS = 200_000;
+function traceVisitor(
+	tree: CourseNode,
+	visitor: VisitorId,
+	opts?: { maxEvents?: number }
+): VisitTrace;
+function printedText(trace: VisitTrace, through?: number): string; // PrintVisitor's out
+function nestLevels(trace: VisitTrace): Map<number, number>; // SymbolTableVisitor: declaration node → nestLevel
+
 // parser.ts — predictive recursive descent, one function per non-terminal of CMINUS_EBNF.
 const CMINUS_BNF: string; // the 29 rules (16 and 26 with the extensions), readable by parseGrammar
 const CMINUS_EBNF: string; // the grammar the parser follows, readable by parseEbnf
@@ -1861,6 +1936,45 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
   Syntax tree tab (and the typed tree of its Semantics tab) shows this tree,
   one row per node: the field that holds it, its class and its other fields;
   its drawings label nodes with `courseLabel`.
+- **Visitors.** The header declares `IVisitor` with a `visit` overload per
+  class (the three abstract bases included) and `Node::accept (IVisitor*)`,
+  which every class defines as `visitor->visit (this)`. `visitor.ts` holds
+  three visitors written for the site in the header's style (`struct X :
+IVisitor`, `void visit (XNode* node) override`, `node->field->accept
+(this)`, a driver function that runs `program->accept (&visitor)`), as
+  `CodeLine`s whose ids the events name: `X.sig` and `X.end` for the
+  signature and closing brace of the visit method of class X, `X.field` for
+  the accept call of a child field (`X.field.if` its null check,
+  `X.field.for` its loop), `main.accept` for the driver's call. Every
+  visitor visits every node, the children of a node field by field in the
+  header's order, so the visit events are the preorder of `walkCourse`; a
+  null pointer and an empty vector are a step of their own ("node->elseStatement
+  is nullptr: nothing to visit."). `PrintVisitor` prints a line per node,
+  `nodeSummary` indented two spaces per level. `SymbolTableVisitor` keeps a
+  `map<string, DeclarationNode*>` per open scope (the global one starts with
+  `input` and `output`), sets `nestLevel` to the number of open scopes less
+  one, opens a scope per function (its parameters) and per nested block (a
+  function body stays in the scope of its parameters, through the flag
+  `functionBody`), and reports a name used outside every open scope and a
+  name declared again in its scope; its `nestLevel`s, scopes and lookups are
+  the semantic analyzer's (a spec checks them on every sample program).
+  `ConstantFolder` keeps `isConstant` and `value` for the expression just
+  visited, keeps the left operand in the locals `leftConstant` and `left`
+  while it visits the right one, and records `left op right = value` for an
+  operator node whose operands are constants (32-bit wrap-around, as the
+  optimizer; a division by 0 is not folded). A trace has an event per accept
+  call, per visit call (the two dispatches: the accept event names the
+  pointer type it calls through, the visit event the overload the type of
+  `this` picks), per stretch of lines between calls, and per return; each
+  carries the visitor's members after it, the locals of the innermost
+  visit, the number of output records made, and `top` / `below` links from
+  which the call stack at any step follows. A trace is linear in the size
+  of the tree (about 10–20 ms and 27 000 events for a program of
+  `MAX_SOURCE` characters, less than a structured clone of it takes), so the
+  C- Compiler's Visitor tab computes it on the page, once per program and
+  visitor, from the parser's tree (`courseAst` without the later phases).
+  The tab needs a program the parser accepted; it shows the scanner's or the
+  parser's diagnostics otherwise.
 - **Semantic analyzer.** Errors: undeclared name (once per use; the
   expression gets the type `error`, which is accepted everywhere, so one
   mistake gives one message); redeclaration in a scope (`input` and `output`
