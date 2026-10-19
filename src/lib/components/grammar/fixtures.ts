@@ -103,3 +103,30 @@ export const instanceLabels: Readonly<Record<string, string>> = {
 
 /** ( ) under S → ε | ( S ) (Introduction to Parsing, slide 27): an ε-production inside. */
 export const emptyParensTree: ParseNode = branch('S', 1, leaf('('), branch('S', 0), leaf(')'));
+
+/**
+ * E → E + ( E ) | int (Bottom-Up Parsing, slide 3): production 0 is
+ * E → E + ( E ), production 1 is E → int.
+ */
+const plusParen = (left: ParseNode, inner: ParseNode): ParseNode =>
+	branch('E', 0, left, leaf('+'), leaf('('), inner, leaf(')'));
+const intE = (): ParseNode => branch('E', 1, leaf('int'));
+
+/** int + ( int ) under E → E + ( E ) | int. */
+export const bottomUpTree: ParseNode = plusParen(intE(), intE());
+
+/**
+ * int + ( int ) + ( int ) under E → E + ( E ) | int: the tree that grows over
+ * Bottom-Up Parsing, slides 5–10, and Bottom-up Parsing II, slides 4–14.
+ */
+export const bottomUpSlideTree: ParseNode = plusParen(plusParen(intE(), intE()), intE());
+
+/**
+ * The partial parse of int + ( int ) at E + ( int I ) $: the stack holds E
+ * (over the first int), +, ( and int; ) is still to come, so four leaves are
+ * left of the divider.
+ */
+export const shiftReduceForest: { roots: ParseNode[]; marker: number } = {
+	roots: [intE(), leaf('+'), leaf('('), leaf('int'), leaf(')')],
+	marker: 4
+};
