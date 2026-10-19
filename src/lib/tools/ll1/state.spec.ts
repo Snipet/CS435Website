@@ -25,7 +25,8 @@ describe('URL state', () => {
 			cell: null,
 			setStep: null,
 			step: null,
-			fill: false
+			fill: false,
+			preset: null
 		});
 		const bare: LinkStates['ll1'] = { grammar: 'S → a' };
 		expect(isLL1Hash(bare)).toBe(true);
@@ -42,7 +43,8 @@ describe('URL state', () => {
 			cell: ['E', 'int'],
 			setStep: 4,
 			step: 0,
-			fill: true
+			fill: true,
+			preset: 'fill-in'
 		};
 		expect(isLL1Hash(saved)).toBe(true);
 		expect(stateFromHash(saved)).toEqual(saved);
@@ -70,18 +72,22 @@ describe('URL state', () => {
 			{ grammar: 'S → a', setStep: -1 },
 			{ grammar: 'S → a', step: 1.5 },
 			{ grammar: 'S → a', step: '2' },
-			{ grammar: 'S → a', fill: 'yes' }
+			{ grammar: 'S → a', fill: 'yes' },
+			{ grammar: 'S → a', preset: 3 },
+			{ grammar: 'S → a', preset: ['trace'] }
 		])
 			expect(isLL1Hash(bad), JSON.stringify(bad)).toBe(false);
 	});
 
-	it('survives the trip through the URL hash', () => {
+	it('survives the trip through the URL hash, the preset’s id included', () => {
 		for (const p of presets) {
 			const state = presetState(p);
 			const back = decode(encode(state), isLL1Hash);
 			expect(back).not.toBeNull();
 			expect(stateFromHash(back!)).toEqual(state);
+			expect(stateFromHash(back!).preset).toBe(p.id);
 		}
+		expect(stateFromHash({ grammar: 'S → a', preset: null }).preset).toBeNull();
 	});
 
 	it('opens on the grammar of slides 7–12 in the slides’ order, the trace at its end', () => {
@@ -94,7 +100,8 @@ describe('URL state', () => {
 			cell: null,
 			setStep: null,
 			step: null,
-			fill: false
+			fill: false,
+			preset: 'trace'
 		});
 		expect(DECK_GRAMMAR).toBe('E → T X\nX → + E | ε\nT → ( E ) | int Y\nY → * T | ε');
 		expect([DECK_ROWS, DECK_COLUMNS]).toEqual(['T E X Y', 'int * + ( ) $']);

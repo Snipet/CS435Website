@@ -102,6 +102,14 @@ const NAME: Record<SetKind, string> = { first: 'First', follow: 'Follow' };
 export const setName = (kind: SetKind, symbol: string): string =>
 	`${NAME[kind]}( ${printSymbols([symbol])} )`;
 
+/**
+ * A member as a set prints it: `ε` (the empty string) bare, everything else as
+ * the grammar writes it (`"ε"` is a terminal named ε).
+ */
+export function memberText(m: string): string {
+	return m === EPSILON ? m : printSet([m]).slice(2, -2);
+}
+
 /** The words of a step: the rule as the slides write it, then what it did. */
 export function stepText(g: Grammar, s: SetStep, sets: SetsAt): { rule: string; result: string } {
 	if (s.kind === 'done')
@@ -117,7 +125,7 @@ export function stepText(g: Grammar, s: SetStep, sets: SetsAt): { rule: string; 
 	if (r.added.length === 0) return { rule: r.text, result: `No change: ${now}` };
 	return {
 		rule: r.text,
-		result: `Adds ${r.added.map((m) => printSymbols([m])).join(', ')}: ${now}`
+		result: `Adds ${r.added.map(memberText).join(', ')}: ${now}`
 	};
 }
 
@@ -187,5 +195,29 @@ export function checkAnswer(answer: SetAnswer, expected: readonly string[]): Ans
 	};
 }
 
-/** A member as a set prints it: `ε` bare, everything else as the grammar writes it. */
-export const memberText = (m: string): string => (m === EPSILON ? m : printSet([m]).slice(2, -2));
+/** What a check of one set says: `Follow( E ): + is not in the set, 1 missing.` */
+export function checkWords(name: string, answer: SetAnswer, check: AnswerCheck): string {
+	if (answer.error) return `${name}: ${answer.error}`;
+	if (check.correct) return `${name}: right.`;
+	const parts = check.marks
+		.filter((m) => !m.ok)
+		.map((m) => `${memberText(m.member)} is not in the set`);
+	if (check.missing > 0) parts.push(`${check.missing} missing`);
+	return `${name}: ${parts.join(', ')}.`;
+}
+
+/** `2 of 3 checked are right.` */
+export const scoreText = (right: number, checked: number): string =>
+	`${right} of ${checked} checked ${checked === 1 ? 'is' : 'are'} right.`;
+
+/** What Check says for every set checked: the score, then each set that is not right. */
+export function checkSummary(
+	checks: readonly { name: string; answer: SetAnswer; check: AnswerCheck }[]
+): string {
+	if (checks.length === 0) return 'Nothing to check: type a set first.';
+	const right = checks.filter((c) => c.check.correct).length;
+	return [
+		scoreText(right, checks.length),
+		...checks.filter((c) => !c.check.correct).map((c) => checkWords(c.name, c.answer, c.check))
+	].join(' ');
+}

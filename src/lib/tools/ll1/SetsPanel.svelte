@@ -5,14 +5,18 @@
 	for the user to fill in ("First( E ) = ?") and checked member by member.
 -->
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { Button, StepControls, type Stepper } from '$lib/components/ui';
 	import { printSet, printSymbols, type FirstFollow, type Grammar } from '$lib/theory/grammar';
 	import type { SetRef } from './model';
 	import {
 		checkAnswer,
+		checkSummary,
+		checkWords,
 		memberText,
 		passSummaries,
 		readAnswer,
+		scoreText,
 		setName,
 		setsAt,
 		stepContext,
@@ -85,13 +89,47 @@
 		return { checked: done.length, correct: done.filter((r) => r!.check.correct).length };
 	});
 
+	/**
+	 * What the last Check said, for screen readers. The live region is always
+	 * on the page, so a result written into it is announced.
+	 */
+	let said = $state('');
+	async function say(text: string) {
+		// The same words twice in a row are announced again.
+		said = '';
+		await tick();
+		said = text;
+	}
+
+	/** The check of one set as typed; null for an empty cell. */
+	function checkOf(kind: SetKind, symbol: string) {
+		const text = answers[key(kind, symbol)] ?? '';
+		if (text.trim() === '') return null;
+		const answer = readAnswer(text);
+		return {
+			name: setName(kind, symbol),
+			answer,
+			check: checkAnswer(answer, finalOf(kind, symbol))
+		};
+	}
+
 	function checkAll() {
 		const next: Record<string, boolean> = {};
+		const checks: NonNullable<ReturnType<typeof checkOf>>[] = [];
 		for (const { kind, symbol } of everyCell) {
-			const k = key(kind, symbol);
-			if ((answers[k] ?? '').trim() !== '') next[k] = true;
+			const c = checkOf(kind, symbol);
+			if (!c) continue;
+			next[key(kind, symbol)] = true;
+			checks.push(c);
 		}
 		checked = next;
+		void say(checkSummary(checks));
+	}
+	function checkOne(kind: SetKind, symbol: string) {
+		const c = checkOf(kind, symbol);
+		if (!c) return;
+		checked[key(kind, symbol)] = true;
+		void say(checkWords(c.name, c.answer, c.check));
 	}
 	function showAnswers() {
 		const next: Record<string, string> = {};
@@ -102,10 +140,12 @@
 		}
 		answers = next;
 		checked = marks;
+		void say('Every set is filled in with its answer.');
 	}
 	function clear() {
 		answers = {};
 		checked = {};
+		void say('Every set is cleared.');
 	}
 	function edit(k: string, value: string) {
 		answers[k] = value;
@@ -160,11 +200,11 @@
 			aria-invalid={result ? !result.check.correct : undefined}
 			oninput={(e) => edit(k, e.currentTarget.value)}
 			onkeydown={(e) => {
-				if (e.key === 'Enter' && (answers[k] ?? '').trim() !== '') checked[k] = true;
+				if (e.key === 'Enter') checkOne(kind, symbol);
 			}}
 		/>
 		{#if result}
-			<p class="marks" aria-live="polite">
+			<p class="marks">
 				{#if result.answer.error}
 					<span class="wrong">{result.answer.error}</span>
 				{:else if result.check.correct}
@@ -216,14 +256,13 @@
 {/snippet}
 
 <div class="sets">
+	<p class="visually-hidden" aria-live="polite">{fill ? said : ''}</p>
 	{#if fill}
 		<div class="fill-bar">
 			<p class="hint">
 				Type each set, for example <code>{'{ (, int }'}</code> or <code>+ ε</code>, and check it.
 				{#if score.checked > 0}
-					<span class="score" aria-live="polite"
-						>{score.correct} of {score.checked} checked are right.</span
-					>
+					<span class="score">{scoreText(score.correct, score.checked)}</span>
 				{/if}
 			</p>
 			<div class="buttons">
@@ -289,7 +328,8 @@
 				<details bind:open={terminalsOpen}>
 					<summary>
 						Terminals
-						{#if ownsCurrent && !terminalsOpen}<span class="note">(this step changes one)</span
+						{#if ownsCurrent && !terminalsOpen}<span class="note"
+								><span class="dot" aria-hidden="true"></span>(this step changes one)</span
 							>{/if}
 					</summary>
 					<div class="scroll">
@@ -352,7 +392,7 @@
 		min-width: 0;
 	}
 	.where {
-		color: var(--text-3);
+		color: var(--text-2);
 		font-size: var(--text-xs);
 	}
 	.rule {
@@ -408,6 +448,10 @@
 	.pass.still .gain {
 		color: var(--accept);
 		font-weight: 600;
+	}
+	/* On the current pass's tinted background the gain needs the stronger text color. */
+	.pass.current .gain {
+		color: var(--text-2);
 	}
 	.body {
 		display: grid;
@@ -477,8 +521,18 @@
 		cursor: pointer;
 	}
 	.note {
-		color: var(--active);
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		margin-left: 4px;
+		color: var(--text-2);
 		font-size: var(--text-xs);
+	}
+	.dot {
+		width: 8px;
+		height: 8px;
+		border-radius: 50%;
+		background: var(--active);
 	}
 	.log {
 		max-height: 14rem;
@@ -528,6 +582,10 @@
 	}
 	.log button.later .plus {
 		color: var(--text-3);
+	}
+	/* On the current step's tinted background the members it adds need the stronger text color. */
+	.log button[aria-current='step'] .plus {
+		color: var(--text);
 	}
 	@container sets (min-width: 680px) {
 		.body:not(.fill) {

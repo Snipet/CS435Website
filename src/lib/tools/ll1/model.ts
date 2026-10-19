@@ -112,6 +112,26 @@ export function tableOrder(
 	};
 }
 
+/**
+ * Symbols written in the order fields that none of `tables` has, rows first,
+ * each once. The fields order the table of the grammar and the table of its
+ * rewrite, so the new non-terminals of the rewrite (`X Y` for slide 6) are
+ * not skipped while the grammar does not have them yet.
+ */
+export function skippedSymbols(
+	rows: string,
+	columns: string,
+	tables: readonly Pick<LL1Table, 'rows' | 'columns'>[]
+): string[] {
+	const [first, ...rest] = tables.map((t) => {
+		const { skipped } = tableOrder(t, rows, columns);
+		return [...skipped.rows, ...skipped.columns];
+	});
+	return (first ?? []).filter(
+		(s, i, all) => all.indexOf(s) === i && rest.every((other) => other.includes(s))
+	);
+}
+
 // ───────────────────────────── the token string ─────────────────────────────
 
 /** The tokens of the input field, with the first error; a closing `$` is allowed. */

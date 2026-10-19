@@ -164,7 +164,7 @@ export const presets: readonly LL1Preset[] = [
 		label: 'S → A B c',
 		group: SETS,
 		description:
-			'A and B derive ε. First(S) takes First(A), First(B) and First(c) in turn, and Follow(A) takes First(B) – { ε } and then c. ε-productions go in the columns of Follow.',
+			'A and B derive ε. In S → A B c, First(B) – { ε } is added to Follow(A), and since ε ∈ First(B) the rule goes on to First(c): Follow(A) = { c, b }. Follow(B) takes First(c) = { c }.',
 		cite: { deck: '12', slide: 22 },
 		value: { grammar: NULLABLE, input: 'a c' }
 	},
@@ -201,9 +201,10 @@ export const presets: readonly LL1Preset[] = [
 		label: 'E → E + ( E ) | int',
 		group: NOT_LL1,
 		description:
-			'A bottom-up parser needs no left factoring and no removal of left recursion. This grammar is left recursive: E → E + ( E ) and E → int both go in [E, int].',
+			'A bottom-up parser needs no left factoring and no removal of left recursion. This grammar is left recursive: E → E + ( E ) and E → int both go in [E, int]. The parse takes E → E + ( E ) from [E, int] again and again without matching a token.',
 		cite: { deck: '13', slide: 3 },
-		value: { grammar: BOTTOM_UP, input: 'int + ( int )' },
+		// The parse runs until the tree is too deep: it opens on its third row, the loop under way.
+		value: { grammar: BOTTOM_UP, input: 'int + ( int )', cell: ['E', 'int'], step: 2 },
 		bottomUp: true,
 		questions: [
 			{
@@ -227,7 +228,7 @@ export const presets: readonly LL1Preset[] = [
 		description:
 			'G is not LL(1) if G is ambiguous. This grammar is also left recursive, and removing the left recursion leaves it ambiguous: the rewritten table still has multiply-defined entries.',
 		cite: { deck: '12', slide: 26 },
-		value: { grammar: AMBIGUOUS, input: 'int + int * int' }
+		value: { grammar: AMBIGUOUS, input: 'int + int * int', cell: ['E', 'int'], step: 2 }
 	},
 	{
 		id: 'other',
@@ -243,7 +244,7 @@ export const presets: readonly LL1Preset[] = [
 export const DEFAULT_PRESET_ID = 'trace';
 
 /** The state a preset opens with. */
-export function presetState(p: Pick<LL1Preset, 'value'>): LL1State {
+export function presetState(p: Pick<LL1Preset, 'id' | 'value'>): LL1State {
 	return {
 		...DEFAULT_STATE,
 		grammar: p.value.grammar,
@@ -254,7 +255,8 @@ export function presetState(p: Pick<LL1Preset, 'value'>): LL1State {
 		cell: p.value.cell ? [p.value.cell[0], p.value.cell[1]] : null,
 		setStep: p.value.setStep ?? null,
 		step: p.value.step ?? null,
-		fill: p.value.fill ?? false
+		fill: p.value.fill ?? false,
+		preset: p.id
 	};
 }
 
@@ -274,15 +276,20 @@ const sameNames = (a: Readonly<Record<string, string>>, b: Readonly<Record<strin
 	return JSON.stringify(entries(a)) === JSON.stringify(entries(b));
 };
 
+const sameCell = (a: readonly string[] | null, b: readonly string[] | null) =>
+	a === null || b === null ? a === b : a[0] === b[0] && a[1] === b[1];
+
 /**
  * The preset the state is, if any: the same grammar, token string, order of
- * the table, names of the rewrite and fill-in mode. `loaded` is the id of the
- * preset loaded last; it is taken when it fits, since several presets differ
- * only in the step or entry they open on.
+ * the table, names of the rewrite and fill-in mode. Several presets differ
+ * only in the entry or the steps they open on, and stepping or selecting an
+ * entry keeps a preset: the one the state names (`preset`, the one loaded
+ * last) is taken when it fits; otherwise the one that opens on the same
+ * entry and steps; otherwise the first that fits.
  */
 export function presetFor(
-	state: Pick<LL1State, 'grammar' | 'input' | 'rows' | 'columns' | 'names' | 'fill'>,
-	loaded: string | null = null
+	state: Pick<LL1State, 'grammar' | 'input' | 'rows' | 'columns' | 'names' | 'fill'> &
+		Partial<Pick<LL1State, 'cell' | 'setStep' | 'step' | 'preset'>>
 ): LL1Preset | undefined {
 	const fits = presets.filter(
 		(p) =>
@@ -293,5 +300,9 @@ export function presetFor(
 			sameNames(p.value.names ?? {}, state.names) &&
 			(p.value.fill ?? false) === state.fill
 	);
-	return fits.find((p) => p.id === loaded) ?? fits[0];
+	const opensAt = (p: LL1Preset) =>
+		sameCell(p.value.cell ?? null, state.cell ?? null) &&
+		(p.value.setStep ?? null) === (state.setStep ?? null) &&
+		(p.value.step ?? null) === (state.step ?? null);
+	return fits.find((p) => p.id === state.preset) ?? fits.find(opensAt) ?? fits[0];
 }

@@ -2,11 +2,13 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { formatCitation } from '$lib/lectures';
-import { printSymbols, type LL1Table } from '$lib/theory/grammar';
+import { printSet, printSymbols, type LL1Table } from '$lib/theory/grammar';
 import { tool } from '$lib/tools/catalog/ll1';
 import { toolLink } from '$lib/tools/links';
+import { decode, encode } from '$lib/url-state';
 import { computeAnalysis, computeParse, readGrammar, readTokens, tableOrder } from './model';
 import {
+	BOTTOM_UP,
 	DEFAULT_PRESET_ID,
 	FOLLOW_START,
 	SLIDE_6,
@@ -16,8 +18,8 @@ import {
 	type LL1Preset
 } from './presets';
 import { setSteps } from './sets';
-import { DEFAULT_STATE, isLL1Hash } from './state';
-import { symbolsText } from './trace';
+import { DEFAULT_STATE, isLL1Hash, stateFromHash } from './state';
+import { rowMessage, symbolsText } from './trace';
 
 const preset = (id: string): LL1Preset => presets.find((p) => p.id === id)!;
 
@@ -103,12 +105,32 @@ describe('every preset', () => {
 		for (const p of presets) {
 			const state = presetState(p);
 			expect(isLL1Hash(state)).toBe(true);
-			expect(presetFor(state, p.id)).toBe(p);
+			expect(state.preset).toBe(p.id);
+			expect(presetFor(state)).toBe(p);
+			// Without the id, the preset that opens on the same entry and steps.
+			expect(presetFor({ ...state, preset: null })).toBe(p);
 			expect(presetFor({ ...state, input: `${state.input} int` })).toBeUndefined();
 		}
-		expect(presetFor(DEFAULT_STATE)?.id).toBe('table');
-		expect(presetFor(DEFAULT_STATE, DEFAULT_PRESET_ID)?.id).toBe('trace');
+		expect(presetFor(DEFAULT_STATE)?.id).toBe(DEFAULT_PRESET_ID);
 		expect(presetState(preset(DEFAULT_PRESET_ID))).toEqual(DEFAULT_STATE);
+	});
+
+	it('is restored from a link, and kept while it is stepped or another entry is selected', () => {
+		// The trace, First and Follow presets share the grammar, the input and the order of 'table'.
+		for (const id of ['table', 'trace', 'first-sets', 'follow-sets']) {
+			const back = stateFromHash(decode(encode(presetState(preset(id))), isLL1Hash)!);
+			expect(presetFor(back)?.id).toBe(id);
+			expect(presetFor({ ...back, setStep: 3, step: 1, cell: ['Y', '+'] })?.id).toBe(id);
+		}
+		// A link from another tool names no preset: the first that fits.
+		expect(presetFor(stateFromHash({ grammar: BOTTOM_UP, input: 'int + ( int )' }))?.id).toBe(
+			'bottom-up'
+		);
+		// The id of a preset the state no longer fits is passed over.
+		expect(presetFor({ ...presetState(preset('nullable')), preset: 'trace' })?.id).toBe('nullable');
+		expect(presetFor({ ...presetState(preset('trace')), preset: 'no-such-preset' })?.id).toBe(
+			'trace'
+		);
 	});
 });
 
@@ -170,6 +192,11 @@ describe('the slides', () => {
 			B: ['c']
 		});
 		expect(analysis.table.ll1).toBe(true);
+		// Its words are about Follow, the slide it cites (slide 22), and say what the engine computes.
+		expect(preset('nullable').description).toContain(
+			`Follow(A) = ${printSet(ff.follow.get('A')!)}`
+		);
+		expect(preset('nullable').description).not.toMatch(/First\(S\)|columns/);
 	});
 
 	it('left-factors slide 5 into slide 6, whose table is the one of slide 7', () => {
@@ -194,6 +221,27 @@ describe('the slides', () => {
 		for (const slug of ['shift-reduce', 'lr1'] as const) {
 			const href = toolLink(slug, { grammar: 'E → E + ( E ) | int' });
 			if (href !== null) expect(href).toMatch(new RegExp(`/${slug}#v1\\.`));
+		}
+	});
+
+	it('opens the runs that loop on their third row, the multiply-defined [E, int] selected', () => {
+		for (const id of ['bottom-up', 'ambiguous']) {
+			const { state, parse, analysis } = load(id);
+			expect(parse.parse.outcome).toBe('limit');
+			expect(state.cell).toEqual(['E', 'int']);
+			expect(
+				analysis.table.conflicts.some((c) => c.nonterminal === 'E' && c.terminal === 'int')
+			).toBe(true);
+			expect(state.step).toBe(2);
+			const g = parse.table.grammar;
+			const rows = parse.parse.rows.slice(0, 3);
+			// The same entry is looked up three times, and no token is matched.
+			expect(rows.map((r) => rowMessage(g, r).split(':')[0])).toEqual(
+				['T[E, int] = E + ( E )', 'T[E, int] = E + ( E )', 'T[E, int] = E + ( E )'].map((m) =>
+					id === 'ambiguous' ? m.replace('E + ( E )', 'E + E') : m
+				)
+			);
+			expect(rows.every((r) => r.input.length === parse.parse.rows[0].input.length)).toBe(true);
 		}
 	});
 

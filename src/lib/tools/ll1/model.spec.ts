@@ -12,6 +12,7 @@ import {
 	readOrder,
 	readTokens,
 	sameParse,
+	skippedSymbols,
 	tableOrder
 } from './model';
 import { AMBIGUOUS, BOTTOM_UP, NULLABLE, OTHER, SLIDE_5 } from './presets';
@@ -72,6 +73,20 @@ describe('order of rows and columns', () => {
 		});
 		expect(readOrder('"a b" $', ['$', 'a b'])).toEqual({ order: ['a b', '$'], skipped: [] });
 		expect(orderText(['int', '$', 'a b'])).toBe('int $ "a b"');
+	});
+
+	it('does not skip the new non-terminals of the rewrite (slides 5–6)', () => {
+		const before = ll1Table(grammar(SLIDE_5));
+		const after = computeAnalysis({ grammar: SLIDE_5, names: { 'E’': 'X', 'T’': 'Y' } })!.rewrite
+			.table;
+		expect(tableOrder(before, DECK_ROWS, DECK_COLUMNS).skipped.rows).toEqual(['X', 'Y']);
+		expect(skippedSymbols(DECK_ROWS, DECK_COLUMNS, [before, after])).toEqual([]);
+		expect(skippedSymbols(`${DECK_ROWS} Q Q`, `${DECK_COLUMNS} E`, [before, after])).toEqual([
+			'Q',
+			'E'
+		]);
+		expect(skippedSymbols('T E Q', '', [deckTable])).toEqual(['Q']);
+		expect(skippedSymbols('Q', '', [])).toEqual([]);
 	});
 });
 

@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { firstFollow, parseGrammar, printSet } from '$lib/theory/grammar';
 import {
 	checkAnswer,
+	checkSummary,
+	checkWords,
 	memberText,
 	passSummaries,
 	readAnswer,
+	scoreText,
 	setName,
 	setSteps,
 	setsAt,
@@ -82,6 +85,24 @@ describe('setSteps and setsAt', () => {
 		expect(stepText(g, steps[none], setsAt(g, ff, steps, none)).result).toMatch(/^No change: /);
 		expect(setName('follow', 'int')).toBe('Follow( int )');
 	});
+
+	it('writes the ε it adds bare, as the sets write it (not the terminal "ε")', () => {
+		const words = (target: string) => {
+			const i = steps.findIndex(
+				(s) => s.kind === 'rule' && s.rule.rule === 'first-epsilon' && s.rule.target === target
+			);
+			expect(i).toBeGreaterThan(0);
+			return stepText(g, steps[i], setsAt(g, ff, steps, i));
+		};
+		expect(words('X')).toEqual({
+			rule: 'Add ε to First( X )',
+			result: 'Adds ε: First( X ) = { +, ε }'
+		});
+		expect(words('Y').result).toBe('Adds ε: First( Y ) = { *, ε }');
+		steps.forEach((s, i) =>
+			expect(stepText(g, s, setsAt(g, ff, steps, i)).result).not.toContain('"')
+		);
+	});
 });
 
 describe('fill-in', () => {
@@ -115,6 +136,32 @@ describe('fill-in', () => {
 			correct: false
 		});
 		expect(checkAnswer(readAnswer('{ }'), [])).toMatchObject({ correct: true });
+	});
+
+	it('words a check for screen readers: the score, then each set that is not right', () => {
+		const check = (text: string, expected: string[]) => {
+			const answer = readAnswer(text);
+			return { answer, check: checkAnswer(answer, expected) };
+		};
+		const right = check('{ (, int }', ['(', 'int']);
+		const wrong = check('{ +, ε }', ['$', '+', ')']);
+		const bad = check('a → b', ['a']);
+		expect(checkWords('First( E )', right.answer, right.check)).toBe('First( E ): right.');
+		expect(checkWords('Follow( E )', wrong.answer, wrong.check)).toBe(
+			'Follow( E ): ε is not in the set, 2 missing.'
+		);
+		expect(checkWords('First( S )', bad.answer, bad.check)).toBe(
+			'First( S ): → cannot be in a set.'
+		);
+		expect(
+			checkSummary([
+				{ name: 'First( E )', ...right },
+				{ name: 'Follow( E )', ...wrong }
+			])
+		).toBe('1 of 2 checked are right. Follow( E ): ε is not in the set, 2 missing.');
+		expect(checkSummary([{ name: 'First( E )', ...right }])).toBe('1 of 1 checked is right.');
+		expect(checkSummary([])).toBe('Nothing to check: type a set first.');
+		expect(scoreText(2, 3)).toBe('2 of 3 checked are right.');
 	});
 
 	it('reads back every set as printed', () => {

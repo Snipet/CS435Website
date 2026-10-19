@@ -3,7 +3,7 @@
  * cross-tool link shape `LinkStates['ll1']` ({ grammar, input? }) as well as
  * its own saved shape, which adds the order of the table's rows and columns,
  * the names of the rewrite's new non-terminals, the selected table entry, the
- * steps shown and the fill-in mode.
+ * steps shown, the fill-in mode and the preset loaded last.
  */
 import type { LinkStates } from '$lib/tools/links';
 
@@ -26,6 +26,11 @@ export interface LL1State {
 	step: number | null;
 	/** The First and Follow cells are left for the user to fill in. */
 	fill: boolean;
+	/**
+	 * Id of the preset loaded last, for its note and the check mark in the
+	 * menu; they show while the state fits the preset (presetFor).
+	 */
+	preset: string | null;
 }
 
 /** What the hash may hold: a link from another tool, or a saved view. */
@@ -37,7 +42,7 @@ export const DECK_GRAMMAR = 'E → T X\nX → + E | ε\nT → ( E ) | int Y\nY �
 export const DECK_ROWS = 'T E X Y';
 export const DECK_COLUMNS = 'int * + ( ) $';
 
-/** The grammar of the slides with the trace of slide 12 to its last row. */
+/** The grammar of the slides with the trace of slide 12 to its last row: the preset 'trace'. */
 export const DEFAULT_STATE: LL1State = {
 	grammar: DECK_GRAMMAR,
 	input: 'int * int',
@@ -47,7 +52,8 @@ export const DEFAULT_STATE: LL1State = {
 	cell: null,
 	setStep: null,
 	step: null,
-	fill: false
+	fill: false,
+	preset: 'trace'
 };
 
 const isRecord = (v: unknown): v is Record<string, unknown> =>
@@ -67,7 +73,7 @@ const isCell = (v: unknown): boolean =>
 	(Array.isArray(v) && v.length === 2 && v.every((s) => typeof s === 'string'));
 
 /**
- * Accepts `{ grammar, input?, rows?, columns?, names?, cell?, setStep?, step?, fill? }`;
+ * Accepts `{ grammar, input?, rows?, columns?, names?, cell?, setStep?, step?, fill?, preset? }`;
  * extra fields are ignored.
  */
 export function isLL1Hash(value: unknown): value is LL1Hash {
@@ -81,14 +87,15 @@ export function isLL1Hash(value: unknown): value is LL1Hash {
 		isCell(value.cell) &&
 		isStep(value.setStep) &&
 		isStep(value.step) &&
-		(value.fill === undefined || typeof value.fill === 'boolean')
+		(value.fill === undefined || typeof value.fill === 'boolean') &&
+		(value.preset === undefined || value.preset === null || typeof value.preset === 'string')
 	);
 }
 
 /**
  * The state a hash value describes. A link from another tool has only the
- * grammar and perhaps a token string: the table is then in grammar order and
- * every computation is shown at its end.
+ * grammar and perhaps a token string: the table is then in grammar order,
+ * every computation is shown at its end, and no preset was loaded.
  */
 export function stateFromHash(value: LL1Hash): LL1State {
 	return {
@@ -100,6 +107,7 @@ export function stateFromHash(value: LL1Hash): LL1State {
 		cell: value.cell ? [value.cell[0], value.cell[1]] : null,
 		setStep: typeof value.setStep === 'number' ? value.setStep : null,
 		step: typeof value.step === 'number' ? value.step : null,
-		fill: value.fill ?? false
+		fill: value.fill ?? false,
+		preset: value.preset ?? null
 	};
 }

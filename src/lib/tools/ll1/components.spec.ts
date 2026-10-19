@@ -180,6 +180,9 @@ describe('SetsPanel', () => {
 		expect(html).toContain('aria-label="Follow( int )"');
 		expect(text(html)).not.toContain('{ (, int } {');
 		expect(text(html)).toContain('Check');
+		// One live region, on the page from the start, so the results of Check are announced.
+		expect(html.match(/aria-live="polite"/g)).toHaveLength(1);
+		expect(html).toMatch(/<p class="visually-hidden" aria-live="polite">\s*<\/p>/);
 	});
 });
 
@@ -247,7 +250,9 @@ describe('RewritePanel', () => {
 				}
 			}).body
 		);
-		expect(t).toContain('E → T + E | T ⇒ becomes E → T X X → + E | ε');
+		expect(t).toContain('E → T + E | T becomes E → T X X → + E | ε');
+		// ⇒ is a move of a shift-reduce parser (§3.10), not a rewrite.
+		expect(t).not.toContain('⇒');
 		expect(t).toContain('Names of the new non-terminals From E');
 		expect(t).toContain('Before 3 multiply-defined entries');
 		expect(t).toContain('After LL(1)');
@@ -298,13 +303,21 @@ describe('ParsePanel', () => {
 		expect(first).toContain('Entry used: T[T, int]');
 		const end = at(9);
 		expect(end).toContain('10 $ $ ACCEPT');
-		expect(end).toContain('End of input, with the stack down to $: the token string is in L(G).');
+		// The caption says what the last row does; the callout only what follows from it.
+		expect(end).toContain('End of input, and only $ is left on the stack: ACCEPT.');
+		expect(end).toContain('ACCEPT The token string is in L(G).');
+		expect(end.match(/End of input/g)).toHaveLength(1);
+		expect(first).not.toContain('The token string is in L(G).');
 	});
 
-	it('shows an error and a run that stops', () => {
-		for (const [id, words] of [
-			['blank', '[E,*] is blank'],
-			['bottom-up', 'The run stopped: the parse tree would be more than 500 levels deep.']
+	it('shows an error and a run that stops, each said once', () => {
+		for (const [id, caption, callout] of [
+			['blank', 'T[E, *] is blank: error.', 'Error The token string is not in L(G).'],
+			[
+				'bottom-up',
+				'The run stopped: the parse tree would be more than 500 levels deep.',
+				'The parser loops It takes the same productions again and again without matching a token: G is left recursive.'
+			]
 		] as const) {
 			const { parse, order, tokens } = load(id);
 			const t = text(
@@ -318,8 +331,48 @@ describe('ParsePanel', () => {
 					}
 				}).body
 			);
-			expect(t).toContain(words);
+			expect(t).toContain(caption);
+			expect(t).toContain(callout);
+			expect(t.split(caption)).toHaveLength(2);
 		}
+	});
+
+	it('keeps the Stack | Input | Action headings and the Action column of a long run in view', () => {
+		const { parse, order, tokens } = load('bottom-up');
+		const rows = parse.parse.rows.length;
+		const html = render(ParsePanel, {
+			props: {
+				parse: parse.parse,
+				tokens: tokens.tokens,
+				table: parse.table,
+				order,
+				stepper: stepperAt(rows, rows - 2)
+			}
+		}).body;
+		const t = text(html);
+		// The last expansion: its stack is cut to its top and $, then the action.
+		const stack = parse.parse.rows[rows - 2].stack.length;
+		expect(stack).toBeGreaterThan(1000);
+		expect(t).toContain(
+			`${rows - 1} E + ( E ) + ( E ) + ( E … and ${stack - 13} more symbols, then $ int + ( int ) $ E + ( E )`
+		);
+		expect(html).toMatch(/<th scope="col"[^>]*>Stack<\/th>/);
+		// The preset opens on its third row: the same entry looked up a third time.
+		const opening = text(
+			render(ParsePanel, {
+				props: {
+					parse: parse.parse,
+					tokens: tokens.tokens,
+					table: parse.table,
+					order,
+					stepper: stepperAt(rows, 2)
+				}
+			}).body
+		);
+		expect(opening).toContain('Entry used: T[E, int]');
+		expect(opening).toContain('3 E + ( E ) + ( E ) $ int + ( int ) $ E + ( E )');
+		expect(opening).not.toContain('The run stopped');
+		expect(opening).not.toContain('The parser loops');
 	});
 });
 

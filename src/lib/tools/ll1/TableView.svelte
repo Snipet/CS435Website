@@ -115,6 +115,7 @@
 										focus = { r: ri, c: ci };
 										onselect(r, c);
 									}}
+									onfocus={() => (focus = { r: ri, c: ci })}
 									onkeydown={(e) => move(e, ri, ci)}
 								>
 									{#each cell.productions as p (p)}<span class="rhs mono">{rhsOf(p)}</span>{/each}
@@ -194,7 +195,7 @@
 	}
 	td button:focus-visible {
 		outline: 2px solid var(--focus);
-		outline-offset: -3px;
+		outline-offset: -4px;
 	}
 	.rhs {
 		color: var(--epsilon);
@@ -208,14 +209,25 @@
 		color: var(--reject);
 		font-weight: 600;
 	}
+	/*
+	 * Selected: a tint and a thick bar along the bottom. Focus is a ring
+	 * (above), so a focused cell and the selected one never look alike.
+	 */
 	td.selected {
-		box-shadow: inset 0 0 0 2px var(--accent);
+		box-shadow: inset 0 -5px 0 var(--accent);
 		background: var(--accent-soft);
+	}
+	td.selected .rhs {
+		color: var(--text);
+		font-weight: 600;
+	}
+	td.conflict.selected .rhs {
+		color: var(--reject);
 	}
 	td.conflict.selected {
 		box-shadow:
 			inset 0 0 0 2px var(--reject),
-			inset 0 0 0 4px var(--accent);
+			inset 0 -7px 0 var(--accent);
 	}
 	td.mark-active {
 		background: var(--active-soft);

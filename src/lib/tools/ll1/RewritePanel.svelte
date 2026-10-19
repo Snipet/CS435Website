@@ -100,9 +100,7 @@
 						<span class="before"
 							>{#each change.before as line, k (k)}<span class="line">{line}</span>{/each}</span
 						>
-						<span class="arrow" aria-hidden="true">⇒</span><span class="visually-hidden"
-							>becomes</span
-						>
+						<span class="becomes">becomes</span>
 						<span class="after"
 							>{#each change.after as line, k (k)}<span class="line">{line}</span>{:else}<span
 									class="line">(no rule)</span
@@ -255,8 +253,9 @@
 	.after {
 		color: var(--epsilon);
 	}
-	.arrow {
-		color: var(--text-3);
+	.becomes {
+		color: var(--text-2);
+		font-family: var(--font-sans);
 	}
 	.text {
 		margin: var(--space-1) 0 0;

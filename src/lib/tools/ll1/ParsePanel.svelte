@@ -11,12 +11,13 @@
 	import type { LL1Parse, LL1Table, ParseNode } from '$lib/theory/grammar';
 	import TableView from './TableView.svelte';
 	import {
+		clipSymbols,
 		pointerOf,
 		rowMessage,
 		streamHighlights,
-		symbolsText,
 		traceWindow,
-		treeMarks
+		treeMarks,
+		verdict
 	} from './trace';
 
 	interface Props {
@@ -37,6 +38,8 @@
 	const row = $derived(parse.rows[index]);
 	const shown = $derived(traceWindow(parse.rows.length, index));
 	const last = $derived(parse.rows[parse.rows.length - 1]);
+	/** What the run comes to; the last row's own words are in the caption. */
+	const end = $derived(verdict(table, parse));
 
 	function levels(root: ParseNode): number {
 		let depth = 0;
@@ -112,6 +115,16 @@
 	});
 </script>
 
+<!-- A long stack or input keeps its top (its next tokens) and its $, so the Action column stays in view. -->
+{#snippet symbols(list: readonly string[])}
+	{@const c = clipSymbols(list)}
+	{#if c.left === 0}{c.head}{:else}{c.head}
+		<span class="more" aria-hidden="true" title="{c.left} more symbols">…</span><span
+			class="visually-hidden">and {c.left} more symbols, then</span
+		>
+		{c.tail}{/if}
+{/snippet}
+
 <div class="parse">
 	<StepControls {stepper} ariaLabel="Parse steps" noun="Row">
 		{#snippet label(i: number)}
@@ -121,25 +134,7 @@
 	</StepControls>
 
 	{#if stepper.atEnd && last}
-		{#if parse.outcome === 'accept'}
-			<Callout tone="success" title="ACCEPT">
-				<p>End of input, with the stack down to $: the token string is in L(G).</p>
-			</Callout>
-		{:else if parse.outcome === 'error'}
-			<Callout tone="error" title="Error">
-				<p class="mono">{last.text}</p>
-			</Callout>
-		{:else}
-			<Callout tone="warn" title="The run stopped">
-				<p>{rowMessage(g, last)}</p>
-				{#if !table.ll1}
-					<p>
-						With a multiply-defined entry the parser takes the entry’s first production. A
-						left-recursive one is taken again and again without a token being matched.
-					</p>
-				{/if}
-			</Callout>
-		{/if}
+		<Callout tone={end.tone} title={end.title}><p>{end.text}</p></Callout>
 	{/if}
 
 	<div class="grid">
@@ -174,8 +169,8 @@
 										>{i + 1}</button
 									>
 								</th>
-								<td class="mono stack">{symbolsText(r.stack)}</td>
-								<td class="mono">{symbolsText(r.input)}</td>
+								<td class="mono stack">{@render symbols(r.stack)}</td>
+								<td class="mono">{@render symbols(r.input)}</td>
 								<td class={['mono', 'action', kindOf(r)]}>{r.text}</td>
 							</tr>
 						{/each}
@@ -268,9 +263,14 @@
 		border-collapse: collapse;
 		font-size: var(--text-sm);
 	}
+	/* The headings stay in view while the rows scroll under them. */
 	thead th {
+		position: sticky;
+		top: 0;
+		z-index: 1;
 		padding: 4px 10px;
-		border-bottom: 1px solid var(--text-2);
+		background: var(--surface);
+		box-shadow: inset 0 -1px 0 var(--text-2);
 		text-align: left;
 		font-weight: 600;
 		text-decoration: underline;
@@ -305,6 +305,12 @@
 	tr.current th {
 		background: var(--active-soft);
 	}
+	tr.current .num button {
+		color: var(--text-2);
+	}
+	.more {
+		color: var(--text-2);
+	}
 	.stack {
 		color: var(--epsilon);
 	}
@@ -314,6 +320,12 @@
 	td.error {
 		color: var(--reject);
 		font-weight: 600;
+	}
+	/* An error or a stop is a sentence: it wraps, so it stays inside the trace's box. */
+	td.error,
+	td.limit {
+		min-width: 8rem;
+		white-space: normal;
 	}
 	td.accept {
 		font-weight: 600;

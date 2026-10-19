@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { untrack } from 'svelte';
+	import { tick, untrack } from 'svelte';
 	import { GrammarEditor } from '$lib/components/grammar';
 	import {
 		Button,
@@ -26,6 +26,7 @@
 		readGrammar,
 		readTokens,
 		sameParse,
+		skippedSymbols,
 		tableOrder,
 		type Analysis,
 		type AnalysisRequest,
@@ -35,13 +36,7 @@
 	import NotLL1 from '$lib/tools/ll1/NotLL1.svelte';
 	import ParsePanel from '$lib/tools/ll1/ParsePanel.svelte';
 	import PresetNote from '$lib/tools/ll1/PresetNote.svelte';
-	import {
-		DEFAULT_PRESET_ID,
-		presetFor,
-		presetState,
-		presets,
-		type LL1PresetValue
-	} from '$lib/tools/ll1/presets';
+	import { presetFor, presetState, presets, type LL1PresetValue } from '$lib/tools/ll1/presets';
 	import RewritePanel from '$lib/tools/ll1/RewritePanel.svelte';
 	import { setSteps } from '$lib/tools/ll1/sets';
 	import SetsPanel from '$lib/tools/ll1/SetsPanel.svelte';
@@ -52,23 +47,21 @@
 	import { toolBySlug } from '$lib/tools/registry';
 	import { syncToHash } from '$lib/url-state';
 
+	/** The state of the page; `preset` is the preset loaded last, shown for as long as it fits. */
 	let form = $state<LL1State>({ ...DEFAULT_STATE, names: {} });
-	/** The preset loaded last, shown for as long as it fits the state. */
-	let loaded = $state<string | null>(DEFAULT_PRESET_ID);
 
 	/** The last grammar without errors: the panels keep showing it, faded, while the text has errors. */
 	let lastGood: { text: string; grammar: Grammar } | null = null;
 
-	function load(state: LL1State, preset: string | null) {
+	function load(state: LL1State) {
 		pause();
 		if (state.grammar !== form.grammar) lastGood = null;
 		Object.assign(form, state);
-		loaded = preset ?? presetFor(form)?.id ?? null;
 	}
 
 	syncToHash(() => form, {
 		validate: isLL1Hash,
-		onLoad: (value) => load(stateFromHash(value), null)
+		onLoad: (value) => load(stateFromHash(value))
 	});
 
 	// ---- The grammar: parsed on every keystroke --------------------------------
@@ -127,10 +120,16 @@
 		form.cell = form.cell && form.cell[0] === next[0] && form.cell[1] === next[1] ? null : next;
 	}
 
-	function gotoEntry(row: number, column: number) {
+	/** Selects an entry from the banner and moves to it, focus included. */
+	async function gotoEntry(row: number, column: number) {
 		if (!table) return;
 		form.cell = [table.rows[row], table.columns[column]];
-		document.getElementById('ll1-table')?.scrollIntoView({ block: 'start' });
+		await tick();
+		const panel = document.getElementById('ll1-table');
+		panel?.scrollIntoView({ block: 'start' });
+		panel
+			?.querySelector<HTMLButtonElement>('button[data-cell][aria-pressed="true"]')
+			?.focus({ preventScroll: true });
 	}
 
 	// ---- The parse -------------------------------------------------------------
@@ -217,6 +216,11 @@
 			.join('\n');
 	const inUse = $derived(!!rewrite && squash(rewrite.result.text) === squash(form.grammar));
 
+	/** Symbols in the order fields that neither the table nor the rewritten one has. */
+	const skipped = $derived(
+		table ? skippedSymbols(form.rows, form.columns, rewrite ? [table, rewrite.table] : [table]) : []
+	);
+
 	function useRewrite() {
 		if (!rewrite) return;
 		form.grammar = rewrite.result.text;
@@ -226,10 +230,10 @@
 
 	// ---- Presets and links -----------------------------------------------------
 
-	const preset = $derived(presetFor(form, loaded));
+	const preset = $derived(presetFor(form));
 
 	function loadPreset(p: Preset<LL1PresetValue>) {
-		load(presetState(p), p.id);
+		load(presetState(p));
 	}
 
 	const linkState = $derived.by(() => {
@@ -380,14 +384,10 @@
 									form.columns = '';
 								}}>Grammar order</Button
 							>
-							{#if order.skipped.rows.length + order.skipped.columns.length > 0}
+							{#if skipped.length > 0}
 								<p class="skipped">
 									Skipped, not symbols of this table:
-									<span class="mono"
-										>{[...order.skipped.rows, ...order.skipped.columns]
-											.map((s) => printSymbols([s]))
-											.join(' ')}</span
-									>
+									<span class="mono">{skipped.map((s) => printSymbols([s])).join(' ')}</span>
 								</p>
 							{/if}
 						</div>
