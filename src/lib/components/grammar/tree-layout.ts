@@ -652,6 +652,30 @@ export function treeSizing(
 	};
 }
 
+/**
+ * The scroll offsets of a tree's box that put a point of the drawing (in
+ * layout units) in the middle of the box across and a fifth of the way down,
+ * so the subtree under a node shows too, as far as the box can scroll. The
+ * drawing fills the box's width between its `minScale` and `scale` sizes and
+ * is centered when narrower (ParseTreeView's CSS); `box` is the visible part.
+ */
+export function revealScroll(
+	at: { x: number; y: number },
+	drawing: { width: number; height: number },
+	sizing: Pick<TreeSizing, 'scale' | 'minScale'>,
+	box: { width: number; height: number }
+): { left: number; top: number } {
+	const s = Math.min(sizing.scale, Math.max(sizing.minScale, box.width / drawing.width));
+	const width = drawing.width * s;
+	const height = drawing.height * s;
+	const x = Math.max(0, (box.width - width) / 2) + at.x * s;
+	const clamp = (v: number, max: number) => Math.max(0, Math.min(v, max));
+	return {
+		left: clamp(x - box.width / 2, width - box.width),
+		top: clamp(at.y * s - box.height / 5, height - box.height)
+	};
+}
+
 export type TreeDirection = 'up' | 'down' | 'left' | 'right';
 
 /**

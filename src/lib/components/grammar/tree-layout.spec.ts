@@ -36,6 +36,7 @@ import {
 	neighborOf,
 	nodeAtPath,
 	pathKey,
+	revealScroll,
 	splitSubscript,
 	treeSizing,
 	type TreeLayout
@@ -425,6 +426,44 @@ describe('treeSizing', () => {
 		for (const s of [treeSizing(0, 0, true), treeSizing(-4, 11, true), treeSizing(16, -1, false)]) {
 			expect(Object.values(s).every((v) => Number.isFinite(v) && v > 0)).toBe(true);
 		}
+	});
+});
+
+describe('revealScroll', () => {
+	const sizing = { scale: 1, minScale: 0.625 };
+	const drawing = { width: 4000, height: 2000 };
+
+	it('puts the point in the middle across and a fifth of the way down a box it overflows', () => {
+		// At the smallest size: 2500 × 1250 px in a 1000 × 500 box; the point at (1000, 500).
+		expect(
+			revealScroll({ x: 1600, y: 800 }, drawing, sizing, { width: 1000, height: 500 })
+		).toEqual({ left: 500, top: 400 });
+	});
+
+	it('stops at the edges of the drawing', () => {
+		const box = { width: 1000, height: 500 };
+		expect(revealScroll({ x: 10, y: 10 }, drawing, sizing, box)).toEqual({ left: 0, top: 0 });
+		expect(revealScroll({ x: 3990, y: 1990 }, drawing, sizing, box)).toEqual({
+			left: 1500,
+			top: 750
+		});
+	});
+
+	it('does not scroll a drawing that fits, centered in a wider box', () => {
+		const small = { width: 400, height: 200 };
+		expect(revealScroll({ x: 390, y: 190 }, small, sizing, { width: 1000, height: 500 })).toEqual({
+			left: 0,
+			top: 0
+		});
+	});
+
+	it('scrolls only down when the drawing shrinks to the width of the box', () => {
+		// Drawn 1000 px wide (scale 0.8), 800 px high, in a 1000 × 300 box.
+		const tall = { width: 1250, height: 1000 };
+		expect(revealScroll({ x: 625, y: 500 }, tall, sizing, { width: 1000, height: 300 })).toEqual({
+			left: 0,
+			top: 340
+		});
 	});
 });
 

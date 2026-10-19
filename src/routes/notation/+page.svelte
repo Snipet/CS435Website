@@ -30,7 +30,7 @@
 		shiftReduceForest,
 		sumTrees
 	} from '$lib/components/grammar/fixtures';
-	import GrammarClasses from './GrammarClasses.svelte';
+	import GrammarClasses from '$lib/components/grammar/GrammarClasses.svelte';
 	import LegendGlyph, { type GlyphKind } from './LegendGlyph.svelte';
 	import {
 		danglingElseGrammar,

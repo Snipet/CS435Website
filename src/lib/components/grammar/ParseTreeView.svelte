@@ -26,12 +26,14 @@
 		layoutTree,
 		neighborOf,
 		pathKey,
+		revealScroll,
 		treeSizing,
 		type TreeDirection,
 		type TreeLabeler,
 		type TreeLayout,
 		type TreeLayoutKind,
-		type TreeLayoutNode
+		type TreeLayoutNode,
+		type TreePath
 	} from './tree-layout';
 	import type { TreeHighlight, TreeTone } from './types';
 
@@ -89,6 +91,16 @@
 		 * target of at least 24 px a side (see `treeSizing`).
 		 */
 		minLabelSize?: number;
+		/**
+		 * The box's greatest height (a CSS length): a taller tree scrolls up and
+		 * down in the same box that scrolls it sideways.
+		 */
+		maxHeight?: string;
+		/**
+		 * A node to bring into view: when the tree or this path changes, a box that
+		 * scrolls puts the node in view (centered across, near the top), at once.
+		 */
+		reveal?: TreePath | null;
 	};
 
 	let {
@@ -104,7 +116,9 @@
 		onnodeclick,
 		ariaLabel = 'Parse tree',
 		labelSize = 16,
-		minLabelSize = 11
+		minLabelSize = 11,
+		maxHeight,
+		reveal = null
 	}: Props = $props();
 
 	const uid = $props.id();
@@ -284,21 +298,41 @@
 	}
 
 	// A tree wider than its box at the smallest label size scrolls inside the
-	// box; the box then takes keyboard focus so it can be scrolled without a mouse.
+	// box (and one taller than `maxHeight`); the box then takes keyboard focus
+	// so it can be scrolled without a mouse.
 	let box: HTMLDivElement | undefined = $state();
-	let scrolls = $state(false);
+	let scrolls = $state<'sideways' | 'both' | null>(null);
 	$effect(() => {
 		const el = box;
 		const drawing = svg;
 		if (!el || !drawing || typeof ResizeObserver === 'undefined') return;
-		const check = () => (scrolls = el.scrollWidth > el.clientWidth + 1);
+		const check = () => {
+			const x = el.scrollWidth > el.clientWidth + 1;
+			const y = el.scrollHeight > el.clientHeight + 1;
+			scrolls = y ? 'both' : x ? 'sideways' : null;
+		};
 		const observer = new ResizeObserver(check);
 		observer.observe(el);
 		observer.observe(drawing);
 		check();
 		return () => observer.disconnect();
 	});
-	const scrollRegion = $derived(scrolls && !interactive);
+	const scrollRegion = $derived(scrolls !== null && !interactive);
+
+	const revealKey = $derived(reveal ? pathKey(reveal) : null);
+	/** The drawing has its final size: no move is under way. */
+	const settled = $derived(progress.current >= 1);
+	$effect(() => {
+		const el = box;
+		const key = revealKey;
+		const l = layout;
+		if (!el || key === null || !settled) return;
+		const node = l.nodes.find((n) => n.id === key);
+		if (!node) return;
+		const at = revealScroll(node, l, sizing, { width: el.clientWidth, height: el.clientHeight });
+		el.scrollLeft = at.left;
+		el.scrollTop = at.top;
+	});
 </script>
 
 {#snippet body(n: TreeLayoutNode, w: number)}
@@ -344,11 +378,15 @@
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
 	bind:this={box}
-	class="parse-tree"
+	class={['parse-tree', { bounded: !!maxHeight }]}
 	style="--tree-w: {frame.width * sizing.scale}px; --tree-min: {frame.width *
-		sizing.minScale}px;{color ? ` --tree-fg: ${color};` : ''}"
+		sizing.minScale}px;{color ? ` --tree-fg: ${color};` : ''}{maxHeight
+		? ` --tree-max-h: ${maxHeight};`
+		: ''}"
 	role={scrollRegion ? 'group' : undefined}
-	aria-label={scrollRegion ? `${ariaLabel}, scrolls sideways` : undefined}
+	aria-label={scrollRegion
+		? `${ariaLabel}, ${scrolls === 'both' ? 'scrolls' : 'scrolls sideways'}`
+		: undefined}
 	tabindex={scrollRegion ? 0 : undefined}
 >
 	<svg
@@ -427,6 +465,10 @@
 		overflow-x: auto;
 		overscroll-behavior-x: contain;
 		border-radius: var(--radius-sm);
+	}
+	.parse-tree.bounded {
+		max-height: var(--tree-max-h);
+		overflow-y: auto;
 	}
 	svg {
 		display: block;
