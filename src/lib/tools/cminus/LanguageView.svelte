@@ -186,7 +186,8 @@
 				<code>for (e1; e2; e3) s</code> evaluates <code>e1</code> once, then runs <code>s</code>
 				followed by <code>e3</code> as long as <code>e2</code> is not 0. Each of the three
 				expressions may be left out; without <code>e2</code> the loop ends only by
-				<code>return</code>.
+				<code>return</code>. <code>e1</code> is an expression, not a declaration: the loop variable is
+				declared at the start of a block, as every local is.
 			</li>
 			<li>
 				<code>++v</code> and <code>--v</code> add or subtract 1, store the result back in

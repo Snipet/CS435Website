@@ -519,6 +519,41 @@ describe('the extensions: for loops (rule 16) and ++, -- (rule 26)', () => {
 		]);
 	});
 
+	it('a declaration in a for head says where C- declares variables', () => {
+		const source = inMain('int s; s = 0; for (int i = 0; i < 3; ++i) { s = s + i; } output(s);');
+		const r = parseSource(source);
+		expect(r.diagnostics).toHaveLength(1);
+		expect(r.diagnostics[0].message).toBe(
+			'C- declares variables only at the start of a block: declare i there and write for (i = …; …), not for (int i = …; …).'
+		);
+		// The span covers `int i`.
+		const at = source.indexOf('int i');
+		expect(r.diagnostics[0].span).toMatchObject({ start: at, end: at + 'int i'.length });
+		// Recovery as for any broken head: the head is skipped, the block and the rest still parse.
+		expect((r.program.decls[0] as FunDecl).body.body.map((s) => s.kind)).toEqual([
+			'ExprStmt',
+			'Compound',
+			'ExprStmt'
+		]);
+		expect(messages(inMain('for (int k; k < 3; ++k) ;'))).toEqual([
+			'C- declares variables only at the start of a block: declare k there, not in the head of "for".'
+		]);
+		expect(messages(inMain('for (void v = 1;;) ;'))).toEqual([
+			'C- declares variables only at the start of a block: declare v there and write for (v = …; …), not for (void v = …; …).'
+		]);
+		expect(messages(inMain('for (int; ;) ;'))).toEqual([
+			'C- declares variables only at the start of a block, not in the head of "for".'
+		]);
+		// Errors after the broken head are still found.
+		expect(messages(inMain('for (int i = 0; i < 3; ++i) x = ; y = 1;'))).toEqual([
+			'C- declares variables only at the start of a block: declare i there and write for (i = …; …), not for (int i = …; …).'
+		]);
+		expect(messages(inMain('for (int i = 0; i < 3; ++i) { x = ; }'))).toEqual([
+			'C- declares variables only at the start of a block: declare i there and write for (i = …; …), not for (int i = …; …).',
+			'Expected an expression, found ";".'
+		]);
+	});
+
 	it('for loops nest as deeply as other statements', () => {
 		const r = parseSource(inMain(`${'for (;;) '.repeat(5000)};`));
 		expect(r.diagnostics.at(-1)?.message).toBe(

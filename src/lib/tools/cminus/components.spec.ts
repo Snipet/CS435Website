@@ -676,6 +676,8 @@ describe('LanguageView', () => {
 			'Each of the three expressions may be left out',
 			'Only the prefix form exists: i++ is a syntax error.',
 			'Rules 16 and 26 include two extensions',
+			'In a for head the initializer and the condition are each an expression-stmt (with its ; ), and the update is an optional expression .',
+			'e1 is an expression, not a declaration: the loop variable is declared at the start of a block',
 			'iteration-stmt → while ( expression ) statement | for ( expression-stmt expression-stmt ) statement',
 			'factor → ( expression ) | var | call | NUM | "++" var | "--" var'
 		]) {

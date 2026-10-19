@@ -17,8 +17,9 @@
  *
  * Two extensions of the language: `for ( [expression] ; [expression] ;
  * [expression] ) statement` and the prefix operators `++ var` and `-- var`.
- * In the BNF the three parts of the for head are written with
- * `expression-stmt`, so the grammar keeps its 29 rules.
+ * In the BNF the initializer and the condition of the for head are each an
+ * `expression-stmt` (with its `;`) and the update is an optional
+ * `expression`, so the grammar keeps its 29 rules.
  *
  * A syntax error is a diagnostic. Recovery is panic mode: the statement (or
  * declaration) in progress is dropped and tokens are skipped to the next `;`
@@ -592,6 +593,7 @@ class Parser {
 		try {
 			this.expect('LPAREN', 'after "for"');
 			open = this.pos;
+			if (this.at('INT') || this.at('VOID')) this.declarationInForHead();
 			if (!this.at('SEMI')) init = this.expression();
 			this.expect('SEMI', 'after the initializer of "for"');
 			if (!this.at('SEMI')) test = this.expression();
@@ -618,6 +620,25 @@ class Parser {
 			test,
 			update,
 			body
+		);
+	}
+
+	/**
+	 * A C-style declaration as the initializer of a for loop (`for (int i = 0; …)`).
+	 * C- declares locals only at the start of a block, so this is a syntax
+	 * error whose message says where the declaration goes.
+	 */
+	private declarationInForHead(): never {
+		const rule = 'C- declares variables only at the start of a block';
+		const type = this.peek();
+		const name = this.peek(1);
+		if (name.type !== 'ID') return this.fail(`${rule}, not in the head of "for".`, type.span);
+		const id = name.lexeme;
+		return this.fail(
+			this.peek(2).type === 'ASSIGN'
+				? `${rule}: declare ${id} there and write for (${id} = …; …), not for (${type.lexeme} ${id} = …; …).`
+				: `${rule}: declare ${id} there, not in the head of "for".`,
+			joinSpans(type.span, name.span)
 		);
 	}
 

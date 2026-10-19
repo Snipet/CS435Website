@@ -33,9 +33,10 @@
 			</ol>
 		</div>
 		<p class="cm-note">
-			Rules 16 and 26 include two extensions: <code>for</code> loops, whose three parts are written
-			with <code>expression-stmt</code>, and the prefix operators <code>++</code> and
-			<code>--</code>.
+			Rules 16 and 26 include two extensions: <code>for</code> loops and the prefix operators
+			<code>++</code> and <code>--</code>. In a <code>for</code> head the initializer and the
+			condition are each an <code>expression-stmt</code> (with its <code>;</code>), and the update
+			is an optional <code>expression</code>.
 		</p>
 		{#if href}
 			<p class="cm-note">

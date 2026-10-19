@@ -1244,15 +1244,19 @@ function interpretCompilation(c, inputs, opts?): InterpretResult | null;
 - **Extensions: grammar.** Rule 16 is
   `iteration-stmt → while ( expression ) statement | for ( expression-stmt expression-stmt ) statement | for ( expression-stmt expression-stmt expression ) statement`
   (in the EBNF `for ( [ expression ] ; [ expression ] ; [ expression ] ) statement`;
-  writing the head with `expression-stmt` keeps the BNF at 29 rules), and
+  the initializer and the condition are each an `expression-stmt`, with its
+  `;`, and the update is an optional `expression`, which keeps the BNF at 29
+  rules), and
   rule 26 is `factor → ( expression ) | var | call | NUM | "++" var | "--" var`.
   The tokens are FOR, INCREMENT and DECREMENT. The operators are prefix
   only: a var followed by `++` or `--` (`i++`) is a syntax error whose
   message suggests the prefix form ("write ++i, not i++"); `++` before
   anything but a var (a number, a parenthesis, a call) is an error too, and
-  `++i = 1` is reported as a left side of `=` that is not a var. A syntax
-  error in a for head skips to its `)` before the statement is dropped, so
-  the head gives one message.
+  `++i = 1` is reported as a left side of `=` that is not a var. A
+  declaration as the initializer (`for (int i = 0; …)`) is a syntax error
+  that says where C- declares variables ("declare i there and write
+  for (i = …; …)"). A syntax error in a for head skips to its `)` before the
+  statement is dropped, so the head gives one message.
 - **Extensions: meaning.** `for (e1; e2; e3) s` evaluates `e1` once, tests
   `e2` before every round (a missing `e2` is true, so the loop ends only by
   `return`), and evaluates `e3` after `s`. The analyzer checks `e2` as a
