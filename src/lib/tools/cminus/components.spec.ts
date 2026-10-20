@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { CMINUS_BNF, compile, type Compilation } from '$lib/theory/cminus';
 import AstOutline from './AstOutline.svelte';
 import DiagnosticList from './DiagnosticList.svelte';
+import { grammarLinks } from './grammar-links';
 import GrammarText from './GrammarText.svelte';
 import IrView from './IrView.svelte';
 import LanguageView from './LanguageView.svelte';
@@ -53,6 +54,7 @@ const source = (id: string) => presetById(id)!.value.source;
 const GCD = source('gcd');
 const gcd = compile(GCD);
 const onselect = () => {};
+const GRAMMAR_LINK = [{ title: 'Context-Free Grammars', href: '/grammar#x' }];
 
 function find(c: Compilation, part: string): SourceRange {
 	const from = c.source.startsWith('/*') ? c.source.indexOf('*/') + 2 : 0;
@@ -77,7 +79,7 @@ function panels(c: Compilation, marks: SelectionMarks, selection: SourceRange | 
 	];
 	if (!blockedBy(c, 'syntax')) {
 		out.push(
-			render(SyntaxView, { props: { c, marks, selection, grammarHref: '/grammar#x', onselect } })
+			render(SyntaxView, { props: { c, marks, selection, grammarLinks: GRAMMAR_LINK, onselect } })
 				.body
 		);
 	}
@@ -225,7 +227,7 @@ describe('TokensView', () => {
 });
 
 describe('SyntaxView', () => {
-	const props = { c: gcd, marks: NO_MARKS, selection: null, grammarHref: '/grammar#x', onselect };
+	const props = { c: gcd, marks: NO_MARKS, selection: null, grammarLinks: GRAMMAR_LINK, onselect };
 
 	it('shows the tree as an outline and draws the whole small program', () => {
 		const html = render(SyntaxView, { props }).body;
@@ -265,9 +267,19 @@ describe('SyntaxView', () => {
 		expect(shown).toContain('additive-expression → term { addop term }');
 		expect(html).toContain('href="/grammar#x"');
 		expect(shown).toContain('Open the BNF in Context-Free Grammars');
-		const without = render(SyntaxView, { props: { ...props, grammarHref: null } }).body;
+		const without = render(SyntaxView, { props: { ...props, grammarLinks: [] } }).body;
 		expect(without).not.toContain('Context-Free Grammars');
-		expect(count(render(GrammarText, { props: { href: null } }).body, '<li')).toBe(29);
+		expect(count(render(GrammarText, { props: { links: [] } }).body, '<li')).toBe(29);
+	});
+
+	it('opens the BNF in the three grammar tools', () => {
+		const links = grammarLinks();
+		const html = render(GrammarText, { props: { links } }).body;
+		// Tags become spaces in `text`, also before the comma that follows a link.
+		expect(text(html).replace(/ ,/g, ',')).toContain(
+			'Open the BNF in Context-Free Grammars, LR(1) Parser Builder or Conflicts & Precedence'
+		);
+		for (const link of links) expect(html).toContain(`href="${link.href}"`);
 	});
 
 	it('shows the parser’s diagnostics with the part of the tree that parsed', () => {
@@ -282,7 +294,7 @@ describe('SyntaxView', () => {
 });
 
 describe('SyntaxView in the course classes', () => {
-	const props = { marks: NO_MARKS, selection: null, grammarHref: null, onselect };
+	const props = { marks: NO_MARKS, selection: null, grammarLinks: [], onselect };
 
 	it('shows the fields of each node, and which phase sets those that are not set', () => {
 		const c = compile(source('reverse'));
@@ -627,7 +639,7 @@ describe('RunView', () => {
 describe('LanguageView', () => {
 	it('is a reference for the language as the compiler implements it', () => {
 		const html = render(LanguageView, {
-			props: { identifiers: 'letters', grammarHref: '/grammar#x' }
+			props: { identifiers: 'letters', grammarLinks: GRAMMAR_LINK }
 		}).body;
 		const shown = text(html);
 		for (const part of [
@@ -665,7 +677,7 @@ describe('LanguageView', () => {
 
 	it('describes the extensions: for, ++ and --', () => {
 		const shown = text(
-			render(LanguageView, { props: { identifiers: 'letters', grammarHref: null } }).body
+			render(LanguageView, { props: { identifiers: 'letters', grammarLinks: [] } }).body
 		);
 		for (const part of [
 			'FOR for',
@@ -687,7 +699,7 @@ describe('LanguageView', () => {
 
 	it('follows the identifier rule in use', () => {
 		const shown = text(
-			render(LanguageView, { props: { identifiers: 'extended', grammarHref: null } }).body
+			render(LanguageView, { props: { identifiers: 'extended', grammarLinks: [] } }).body
 		);
 		expect(shown).toContain("ID = letter (letter | digit | '_')*");
 		expect(shown).toContain("ID letter (letter | digit | '_')*");
@@ -719,7 +731,7 @@ describe('DiagnosticList', () => {
 		expect(text(html)).toContain('found the end of the program. line 1, col 28');
 		// Through the Syntax tree tab as well.
 		const tab = render(SyntaxView, {
-			props: { c, marks: NO_MARKS, selection: null, grammarHref: null, onselect }
+			props: { c, marks: NO_MARKS, selection: null, grammarLinks: [], onselect }
 		}).body;
 		expect(count(tab, /<button[^>]*class="what/g)).toBe(2);
 	});
@@ -766,7 +778,7 @@ describe('a large program', () => {
 		);
 
 		const syntax = render(SyntaxView, {
-			props: { c, marks: NO_MARKS, selection: null, grammarHref: null, onselect }
+			props: { c, marks: NO_MARKS, selection: null, grammarLinks: [], onselect }
 		}).body;
 		expect(count(syntax, 'role="treeitem"')).toBe(ROW_LIMIT);
 		// Too large to draw whole: the last function, which is too large as well.
@@ -867,8 +879,8 @@ describe('copy', () => {
 				return panels(c, NO_MARKS, null);
 			}),
 			...panels(gcd, marksFor(gcd, whole), whole),
-			render(LanguageView, { props: { identifiers: 'letters', grammarHref: null } }).body,
-			render(LanguageView, { props: { identifiers: 'extended', grammarHref: null } }).body,
+			render(LanguageView, { props: { identifiers: 'letters', grammarLinks: [] } }).body,
+			render(LanguageView, { props: { identifiers: 'extended', grammarLinks: [] } }).body,
 			render(SelectionBar, { props: { summary: null, onclear: () => {} } }).body,
 			render(PhaseStrip, { props: { stages: stageViews(gcd, null), current: null, onselect } }).body
 		];

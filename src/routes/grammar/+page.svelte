@@ -11,6 +11,7 @@
 	import FourTuple from '$lib/tools/grammar/FourTuple.svelte';
 	import LanguagePanel from '$lib/tools/grammar/LanguagePanel.svelte';
 	import MembershipPanel from '$lib/tools/grammar/MembershipPanel.svelte';
+	import { parsingLinks } from '$lib/tools/grammar/parsing-links';
 	import {
 		activePreset,
 		applyPreset,
@@ -190,6 +191,13 @@
 	const ambiguityHref = $derived(
 		shown ? toolLink('ambiguity', { grammar: shown.text, input: model.input }) : null
 	);
+	// The parsing tools open on the grammar as typed, once it has no errors, and on the token
+	// string while it has tokens and no errors.
+	const openIn = $derived.by(() => {
+		if (!parsed.grammar) return [];
+		const typed = inputTokens && !hasErrors(inputTokens.diagnostics) ? inputTokens.tokens : null;
+		return parsingLinks(model.grammar, typed);
+	});
 
 	// ---- Moving between the panels ---------------------------------------------
 
@@ -240,6 +248,16 @@
 					continuation line. Type <code>-&gt;</code> for <code>→</code>, and write <code>ε</code> for
 					an empty right-hand side. The first left-hand side is the start symbol.
 				</p>
+				{#if openIn.length > 0}
+					<p class="open-in">
+						Open in
+						{#each openIn as link, i (link.href)}
+							{i > 0 ? (i === openIn.length - 1 ? ' or ' : ', ') : ''}
+							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path (toolHref) -->
+							<a href={link.href}>{link.title}</a>
+						{/each}
+					</p>
+				{/if}
 			</div>
 		</Panel>
 
@@ -363,6 +381,12 @@
 		margin: 0;
 		color: var(--text-3);
 		font-size: var(--text-xs);
+		line-height: 1.6;
+	}
+	.open-in {
+		margin: 0;
+		color: var(--text-2);
+		font-size: var(--text-sm);
 		line-height: 1.6;
 	}
 

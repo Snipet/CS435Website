@@ -28,7 +28,16 @@ describe('URL state', () => {
 		});
 		const bare: LinkStates['conflicts'] = { grammar: 'S → a' };
 		expect(isConflictsHash(bare)).toBe(true);
-		expect(stateFromHash(bare)).toMatchObject({ input: '', precedence: '' });
+		expect(stateFromHash(bare)).toMatchObject({ input: '', precedence: '', choices: [] });
+		// A link can open a preset with its other parse.
+		const ambiguous = presets.find((p) => p.id === 'ambiguous')!.value;
+		const other: LinkStates['conflicts'] = {
+			grammar: ambiguous.grammar,
+			input: ambiguous.input,
+			choices: ambiguous.choices
+		};
+		expect(isConflictsHash(other)).toBe(true);
+		expect(stateFromHash(other)).toEqual(presetState({ value: ambiguous }));
 	});
 
 	it('accepts its own saved shape, with extra fields ignored', () => {

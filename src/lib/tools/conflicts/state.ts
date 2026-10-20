@@ -1,8 +1,8 @@
 /**
  * The tool's user-editable state, kept in the URL hash. It accepts the
  * cross-tool link shape `LinkStates['conflicts']` ({ grammar, input?,
- * precedence? }) as well as its own saved shape, which adds how the items of
- * a conflict are shown and the actions chosen for the other parse.
+ * precedence?, choices? }) as well as its own saved shape, which adds how the
+ * items of a conflict are shown.
  */
 import type { LinkStates } from '$lib/tools/links';
 
@@ -79,8 +79,8 @@ export function isConflictsHash(value: unknown): value is ConflictsHash {
 
 /**
  * The state a hash value describes. A link from another tool has the grammar
- * and perhaps a token string and declarations: the items are shown in part
- * and the other parse takes no choices.
+ * and perhaps a token string, declarations and choices: the items are shown
+ * in part, and without choices the other parse takes none.
  */
 export function stateFromHash(value: ConflictsHash): ConflictsState {
 	return {

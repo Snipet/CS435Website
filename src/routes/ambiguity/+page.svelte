@@ -22,6 +22,7 @@
 		type CompareRequest,
 		type CompareResult
 	} from '$lib/tools/ambiguity/compare';
+	import { bisonDeclarations, conflictsState } from '$lib/tools/ambiguity/conflicts-link';
 	import { binaryOperators } from '$lib/tools/ambiguity/declarations';
 	import DeclarationsTab from '$lib/tools/ambiguity/DeclarationsTab.svelte';
 	import Fact from '$lib/tools/ambiguity/Fact.svelte';
@@ -198,6 +199,20 @@
 		return href && title ? ([title, href] as const) : null;
 	};
 	const grammarLink = $derived(source.grammar ? linkTo('grammar', model.grammar) : null);
+	// Conflicts & Precedence opens on the grammar, the string while it has no errors, and the
+	// declarations as bison writes them.
+	const conflictsLink = $derived.by(() => {
+		if (!source.grammar) return null;
+		const title = toolBySlug('conflicts')?.title;
+		const input = inputError ? '' : model.input;
+		const href = toolLink('conflicts', conflictsState(model.grammar, input, model.decls));
+		if (!title || !href) return null;
+		const declared = bisonDeclarations(model.decls) !== '';
+		return [
+			`Open the grammar${declared ? ' and the declarations' : ''} in ${title}`,
+			href
+		] as const;
+	});
 	const rewriteLinks = $derived(
 		typedRewrite.grammar
 			? (['grammar', 'rd-backtracking', 'rd-predictive'] as const).flatMap((slug) => {
@@ -374,10 +389,16 @@
 			</p>
 		{/if}
 
-		{#if grammarLink}
+		{#if grammarLink || conflictsLink}
 			<p class="links">
-				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path (toolHref) -->
-				<a href={grammarLink[1]}>Open the grammar in {grammarLink[0]}</a>
+				{#if grammarLink}
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path (toolHref) -->
+					<a href={grammarLink[1]}>Open the grammar in {grammarLink[0]}</a>
+				{/if}
+				{#if conflictsLink}
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path (toolHref) -->
+					<a href={conflictsLink[1]}>{conflictsLink[0]}</a>
+				{/if}
 			</p>
 		{/if}
 	</Panel>
@@ -482,6 +503,9 @@
 		margin-top: var(--space-3);
 	}
 	.links {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--space-2) var(--space-4);
 		margin: var(--space-3) 0 0;
 		font-size: var(--text-sm);
 	}
