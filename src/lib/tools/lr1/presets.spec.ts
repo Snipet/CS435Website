@@ -18,7 +18,7 @@ import {
 	presets,
 	type Lr1Preset
 } from './presets';
-import { DEFAULT_STATE, isLr1Hash } from './state';
+import { DEFAULT_STATE, isLr1Hash, stateFromHash } from './state';
 import { actionCell, actionColumns, conflictCells, gotoEntry } from './table-view';
 
 const preset = (id: string): Lr1Preset => presets.find((p) => p.id === id)!;
@@ -162,9 +162,29 @@ describe('every preset', () => {
 		}
 	});
 
+	it('is found again by the state a link carries, without the id', () => {
+		// A link (Copy link, or another page) holds the state and not the preset loaded:
+		// presets that fit one state are told apart by the view and the steps they open on.
+		const ties = presets.filter((p) =>
+			presets.some((q) => q !== p && presetFor(presetState(q), p.id) === p)
+		);
+		expect(ties.map((p) => p.id)).toEqual(
+			expect.arrayContaining(['start-context', 'item-sets', 'circles', 'lr-parse'])
+		);
+		for (const p of presets) {
+			const linked = stateFromHash(JSON.parse(JSON.stringify(presetState(p))));
+			expect(presetFor(linked)?.id, p.id).toBe(p.id);
+		}
+		// Stepped on from a preset, a state is named by the preset with its view.
+		expect(presetFor({ ...presetState(preset('lr-parse')), parseStep: 5 })?.id).toBe('lr-parse');
+		expect(presetFor({ ...presetState(preset('circles')), parseStep: 5 })?.id).toBe('circles');
+	});
+
 	it('opens the page on the LR parse of the slides, run to its end', () => {
 		// Two presets fit the opening state; the page names the one it loaded.
 		expect(presetFor(DEFAULT_STATE, DEFAULT_PRESET_ID)?.id).toBe(DEFAULT_PRESET_ID);
+		// Read back from a link, it is the parse too: the other one draws the DFA as circles.
+		expect(presetFor(DEFAULT_STATE)?.id).toBe(DEFAULT_PRESET_ID);
 		expect(presetState(preset(DEFAULT_PRESET_ID))).toEqual({ ...DEFAULT_STATE, parseStep: 0 });
 		expect(DEFAULT_STATE.parseStep).toBeNull();
 		expect(DEFAULT_STATE.grammar).toBe(DECK_14_GRAMMAR);
