@@ -24,7 +24,7 @@
 	}
 </script>
 
-<aside class="note" aria-label="About this example">
+<div class="note" role="group" aria-label="About this example">
 	{#if preset.cite}<CitationTag cite={preset.cite} />{/if}
 	<p class="desc"><Pieces pieces={piecesOf(preset.description ?? '')} /></p>
 	{#if preset.questions?.length}
@@ -46,7 +46,7 @@
 			{/each}
 		</ul>
 	{/if}
-</aside>
+</div>
 
 <style>
 	.note {

@@ -10,7 +10,7 @@
 	let { preset }: Props = $props();
 </script>
 
-<aside class="preset-note" aria-label="About this example">
+<div class="preset-note" role="group" aria-label="About this example">
 	<CitationTag cite={preset.cite} />
 	<p class="description">{preset.description}</p>
 	{#if preset.questions?.length}
@@ -26,7 +26,7 @@
 			{/each}
 		</ul>
 	{/if}
-</aside>
+</div>
 
 <style>
 	.preset-note {
