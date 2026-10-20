@@ -1507,7 +1507,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		fill: var(--dead);
 	}
 	.label.taken text {
-		fill: var(--active);
+		fill: var(--active-text);
 		font-weight: 700;
 	}
 	.label.selected text {
