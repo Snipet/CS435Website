@@ -15,7 +15,7 @@ export interface TreeHighlight {
 	fresh?: readonly TreePath[];
 	/** Terminals matched against the input. */
 	matched?: readonly TreePath[];
-	/** Nodes drawn faded, with the line to their parent. */
+	/** Nodes drawn quieter: the label in `--text-3`, the line to their parent faded. */
 	dim?: readonly TreePath[];
 }
 

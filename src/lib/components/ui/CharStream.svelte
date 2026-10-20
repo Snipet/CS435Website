@@ -269,7 +269,7 @@
 		max-width: 100%;
 		padding: 5px 3px 0;
 		overflow: hidden;
-		color: var(--tone-fg);
+		color: var(--tone-text, var(--tone-fg));
 		font-family: var(--font-sans);
 		font-size: 0.6875rem;
 		font-weight: 500;

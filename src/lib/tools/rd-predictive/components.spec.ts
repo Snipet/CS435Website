@@ -464,6 +464,12 @@ describe('PresetNote', () => {
 		}
 	);
 
+	it('is a named group, not a complementary landmark inside the page', () => {
+		const { body } = render(PresetNote, { props: { preset: presets[0] } });
+		expect(body).toMatch(/<div class="note[^"]*" role="group" aria-label="About this example">/);
+		expect(body).not.toContain('<aside');
+	});
+
 	it('draws subscripts and the + of →+', () => {
 		/** The markup without Svelte's markers and without attributes on sub and sup. */
 		const markup = (id: string) =>

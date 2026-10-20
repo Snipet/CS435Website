@@ -78,6 +78,20 @@ describe('ParseTreeView', () => {
 		expect(names).toContain('int, child 1 of 1 of E');
 	});
 
+	it('dims a node by its label color, not by the opacity of the node', () => {
+		const { body } = render(ParseTreeView, {
+			props: { tree: sumTrees.left, highlight: { dim: [[1]] }, ariaLabel: 'Tree' }
+		});
+		expect(body.match(/class="label dim/g)).toHaveLength(1);
+		// Every node is drawn at full opacity (no move is under way).
+		const nodes = [...body.matchAll(/<g class="node[^"]*"[^>]*>/g)].map((m) => m[0]);
+		expect(nodes).toHaveLength(layoutTree(sumTrees.left).nodes.length);
+		for (const g of nodes) expect(g).toContain('opacity="1"');
+		// Only the line to the dimmed node fades.
+		const lines = [...body.matchAll(/<line [^>]*opacity="([\d.]+)"/g)].map((m) => Number(m[1]));
+		expect(lines.filter((o) => o < 1)).toEqual([0.35]);
+	});
+
 	it('bounds the height of its box only when asked to', () => {
 		const tall = render(ParseTreeView, {
 			props: { tree: bottomUpSlideTree, layout: 'baseline', maxHeight: '20rem', reveal: [0] }

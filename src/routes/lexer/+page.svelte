@@ -251,7 +251,7 @@
 	{/snippet}
 
 	{#if activePreset && noteOpen}
-		<aside class="note" aria-label="About this example">
+		<div class="note" role="group" aria-label="About this example">
 			<div class="note-main">
 				<div class="note-head">
 					{#if activePreset.cite}<CitationTag cite={activePreset.cite} size="md" />{/if}
@@ -277,7 +277,7 @@
 				{/if}
 			</div>
 			<IconButton icon="x" size="sm" label="Hide this note" onclick={() => (noteOpen = false)} />
-		</aside>
+		</div>
 	{/if}
 
 	<div class="top">

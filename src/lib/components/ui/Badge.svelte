@@ -37,6 +37,7 @@
 	.badge {
 		--tone-fg: var(--text-2);
 		--tone-bg: var(--surface-2);
+		--tone-text: var(--text-2);
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
@@ -50,9 +51,10 @@
 		white-space: nowrap;
 		vertical-align: middle;
 	}
+	/* Text takes --tone-text (4.5:1 on the soft fill and the surfaces); borders take --tone-fg. */
 	.soft {
 		background: var(--tone-bg);
-		color: var(--tone-fg);
+		color: var(--tone-text);
 		border-color: color-mix(in srgb, var(--tone-fg) 22%, transparent);
 	}
 	.soft.neutral {
@@ -60,11 +62,11 @@
 	}
 	.outline {
 		background: transparent;
-		color: var(--tone-fg);
+		color: var(--tone-text);
 		border-color: color-mix(in srgb, var(--tone-fg) 55%, transparent);
 	}
 	.solid {
-		background: var(--tone-fg);
+		background: var(--tone-text);
 		color: var(--surface);
 	}
 	.mono {

@@ -315,7 +315,7 @@ first or last step.
 		font-weight: 700;
 	}
 	.node.current .num {
-		fill: var(--active);
+		fill: var(--active-text);
 	}
 	.node.todo .body,
 	.node.unbuilt .body {
@@ -327,8 +327,9 @@ first or last step.
 	.node.unbuilt .label {
 		fill: var(--text-3);
 	}
-	.node.todo,
-	.node.unbuilt {
+	/* Faded outlines only: the labels keep --text-3 at full strength (4.5:1). */
+	.node.todo .body,
+	.node.unbuilt .body {
 		opacity: 0.75;
 	}
 </style>

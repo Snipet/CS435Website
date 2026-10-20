@@ -207,7 +207,7 @@ Start row →, accepting rows ◎.
 		font-weight: 600;
 	}
 	tr.trap > * {
-		color: var(--dead);
+		color: var(--dead-text);
 	}
 	tr.current > th,
 	tr.current > td {

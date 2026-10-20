@@ -82,7 +82,7 @@
 		font-size: 15px;
 	}
 	.name {
-		fill: var(--dead);
+		fill: var(--dead-text);
 		font-family: var(--font-mono);
 		font-size: 16px;
 		text-anchor: middle;

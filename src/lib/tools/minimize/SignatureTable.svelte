@@ -178,7 +178,7 @@ blocks; a block whose rows differ splits.
 		font-variant-ligatures: none;
 	}
 	.trap .state {
-		color: var(--dead);
+		color: var(--dead-text);
 	}
 
 	/* Group header rows. */

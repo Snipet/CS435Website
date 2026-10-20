@@ -35,7 +35,7 @@ of AutomatonView, so a chip matches its block in the diagram.
 		border: 1px solid color-mix(in srgb, var(--g) 48%, transparent);
 		border-radius: 5px;
 		background: color-mix(in srgb, var(--g) 13%, var(--surface));
-		color: color-mix(in srgb, var(--g) 78%, var(--text));
+		color: color-mix(in srgb, var(--g) 70%, var(--text));
 		font-family: var(--font-mono);
 		font-size: 0.75rem;
 		font-variant-ligatures: none;

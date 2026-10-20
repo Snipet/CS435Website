@@ -140,7 +140,7 @@
 		color: var(--text-3);
 	}
 	.name {
-		color: var(--tone-fg);
+		color: var(--tone-text, var(--tone-fg));
 		font-weight: 600;
 	}
 	.lex {
@@ -151,13 +151,16 @@
 		padding-right: 6px;
 		color: var(--text-3);
 	}
+	/* Skipped tokens: struck through and in --text-3 (no opacity, which would drop it below 4.5:1). */
 	.skipped .tok {
-		opacity: 0.7;
 		text-decoration: line-through;
 		text-decoration-color: var(--text-3);
 	}
 	.skipped .name {
 		font-weight: 400;
+	}
+	.skipped .lex {
+		color: var(--text-3);
 	}
 	.error .lex {
 		text-decoration: underline wavy var(--reject);

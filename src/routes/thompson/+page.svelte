@@ -270,7 +270,7 @@
 			</div>
 
 			{#if activePreset}
-				<aside class="preset-note" aria-label="About this example">
+				<div class="preset-note" role="group" aria-label="About this example">
 					{#if activePreset.cite}<CitationTag cite={activePreset.cite} />{/if}
 					<p class="preset-desc">{activePreset.description}</p>
 					{#if activePreset.question}
@@ -289,7 +289,7 @@
 							</Disclosure>
 						</div>
 					{/if}
-				</aside>
+				</div>
 			{/if}
 		</div>
 	</Panel>
