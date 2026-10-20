@@ -155,7 +155,8 @@ differently.
 - Self-loops above the state. ε-edges use the `--epsilon` color and label `ε`.
 - Machines read left to right.
 - Active states (simulation) are filled with `--active-soft` and stroked
-  `--active`; the transition just taken is drawn in `--active`.
+  `--active`; the transition just taken is drawn in `--active`, its label in
+  `--active-text`.
 
 ### 3.6 State naming
 
@@ -2321,5 +2322,14 @@ $effect(() => task.run(request));
   reproduce the slide artifacts exactly.
 - UI: works at 360 px wide and on desktop, in light and dark themes, with
   keyboard only. No console errors.
+- Contrast (WCAG AA) in both themes: text 4.5:1, large text and meaningful
+  graphics 3:1. The color tokens are chosen for it (`ui/tokens.spec.ts`):
+  `--text-3` and the semantic and token colors read as text on `--bg`,
+  `--surface`, `--surface-2` and every `-soft` fill; `--active` is for strokes
+  and fills, and text in the active color takes `--active-text` (`toneStyle`
+  sets `--tone-text` for text in a tone). Dim text with a quieter token, not
+  with `opacity`. With a build in `vite preview` on port 5193,
+  `node scripts/contrast-audit.mjs` measures every text node of every page, in
+  every tab, preset and step, in both themes.
 - Prerendering: every route must prerender (no `window` access at module top
   level; read the URL hash in `onMount`/`$effect`).
