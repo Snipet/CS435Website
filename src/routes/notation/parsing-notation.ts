@@ -2,9 +2,12 @@
  * Examples for the "LL(1) and bottom-up parsing" sections of the notation
  * page, from Table-based Predictive Parsing and the three bottom-up decks.
  * Tables, traces and item sets are written out by hand; the spec checks them
- * against the grammar engine and against a small LR(1) construction.
+ * against the grammar engine and against a small LR(1) construction. Each
+ * section links to the tool that runs its example (`sectionTools`).
  */
 import { joinSymbols, symbolSeparators, type ItemView } from '$lib/components/grammar';
+import { toolLink, type LinkStates } from '$lib/tools/links';
+import { toolBySlug } from '$lib/tools/registry';
 
 // ─────────────────────────── LL(1) (Table-based Predictive Parsing) ───────────────────────────
 
@@ -384,3 +387,96 @@ export const shiftRules = [
 
 /** Text of a form or a stack for screen readers and tests. */
 export const formText = (symbols: readonly string[]) => joinSymbols(symbols, 'hug');
+
+// ─────────────────────────── The tools that run the examples ───────────────────────────
+
+/** The sections of "LL(1) and bottom-up parsing". */
+export type ParsingSectionId =
+	| 'first-follow'
+	| 'll1-tables'
+	| 'll1-traces'
+	| 'handles'
+	| 'shift-reduce'
+	| 'lr-items'
+	| 'lr-tables'
+	| 'conflicts'
+	| 'bison'
+	| 'grammar-classes';
+
+type ParsingTool = 'll1' | 'shift-reduce' | 'lr1' | 'conflicts';
+
+/** A tool opened on a section's example: `what` names the example in "Open … in <tool>". */
+export interface SectionTool<S extends ParsingTool = ParsingTool> {
+	slug: S;
+	state: LinkStates[S];
+	what: string;
+}
+
+const opens = <S extends ParsingTool>(
+	slug: S,
+	state: LinkStates[S],
+	what: string
+): SectionTool => ({
+	slug,
+	state,
+	what
+});
+
+/** The token string of slide 12's trace, `int * int`: the LL(1) sections open the tool on it. */
+const ll1Input = ll1Trace[0].input.slice(0, -1).join(' ');
+
+/** The grammar of slides 18–21 of Bottom-up Parsing III. */
+const ambiguousGrammar = conflictExamples[0].grammar;
+
+/** The tool that runs the example of each section, and the state it opens on. */
+export const sectionTools: Record<ParsingSectionId, SectionTool> = {
+	'first-follow': opens('ll1', { grammar: ll1Grammar, input: ll1Input }, 'this grammar'),
+	'll1-tables': opens('ll1', { grammar: ll1Grammar, input: ll1Input }, 'this table’s grammar'),
+	'll1-traces': opens('ll1', { grammar: ll1Grammar, input: ll1Input }, 'this trace'),
+	handles: opens(
+		'shift-reduce',
+		{ grammar: bottomUpGrammar, input: 'int + ( int )' },
+		'int + (int)'
+	),
+	'shift-reduce': opens(
+		'shift-reduce',
+		{ grammar: bottomUpGrammar, input: 'int + ( int ) + ( int )' },
+		'this trace'
+	),
+	'lr-items': opens(
+		'lr1',
+		{ grammar: bottomUpGrammar, input: 'int + ( int ) + ( int )' },
+		'this grammar'
+	),
+	'lr-tables': opens(
+		'lr1',
+		{ grammar: bottomUpGrammar, input: 'int + ( int ) + ( int )' },
+		'this table’s grammar'
+	),
+	// The preset of slides 18–21, with its other parse: reduce E → E * E on + (conflict 2).
+	conflicts: opens(
+		'conflicts',
+		{ grammar: ambiguousGrammar, input: 'int * int + int', choices: [[2, 1]] },
+		'the ambiguous expression grammar'
+	),
+	bison: opens(
+		'conflicts',
+		{ grammar: ambiguousGrammar, input: 'int + int * int', precedence: bisonDeclarations },
+		'these declarations'
+	),
+	'grammar-classes': opens(
+		'conflicts',
+		{ grammar: ll1Grammar, input: 'int * int' },
+		'the left-factored expression grammar'
+	)
+};
+
+/** The link of a section, or null while its tool is not part of the site. */
+export function sectionLink(
+	id: ParsingSectionId
+): { href: string; title: string; what: string } | null {
+	const { slug, state, what } = sectionTools[id];
+	const title = toolBySlug(slug)?.title;
+	const href = toolLink(slug, state);
+	return title && href ? { href, title, what } : null;
+}

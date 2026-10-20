@@ -7,7 +7,13 @@ import { render } from 'svelte/server';
 import { describe, expect, it } from 'vitest';
 import { ITEM_DOT } from '$lib/components/grammar';
 import Page from './+page.svelte';
-import { handleRows, shiftReduceTrace } from './parsing-notation';
+import {
+	handleRows,
+	sectionLink,
+	sectionTools,
+	shiftReduceTrace,
+	type ParsingSectionId
+} from './parsing-notation';
 
 const { body } = render(Page);
 
@@ -35,6 +41,22 @@ const spoken = (html: string) =>
 /** The inner HTML of every element that opens with `open` (a tag prefix) and is closed by `close`. */
 const blocks = (open: RegExp, close: string) =>
 	[...body.matchAll(new RegExp(`${open.source}[^>]*>(.*?)${close}`, 'gs'))].map((m) => m[1]);
+
+describe('tool links', () => {
+	it('ends each LL(1) and bottom-up section with a link to the tool that runs its example', () => {
+		const ids = Object.keys(sectionTools) as ParsingSectionId[];
+		for (const id of ids) {
+			const [section] = blocks(new RegExp(`<section aria-labelledby="${id}"`), '</section>');
+			expect(section, id).toBeDefined();
+			const link = sectionLink(id)!;
+			const lines = blocks(/<p class="tool-line/, '</p>').filter((p) => section.includes(p));
+			expect(lines, id).toHaveLength(1);
+			expect(lines[0]).toContain(`href="${link.href}"`);
+			expect(spoken(lines[0])).toBe(`Open ${link.what} in ${link.title}`);
+		}
+		expect(body.match(/<p class="tool-line/g)).toHaveLength(ids.length);
+	});
+});
 
 describe('item dots', () => {
 	it('draws every dot of an item on the page as the red bullet', () => {

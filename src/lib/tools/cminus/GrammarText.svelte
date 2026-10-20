@@ -1,21 +1,21 @@
 <!--
 	The grammar of C-: the 29 rules of the language definition in BNF (rules 16
 	and 26 with the for loop and the prefix operators ++ and --), and the EBNF
-	the parser follows, with a link that opens the BNF in Context-Free Grammars.
+	the parser follows, with links that open the BNF in the grammar tools
+	(grammar-links.ts).
 -->
 <script lang="ts">
-	import { Icon } from '$lib/components/ui';
 	import { CMINUS_BNF, CMINUS_EBNF } from '$lib/theory/cminus';
 	import { scrollRegion } from '$lib/tools/phases/scroll-region';
 
 	interface Props {
-		/** Link that opens the BNF in the Context-Free Grammars tool; null hides it. */
-		href: string | null;
+		/** Links that open the BNF in other tools, in order; none hides the line. */
+		links: readonly { title: string; href: string }[];
 		/** Heading level of the two titles. */
 		level?: 3 | 4;
 	}
 
-	let { href, level = 4 }: Props = $props();
+	let { links, level = 4 }: Props = $props();
 
 	const rules = CMINUS_BNF.split('\n');
 </script>
@@ -38,10 +38,14 @@
 			condition are each an <code>expression-stmt</code> (with its <code>;</code>), and the update
 			is an optional <code>expression</code>.
 		</p>
-		{#if href}
+		{#if links.length > 0}
 			<p class="cm-note">
-				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path and adds the hash -->
-				<a {href}>Open the BNF in Context-Free Grammars <Icon name="arrow-right" size={14} /></a>
+				Open the BNF in
+				{#each links as link, i (link.href)}
+					{i > 0 ? (i === links.length - 1 ? ' or ' : ', ') : ''}
+					<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path and adds the hash -->
+					<a href={link.href}>{link.title}</a>
+				{/each}
 			</p>
 		{/if}
 	</section>
@@ -86,9 +90,6 @@
 		font-size: inherit;
 	}
 	a {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
 		font-weight: 500;
 	}
 </style>

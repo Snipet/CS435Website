@@ -320,6 +320,8 @@ const squash = (text: string): string =>
  * The preset the state is, if any: the same grammar, token string, method,
  * order, range and Closure stepper. `loaded` is the id of the preset loaded
  * last; it is taken when it fits, since several presets may fit one state.
+ * Without it (a state read from a link) the one that opens on the state's
+ * view and steps is taken, then one with the state's view, then the first.
  */
 export function presetFor(state: Lr1State, loaded: string | null = null): Lr1Preset | undefined {
 	const fits = presets.filter((p) => {
@@ -335,5 +337,15 @@ export function presetFor(state: Lr1State, loaded: string | null = null): Lr1Pre
 			(s.closure === 'closure' || (s.from === state.from && s.symbol === state.symbol))
 		);
 	});
-	return fits.find((p) => p.id === loaded) ?? fits[0];
+	const sameView = (p: Lr1Preset) => presetState(p).view === state.view;
+	const opensAt = (p: Lr1Preset) => {
+		const s = presetState(p);
+		return (
+			sameView(p) &&
+			s.closureStep === state.closureStep &&
+			s.buildStep === state.buildStep &&
+			s.parseStep === state.parseStep
+		);
+	};
+	return fits.find((p) => p.id === loaded) ?? fits.find(opensAt) ?? fits.find(sameView) ?? fits[0];
 }

@@ -24,16 +24,21 @@
  */
 import { resolve } from '$app/paths';
 import { toolHref } from '$lib/site';
+import type { CminusPresetValue } from '$lib/tools/cminus/presets';
+import type { ConflictsPresetValue } from '$lib/tools/conflicts/presets';
 import { presetById as flexPreset } from '$lib/tools/flex/presets';
 import type { FlexView } from '$lib/tools/flex/state';
 import { presetById as grammarPreset } from '$lib/tools/grammar/presets';
 import { presetById as lexerPreset } from '$lib/tools/lexer/presets';
 import { toolLink, type LinkSlug, type LinkStates } from '$lib/tools/links';
+import type { LL1PresetValue } from '$lib/tools/ll1/presets';
+import type { Lr1PresetValue } from '$lib/tools/lr1/presets';
 import { GROUPING_INFO, type Grouping } from '$lib/tools/phases/groupings';
 import type { PhasesState } from '$lib/tools/phases/state';
 import { presets as predictivePresets } from '$lib/tools/rd-predictive/presets';
 import { toolBySlug } from '$lib/tools/registry';
 import { LEX2_DEFS, LEX2_RULES } from '$lib/tools/scanner-dfa/presets';
+import { presets as shiftReducePresets } from '$lib/tools/shift-reduce/presets';
 import { presetById as tDiagramsPreset } from '$lib/tools/t-diagrams/presets';
 import type { TDiagramsHash } from '$lib/tools/t-diagrams/state';
 import type { ToolMeta } from '$lib/tools/types';
@@ -278,13 +283,15 @@ function predictiveOn(id: string, example: string): TopicLink {
 
 /** The tab of the C- Compiler that draws the course's AST, by its title on the tool's page. */
 export const SYNTAX_TREE = 'Syntax tree';
+/** The tab of the C- Compiler that steps a visitor through that AST, by its title. */
+export const VISITOR_TAB = 'Visitor';
 
 /**
- * The C- Compiler on its Syntax tree tab, with the program and input it first
- * loads (its preset "Greatest common divisor"). Written out here because the
- * tool's preset module loads the compiler; the spec compares the two.
+ * The program and input the C- Compiler first loads (its preset "Greatest
+ * common divisor"). Written out here because the tool's preset module loads
+ * the compiler; the spec compares the two.
  */
-export const CMINUS_SYNTAX_TREE = {
+const CMINUS_GCD = {
 	source: `/* The greatest common divisor of two numbers.
    C- has no remainder operator:
    u - u / v * v is the remainder of u by v. */
@@ -305,11 +312,140 @@ void main(void)
   output(gcd(a, b));
 }
 `,
-	input: '48 18',
-	tab: 'syntax'
+	input: '48 18'
 };
 
+/** The C- Compiler on its Syntax tree tab, with the program it first loads. */
+export const CMINUS_SYNTAX_TREE = { ...CMINUS_GCD, tab: 'syntax' } satisfies CminusPresetValue;
+
+/** The C- Compiler on its Visitor tab, running PrintVisitor over that program's tree. */
+export const CMINUS_VISITOR = {
+	...CMINUS_GCD,
+	tab: 'visitor',
+	visitor: 'print'
+} satisfies CminusPresetValue;
+
 const cminusSyntaxTree = (): TopicLink => linked('cminus', CMINUS_SYNTAX_TREE, SYNTAX_TREE);
+const cminusVisitor = (): TopicLink => linked('cminus', CMINUS_VISITOR, VISITOR_TAB);
+
+/** The left-factored grammar of Table-based Predictive Parsing (slides 7–12), in the slides' table order. */
+const LL1_DECK = {
+	grammar: 'E → T X\nX → + E | ε\nT → ( E ) | int Y\nY → * T | ε',
+	input: 'int * int',
+	rows: 'T E X Y',
+	columns: 'int * + ( ) $'
+};
+
+/**
+ * The presets of the LL(1) Parsing Table tool that topics open it on, by id,
+ * as the tool's preset module has them. Written out here because that module
+ * loads the grammar engine; the spec compares the two.
+ */
+export const LL1_PRESETS = {
+	table: { ...LL1_DECK, cell: ['E', 'int'] },
+	trace: LL1_DECK,
+	'first-sets': { ...LL1_DECK, setStep: 0 },
+	// The first step of Follow (the tool's FOLLOW_START), once the First sets are done.
+	'follow-sets': { ...LL1_DECK, setStep: 42 },
+	'left-factor': {
+		...LL1_DECK,
+		grammar: 'E → T + E | T\nT → int | int * T | ( E )',
+		names: { 'E’': 'X', 'T’': 'Y' }
+	},
+	'bottom-up': {
+		grammar: 'E → E + ( E ) | int',
+		input: 'int + ( int )',
+		cell: ['E', 'int'],
+		step: 2
+	}
+} satisfies Record<string, LL1PresetValue>;
+
+/**
+ * The LL(1) Parsing Table tool on one of its presets, with the preset's id, so
+ * the tool shows the slide's note and questions. The chip names the token
+ * string, grammar, table entry or computation the link opens on.
+ */
+function ll1On(id: keyof typeof LL1_PRESETS, example: string, code = true): TopicLink {
+	const state = { ...LL1_PRESETS[id], preset: id };
+	return linked('ll1', state, example, code);
+}
+
+/**
+ * The Shift-Reduce Parsing tool on one of its presets: the preset's grammar,
+ * token string and view, by which the tool knows the preset and shows its
+ * note. Without that preset the link opens the tool as it first loads.
+ */
+function shiftReduceOn(id: string, example: string, code = false): TopicLink {
+	const preset = shiftReducePresets.find((p) => p.id === id);
+	if (!preset) return tool('shift-reduce');
+	const state = { ...preset.value };
+	return linked('shift-reduce', state, example, code);
+}
+
+/** Bottom-up Parsing II, slides 4–14: the token string of the shift-reduce example. */
+const LR1_INPUT = 'int + ( int ) + ( int )';
+/** Bottom-up Parsing II, slide 4. */
+const LR1_DECK_14 = { grammar: 'E → E + ( E ) | int', input: LR1_INPUT };
+/** Bottom-up Parsing III, slide 4: E → int first. */
+const LR1_DECK_15 = { grammar: 'E → int | E + ( E )', input: LR1_INPUT };
+
+/**
+ * The presets of the LR(1) Parser Builder that topics open it on, by id, as
+ * the tool's preset module has them. Written out here because that module
+ * loads the LR(1) engine and the C- parser; the spec compares the two.
+ */
+export const LR1_PRESETS = {
+	'start-context': { ...LR1_DECK_15, order: 'reversed', closureStep: 0 },
+	'extend-context': { ...LR1_DECK_15, seed: 'E → E + ( •E ), +', closureStep: 7 },
+	transition: {
+		...LR1_DECK_15,
+		order: 'reversed',
+		closure: 'transition',
+		from: 3,
+		symbol: '(',
+		closureStep: 0
+	},
+	'item-sets': { ...LR1_DECK_15, order: 'reversed', buildStep: 6 },
+	'table-fragment': { ...LR1_DECK_14, view: 'circles', range: [3, 7] },
+	'lr-parse': { ...LR1_DECK_14, parseStep: 0 }
+} satisfies Record<string, Lr1PresetValue>;
+
+/**
+ * The LR(1) Parser Builder on one of its presets: the preset's own state,
+ * which the tool recognizes as that preset, so it shows the slide's note and
+ * questions. The chip names the preset by its label in the tool's menu.
+ */
+function lr1On(id: keyof typeof LR1_PRESETS, example: string, code = false): TopicLink {
+	return linked('lr1', LR1_PRESETS[id], example, code);
+}
+
+/**
+ * The presets of the Conflicts & Precedence tool that topics open it on, by
+ * id, as the tool's preset module has them (Bottom-up Parsing III, slides 17
+ * and 19–21). Written out here because that module loads the C- parser; the
+ * spec compares the two.
+ */
+export const CONFLICTS_PRESETS = {
+	precedence: {
+		grammar: 'E → E + E | E * E | int',
+		input: 'int + int * int',
+		precedence: "%left '+'\n%left '*'"
+	},
+	'dangling-else': {
+		grammar: 'S → if E then S | if E then S else S | OTHER',
+		input: 'if E then if E then OTHER else OTHER',
+		choices: [[0, 1]]
+	}
+} satisfies Record<string, ConflictsPresetValue>;
+
+/**
+ * The Conflicts & Precedence tool on one of its presets: its grammar, token
+ * string and declarations, by which the tool knows the preset and shows its
+ * note. The chip names the preset by its label in the tool's menu.
+ */
+function conflictsOn(id: keyof typeof CONFLICTS_PRESETS, example: string): TopicLink {
+	return linked('conflicts', CONFLICTS_PRESETS[id], example);
+}
 
 // ---------------------------------------------------------------------------
 // The list
@@ -357,6 +493,16 @@ const PHASES = [tool('phases')];
 /** Phases the C- compiler also carries out on a whole program. */
 const COMPILED = [tool('phases'), tool('cminus')];
 const T_DIAGRAMS = [tool('t-diagrams')];
+/** The LL(1) table of the slides on its [E, int] entry, and the trace of int * int $. */
+const LL1_TABLE = ll1On('table', '[E, int]');
+const LL1_TRACE = ll1On('trace', 'int * int $');
+/** First, then Follow, of the slides' grammar, rule by rule until a pass changes nothing. */
+const FIRST_FOLLOW = [
+	ll1On('first-sets', 'First sets, pass by pass', false),
+	ll1On('follow-sets', 'Follow sets, pass by pass', false)
+];
+/** The sentential forms from int + (int) + (int) down to E, the handle of each marked. */
+const HANDLES = shiftReduceOn('slides-5-10', 'Handles of int + (int) + (int)');
 
 export const sections: readonly Section[] = [
 	{
@@ -486,24 +632,35 @@ export const sections: readonly Section[] = [
 				links: [grammarDerivations(), notation('trees')],
 				sub: ['Derivation defines parse tree', 'One tree can have many derivations']
 			}),
-			topic('Bison', { stars: 1, links: [notation('bison'), notation('declarations')] }),
+			topic('Bison', {
+				stars: 1,
+				links: [
+					conflictsOn('precedence', "%left '+' then %left '*'"),
+					notation('bison'),
+					notation('declarations')
+				]
+			}),
 			topic('ASTs', {
 				stars: 1,
 				links: [tool('rd-predictive'), cminusSyntaxTree(), tool('phases')]
 			}),
-			topic('Ambiguity', { links: [tool('ambiguity'), notation('declarations')] }),
+			topic('Ambiguity', {
+				links: [
+					tool('ambiguity'),
+					conflictsOn('dangling-else', 'Dangling else'),
+					notation('declarations')
+				]
+			}),
 			topic('Precedence cascades', {
 				stars: 1,
 				links: [linked('ambiguity', PRECEDENCE_CASCADE, 'E, T, F', true)]
 			}),
-			// The LL(1) and bottom-up topics link the notation sections that cover them.
-			// The tools for them go at the front of a topic's `links`.
 			topic('Parsing Algorithms', {
 				links: [notation('grammar-classes')],
 				sub: [
 					topic('Top-Down', {
 						sub: [
-							topic('Generate-Match parsing', { links: [tool('rd-backtracking')] }),
+							topic('Generate-Match parsing', { links: [tool('rd-backtracking'), LL1_TRACE] }),
 							topic('RD with backtracking', {
 								links: [tool('rd-backtracking'), notation('descent')]
 							}),
@@ -512,19 +669,27 @@ export const sections: readonly Section[] = [
 							}),
 							topic('Computing First and Follow sets', {
 								stars: 2,
-								links: [notation('first-follow')],
-								sub: ['Fixed-point computations']
+								links: [...FIRST_FOLLOW, notation('first-follow')],
+								sub: [topic('Fixed-point computations', { links: FIRST_FOLLOW })]
 							}),
 							topic('Table Driven LL(1)', {
 								stars: 1,
-								links: [notation('ll1-tables'), notation('ll1-traces')]
+								links: [LL1_TABLE, LL1_TRACE, notation('ll1-tables'), notation('ll1-traces')]
 							})
 						]
 					}),
 					topic('Bottom-Up', {
 						sub: [
-							topic('Shift-Reduce parsing', { links: [notation('shift-reduce')] }),
-							topic('LR(1) algorithm', { stars: 1, links: [notation('lr-tables')] })
+							topic('Shift-Reduce parsing', {
+								links: [
+									shiftReduceOn('slide-14', 'int + (int) + (int)', true),
+									notation('shift-reduce')
+								]
+							}),
+							topic('LR(1) algorithm', {
+								stars: 1,
+								links: [lr1On('lr-parse', 'int + (int) + (int)', true), notation('lr-tables')]
+							})
 						]
 					}),
 					topic('Predictive RD', {
@@ -549,39 +714,64 @@ export const sections: readonly Section[] = [
 								stars: 1,
 								links: [predictiveOn('ast', 'int + int + int'), cminusSyntaxTree()]
 							}),
-							topic('Visitor Design Pattern', { stars: 2 })
+							topic('Visitor Design Pattern', { stars: 2, links: [cminusVisitor()] })
 						]
 					}),
 					topic('Table Driven', {
 						sub: [
 							topic('Remove left recursion (no EBNF)', {
 								stars: 1,
-								links: [predictiveOn('general-form', 'S → S a | S b | c | d')]
+								links: [
+									predictiveOn('general-form', 'S → S a | S b | c | d'),
+									ll1On('bottom-up', 'E → E + ( E ) | int')
+								]
 							}),
-							topic('Left factor (no EBNF)', { stars: 1 }),
-							topic('Explicit stack', { links: [notation('ll1-traces')] }),
-							topic('Generate RHSs/match tokens', { links: [notation('ll1-traces')] }),
+							topic('Left factor (no EBNF)', {
+								stars: 1,
+								links: [ll1On('left-factor', 'E → T + E | T')]
+							}),
+							topic('Explicit stack', { links: [LL1_TRACE, notation('ll1-traces')] }),
+							topic('Generate RHSs/match tokens', { links: [LL1_TRACE, notation('ll1-traces')] }),
 							topic('Computing First/Follow sets', {
 								stars: 2,
-								links: [notation('first-follow')]
+								links: [...FIRST_FOLLOW, notation('first-follow')]
 							}),
-							topic('Building table!', { stars: 2, links: [notation('ll1-tables')] })
+							topic('Building table!', { stars: 2, links: [LL1_TABLE, notation('ll1-tables')] })
 						]
 					})
 				]
 			}),
 			topic('Bottom-Up', {
 				sub: [
-					topic('Reduce string to start symbol', { links: [notation('handles')] }),
-					topic('Produce rightmost derivation in reverse', { links: [notation('handles')] }),
+					topic('Reduce string to start symbol', { links: [HANDLES, notation('handles')] }),
+					topic('Produce rightmost derivation in reverse', {
+						links: [HANDLES, notation('handles')]
+					}),
 					topic('LR(1)', {
 						stars: 2,
+						links: [tool('lr1')],
 						sub: [
-							topic('LR(1) Items', { stars: 1, links: [notation('lr-items')] }),
-							topic('Closure(Items)', { stars: 1, links: [notation('lr-items')] }),
+							topic('LR(1) Items', {
+								stars: 1,
+								links: [lr1On('extend-context', 'Extending E → E + (•E), +'), notation('lr-items')]
+							}),
+							topic('Closure(Items)', {
+								stars: 1,
+								links: [
+									lr1On('start-context', 'Closure({ S → •E, $ })', true),
+									lr1On('transition', 'Transition(3, ( )', true),
+									notation('lr-items')
+								]
+							}),
 							topic('Constructing DFA and table', {
 								stars: 1,
-								links: [notation('lr-items'), notation('lr-tables'), notation('conflicts')]
+								links: [
+									lr1On('item-sets', 'States 0–6 as item sets'),
+									lr1On('table-fragment', 'Table rows 3–7'),
+									notation('lr-items'),
+									notation('lr-tables'),
+									notation('conflicts')
+								]
 							})
 						]
 					})

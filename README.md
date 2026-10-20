@@ -1,7 +1,10 @@
 # CS435 Compiler Tools
 
 Interactive, browser-only tools for CS435 (compiler construction): regular expressions, finite
-automata, scanners, and later the rest of the compiler pipeline.
+automata, scanners and flex; context-free grammars, ambiguity, recursive descent, LL(1) tables,
+shift-reduce and LR(1) parsing, and parse conflicts with bison's precedence declarations; a C-
+compiler with its phases, the TINY Machine, and T-diagrams. `docs/ARCHITECTURE.md` lists the tools
+(§2) and the conventions they follow.
 
 The site is a fully static [SvelteKit](https://svelte.dev/docs/kit) (Svelte 5) app, prerendered with
 `@sveltejs/adapter-static` and deployed to Cloudflare Pages.

@@ -13,6 +13,34 @@ import {
 	type AmbiguityHash
 } from '$lib/tools/ambiguity/state';
 import {
+	presetFor as conflictsPresetFor,
+	presetState as conflictsPresetState,
+	presets as conflictsPresets
+} from '$lib/tools/conflicts/presets';
+import { isConflictsHash, stateFromHash as conflictsState } from '$lib/tools/conflicts/state';
+import {
+	FOLLOW_START,
+	presetFor as ll1PresetFor,
+	presetState as ll1PresetState,
+	presets as ll1Presets
+} from '$lib/tools/ll1/presets';
+import { isLL1Hash, stateFromHash as ll1State } from '$lib/tools/ll1/state';
+import {
+	presetFor as lr1PresetFor,
+	presetState as lr1PresetState,
+	presets as lr1Presets
+} from '$lib/tools/lr1/presets';
+import { isLr1Hash, stateFromHash as lr1State } from '$lib/tools/lr1/state';
+import {
+	presetFor as shiftReducePresetFor,
+	presetState as shiftReducePresetState,
+	presets as shiftReducePresets
+} from '$lib/tools/shift-reduce/presets';
+import {
+	isShiftReduceHash,
+	stateFromHash as shiftReduceState
+} from '$lib/tools/shift-reduce/state';
+import {
 	defaultState as flexDefault,
 	fromLink as flexState,
 	isFlexState
@@ -77,10 +105,14 @@ import Page from './+page.svelte';
 import { ID_SEPARATOR, lines as checklistLines } from './checklist';
 import {
 	CMINUS_SYNTAX_TREE,
+	CMINUS_VISITOR,
+	CONFLICTS_PRESETS,
 	ENDS_IN_ONE,
 	EXAM,
 	FOUR_TUPLE,
 	HAND_CODED_SWITCH,
+	LL1_PRESETS,
+	LR1_PRESETS,
 	NOTATION_SECTIONS,
 	PLAIN_SLUGS,
 	PRECEDENCE_CASCADE,
@@ -88,6 +120,7 @@ import {
 	SUMMARY,
 	SYNTAX_TREE,
 	TITLE,
+	VISITOR_TAB,
 	allTopics,
 	chipFor,
 	chipsFor,
@@ -261,6 +294,14 @@ function opened(text: string, slug: string) {
 
 const stateOf = (text: string, slug: string): unknown => opened(text, slug).state;
 
+/** The links of a line to one tool on a state, in order. */
+const openedAll = (text: string, slug: string) =>
+	line(text).links.flatMap((l) => (l.kind === 'tool' && l.slug === slug && l.open ? [l] : []));
+
+/** The key of a table of written-out presets whose entry a link's state is. */
+const keyOf = (table: Record<string, unknown>, state: unknown) =>
+	Object.keys(table).find((key) => table[key] === state);
+
 /** What the links of a line read as: "Tool: Scanner Rules · new foo". */
 const chipTexts = (text: string) =>
 	chipsFor(line(text).links).map(
@@ -394,7 +435,8 @@ describe('the list', () => {
 		expect(isInline(line('Disambiguation').sub)).toBe(false);
 		expect(isInline(line('Flex').sub)).toBe(false);
 		expect(isInline(line('Parsing Algorithms').sub)).toBe(false);
-		expect(isInline(line('Computing First and Follow sets').sub)).toBe(true);
+		expect(isInline(line('Derivations').sub)).toBe(true);
+		expect(isInline(line('Computing First and Follow sets').sub)).toBe(false);
 		expect(isInline(line('Parsing › Bottom-Up').sub)).toBe(false);
 	});
 });
@@ -479,20 +521,44 @@ describe('tool links', () => {
 			'Chomsky Hierarchy': ['grammar'],
 			Derivations: ['grammar'],
 			'Parse trees and relation to derivations': ['grammar'],
+			Bison: ['conflicts'],
 			ASTs: ['rd-predictive', 'cminus', 'phases'],
-			Ambiguity: ['ambiguity'],
+			Ambiguity: ['ambiguity', 'conflicts'],
 			'Precedence cascades': ['ambiguity'],
-			'Generate-Match parsing': ['rd-backtracking'],
+			'Generate-Match parsing': ['rd-backtracking', 'll1'],
 			'RD with backtracking': ['rd-backtracking'],
 			'Top-Down › Predictive RD': ['rd-predictive'],
+			'Computing First and Follow sets': ['ll1', 'll1'],
+			'Fixed-point computations': ['ll1', 'll1'],
+			'Table Driven LL(1)': ['ll1', 'll1'],
+			'Shift-Reduce parsing': ['shift-reduce'],
+			'LR(1) algorithm': ['lr1'],
 			'Parsing Algorithms › Predictive RD': ['rd-predictive'],
 			'Left factoring (use EBNF)': ['rd-predictive'],
 			'Remove left recursion (use EBNF)': ['rd-predictive'],
 			Associativity: ['rd-predictive', 'rd-predictive'],
 			'Building AST': ['rd-predictive', 'cminus'],
-			'Remove left recursion (no EBNF)': ['rd-predictive']
+			'Visitor Design Pattern': ['cminus'],
+			'Remove left recursion (no EBNF)': ['rd-predictive', 'll1'],
+			'Left factor (no EBNF)': ['ll1'],
+			'Explicit stack': ['ll1'],
+			'Generate RHSs/match tokens': ['ll1'],
+			'Computing First/Follow sets': ['ll1', 'll1'],
+			'Building table!': ['ll1'],
+			'Reduce string to start symbol': ['shift-reduce'],
+			'Produce rightmost derivation in reverse': ['shift-reduce'],
+			'LR(1)': ['lr1'],
+			'LR(1) Items': ['lr1'],
+			'Closure(Items)': ['lr1', 'lr1'],
+			'Constructing DFA and table': ['lr1', 'lr1']
 		};
 		for (const [text, tools] of Object.entries(expected)) expect(slugs(text), text).toEqual(tools);
+	});
+
+	it('give a line at most three tool chips', () => {
+		for (const topic of lines) {
+			expect(topic.links.filter(isTool).length, topic.text).toBeLessThanOrEqual(3);
+		}
 	});
 
 	it('link Tokens vs. lexemes, Lookahead and Disambiguation to the Scanner Rules tool, each on its own row', () => {
@@ -535,42 +601,45 @@ describe('tool links', () => {
 			'Assembly vs. High-level',
 			'C- Scanner',
 			'Top-Down',
-			'Fixed-point computations',
 			'Parsing Algorithms › Bottom-Up',
-			'Visitor Design Pattern',
 			'Table Driven',
-			'Left factor (no EBNF)',
-			'Parsing › Bottom-Up',
-			'LR(1)'
+			'Parsing › Bottom-Up'
 		]) {
 			expect(line(text).links, text).toEqual([]);
 		}
 	});
 
-	it('leave out the LL(1) and bottom-up parsing tools: those topics link notation sections', () => {
-		const pending = ['ll1', 'shift-reduce', 'lr1', 'conflicts'];
-		for (const link of toolLinks) expect(pending, link.slug).not.toContain(link.slug);
+	it('link the LL(1) and bottom-up topics to their tools, ahead of the notation sections', () => {
+		const parsing = ['ll1', 'shift-reduce', 'lr1', 'conflicts'];
+		for (const slug of parsing) expect(toolBySlug(slug), slug).toBeDefined();
 		for (const text of [
 			'Computing First and Follow sets',
+			'Fixed-point computations',
 			'Table Driven LL(1)',
 			'Shift-Reduce parsing',
 			'LR(1) algorithm',
+			'Remove left recursion (no EBNF)',
+			'Left factor (no EBNF)',
 			'Explicit stack',
 			'Generate RHSs/match tokens',
 			'Computing First/Follow sets',
 			'Building table!',
 			'Reduce string to start symbol',
 			'Produce rightmost derivation in reverse',
+			'LR(1)',
 			'LR(1) Items',
 			'Closure(Items)',
-			'Constructing DFA and table'
+			'Constructing DFA and table',
+			'Bison'
 		]) {
-			const links = line(text).links;
-			expect(links.length, text).toBeGreaterThan(0);
+			const kinds = line(text).links.map((l) => l.kind);
+			const tools = line(text).links.filter(isTool);
 			expect(
-				links.every((l) => l.kind === 'notation'),
+				tools.some((l) => parsing.includes(l.slug)),
 				text
 			).toBe(true);
+			// The tools first, then the notation sections.
+			expect(kinds, text).toEqual([...kinds].sort((a, b) => (a === b ? 0 : a === 'tool' ? -1 : 1)));
 		}
 	});
 });
@@ -588,10 +657,14 @@ describe('the state a link opens its tool on', () => {
 			phases: isPhasesHash,
 			't-diagrams': isTDiagramsHash,
 			'rd-predictive': isPredictiveHash,
-			cminus: isCminusHash
+			cminus: isCminusHash,
+			ll1: isLL1Hash,
+			'shift-reduce': isShiftReduceHash,
+			lr1: isLr1Hash,
+			conflicts: isConflictsHash
 		};
 		const withState = toolLinks.filter((l) => l.open !== undefined);
-		expect(withState.length).toBeGreaterThan(12);
+		expect(withState.length).toBeGreaterThan(40);
 		for (const link of withState) {
 			if (link.open === undefined) continue;
 			expect(accepts[link.slug], link.slug).toBeDefined();
@@ -718,10 +791,15 @@ describe('the state a link opens its tool on', () => {
 	});
 
 	it('is named by an input, a view or a title, never by a question from a slide', () => {
-		const questions = new Set(
-			grammarPresets.flatMap((p) => (p.questions ?? []).map((q) => q.question))
+		const prompts = [ll1Presets, shiftReducePresets, lr1Presets, conflictsPresets].flatMap((list) =>
+			list.flatMap((p) => (p.questions ?? []).map((q) => q.prompt))
 		);
+		const questions = new Set([
+			...grammarPresets.flatMap((p) => (p.questions ?? []).map((q) => q.question)),
+			...prompts
+		]);
 		expect(questions).toContain('N ? T ? S ?');
+		expect(questions).toContain('Consider the [E, int] entry');
 		for (const link of toolLinks) {
 			if (link.open === undefined) continue;
 			const where = `${link.slug}: ${link.example}`;
@@ -791,6 +869,163 @@ describe('the state a link opens its tool on', () => {
 			'tool: Predictive Recursive Descent',
 			'tool: C- Compiler · Syntax tree',
 			'tool: Compiler Phases'
+		]);
+	});
+
+	it('is the Visitor tab of the C- Compiler, running PrintVisitor on the program it first loads', () => {
+		expect(CMINUS_VISITOR.source).toBe(CMINUS_DEFAULT_PRESET.value.source);
+		expect(CMINUS_VISITOR.input).toBe(CMINUS_DEFAULT_PRESET.value.input);
+		expect(CMINUS_TABS.visitor).toBe(VISITOR_TAB);
+		const link = opened('Visitor Design Pattern', 'cminus');
+		expect(link.state).toBe(CMINUS_VISITOR);
+		expect(link.example).toBe('Visitor');
+		const state = link.state;
+		expect.assert(isCminusHash(state));
+		expect(cminusState(state)).toEqual({ ...cminusDefault(), tab: 'visitor', visitor: 'print' });
+		expect(chipTexts('Visitor Design Pattern')).toEqual(['tool: C- Compiler · Visitor']);
+	});
+
+	it('is a preset of the LL(1) Parsing Table tool with its id, named by its input, grammar, entry or label', () => {
+		const ids = (text: string) =>
+			openedAll(text, 'll1').map((l) => (l.state as { preset?: string }).preset);
+		expect({
+			'Generate-Match parsing': ids('Generate-Match parsing'),
+			'Computing First and Follow sets': ids('Computing First and Follow sets'),
+			'Fixed-point computations': ids('Fixed-point computations'),
+			'Table Driven LL(1)': ids('Table Driven LL(1)'),
+			'Remove left recursion (no EBNF)': ids('Remove left recursion (no EBNF)'),
+			'Left factor (no EBNF)': ids('Left factor (no EBNF)'),
+			'Explicit stack': ids('Explicit stack'),
+			'Generate RHSs/match tokens': ids('Generate RHSs/match tokens'),
+			'Computing First/Follow sets': ids('Computing First/Follow sets'),
+			'Building table!': ids('Building table!')
+		}).toEqual({
+			'Generate-Match parsing': ['trace'],
+			'Computing First and Follow sets': ['first-sets', 'follow-sets'],
+			'Fixed-point computations': ['first-sets', 'follow-sets'],
+			'Table Driven LL(1)': ['table', 'trace'],
+			'Remove left recursion (no EBNF)': ['bottom-up'],
+			'Left factor (no EBNF)': ['left-factor'],
+			'Explicit stack': ['trace'],
+			'Generate RHSs/match tokens': ['trace'],
+			'Computing First/Follow sets': ['first-sets', 'follow-sets'],
+			'Building table!': ['table']
+		});
+		const linked = toolLinks.filter((l) => l.slug === 'll1' && l.open === 'link');
+		expect(new Set(linked.map((l) => l.state)).size).toBe(Object.keys(LL1_PRESETS).length);
+		for (const link of linked) {
+			if (link.open !== 'link') continue;
+			const state = link.state;
+			expect.assert(isLL1Hash(state));
+			const id = state.preset;
+			const preset = ll1Presets.find((p) => p.id === id);
+			expect(preset, `${id}`).toBeDefined();
+			// Written out as the tool has it, and loaded as the tool loads it.
+			expect(LL1_PRESETS[id as keyof typeof LL1_PRESETS], `${id}`).toEqual(preset!.value);
+			const loaded = ll1State(state);
+			expect(loaded, `${id}`).toEqual(ll1PresetState(preset!));
+			expect(ll1PresetFor(loaded)?.id, `${id}`).toBe(id);
+			const cell = preset!.value.cell;
+			expect(link.example, `${id}`).toBe(
+				id === 'table' && cell ? `[${cell[0]}, ${cell[1]}]` : preset!.label
+			);
+			expect(link.code, `${id}`).toBe(!/sets, pass by pass$/.test(link.example));
+		}
+		// First from the start, Follow from its first step, after First is done.
+		expect(LL1_PRESETS['first-sets'].setStep).toBe(0);
+		expect(LL1_PRESETS['follow-sets'].setStep).toBe(FOLLOW_START);
+		// The grammar whose rewrite removes left recursion is left recursive.
+		expect(LL1_PRESETS['bottom-up'].grammar).toMatch(/^E → E /);
+		expect(chipTexts('Table Driven LL(1)')).toEqual([
+			'tool: LL(1) Parsing Table · [E, int]',
+			'tool: LL(1) Parsing Table · int * int $',
+			'notation: LL(1) parsing tables',
+			'notation: LL(1) parse traces'
+		]);
+	});
+
+	it('is a preset of the Shift-Reduce Parsing tool, which it recognizes by its grammar, input and view', () => {
+		const cases = [
+			['Shift-Reduce parsing', 'slide-14', 'trace', true],
+			['Reduce string to start symbol', 'slides-5-10', 'handles', false],
+			['Produce rightmost derivation in reverse', 'slides-5-10', 'handles', false]
+		] as const;
+		for (const [text, id, view, code] of cases) {
+			const link = opened(text, 'shift-reduce');
+			const state = link.state;
+			expect.assert(isShiftReduceHash(state));
+			const loaded = shiftReduceState(state);
+			// The tool reads a link without the preset it was loaded from.
+			const preset = shiftReducePresetFor(loaded);
+			expect(preset?.id, text).toBe(id);
+			expect(loaded, text).toEqual(shiftReducePresetState(preset!));
+			expect(loaded.view, text).toBe(view);
+			expect(link.example, text).toBe(preset!.label);
+			expect(link.code, text).toBe(code);
+		}
+		expect(chipTexts('Reduce string to start symbol')).toEqual([
+			'tool: Shift-Reduce Parsing · Handles of int + (int) + (int)',
+			'notation: Handles'
+		]);
+	});
+
+	it('is a preset of the LR(1) Parser Builder, which it recognizes by the state the link opens', () => {
+		const ids = (text: string) => openedAll(text, 'lr1').map((l) => keyOf(LR1_PRESETS, l.state));
+		expect([
+			ids('LR(1) algorithm'),
+			ids('LR(1) Items'),
+			ids('Closure(Items)'),
+			ids('Constructing DFA and table')
+		]).toEqual([
+			['lr-parse'],
+			['extend-context'],
+			['start-context', 'transition'],
+			['item-sets', 'table-fragment']
+		]);
+		// The head of the four opens the tool as it first loads.
+		expect(line('LR(1)').links).toEqual([{ kind: 'tool', slug: 'lr1' }]);
+		const linked = toolLinks.filter((l) => l.slug === 'lr1' && l.open === 'link');
+		expect(new Set(linked.map((l) => l.state)).size).toBe(Object.keys(LR1_PRESETS).length);
+		for (const link of linked) {
+			if (link.open !== 'link') continue;
+			const id = keyOf(LR1_PRESETS, link.state);
+			const preset = lr1Presets.find((p) => p.id === id);
+			expect(preset, `${id}`).toBeDefined();
+			expect(link.state, `${id}`).toEqual(preset!.value);
+			const state = link.state;
+			expect.assert(isLr1Hash(state));
+			const loaded = lr1State(state);
+			expect(loaded, `${id}`).toEqual(lr1PresetState(preset!));
+			// The tool reads a link without the preset it was loaded from.
+			expect(lr1PresetFor(loaded)?.id, `${id}`).toBe(id);
+			expect(link.example, `${id}`).toBe(preset!.label);
+			expect(link.code, `${id}`).toBe(/^(Closure|Transition)\(|^int /.test(link.example));
+		}
+	});
+
+	it('is a preset of the Conflicts & Precedence tool, which it recognizes by its grammar, input and declarations', () => {
+		const cases = [
+			['Bison', 'precedence'],
+			['Ambiguity', 'dangling-else']
+		] as const;
+		expect(Object.keys(CONFLICTS_PRESETS).sort()).toEqual(cases.map((c) => c[1]).sort());
+		for (const [text, id] of cases) {
+			const link = opened(text, 'conflicts');
+			expect(link.state, text).toBe(CONFLICTS_PRESETS[id]);
+			const preset = conflictsPresets.find((p) => p.id === id)!;
+			expect(link.state, text).toEqual(preset.value);
+			const state = link.state;
+			expect.assert(isConflictsHash(state));
+			const loaded = conflictsState(state);
+			expect(loaded, text).toEqual(conflictsPresetState(preset));
+			expect(conflictsPresetFor(loaded)?.id, text).toBe(id);
+			expect(link.example, text).toBe(preset.label);
+			expect(link.code, text).toBe(false);
+		}
+		expect(chipTexts('Bison')).toEqual([
+			"tool: Conflicts & Precedence · %left '+' then %left '*'",
+			'notation: Precedence in bison',
+			'notation: Disambiguating declarations'
 		]);
 	});
 
@@ -1098,6 +1333,17 @@ describe('the contract', () => {
 		expect(doc).toContain('src/routes/midterm/topics.ts');
 		for (const module of new Set(imports.map((i) => i.module)))
 			expect(doc, module).toMatch(new RegExp(`\\b${module}\\.ts\\b`));
+	});
+
+	it('reads only the types of the preset modules that load an engine, and writes those presets out', () => {
+		// These modules load the grammar engine, the LR(1) engine or the C- compiler.
+		const heavy = ['ambiguity', 'cminus', 'conflicts', 'll1', 'lr1'];
+		for (const { typeOnly, folder, module } of imports) {
+			if (heavy.includes(folder)) expect(typeOnly, `${folder}/${module}`).toBe(true);
+		}
+		expect(imports.filter((i) => i.folder === 'shift-reduce')).toEqual([
+			{ typeOnly: false, folder: 'shift-reduce', module: 'presets' }
+		]);
 	});
 
 	it('names the tools it opens on a view of their own, which have no LinkStates entry', () => {

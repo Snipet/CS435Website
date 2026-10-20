@@ -25,6 +25,7 @@
 		type CompareResult
 	} from '$lib/tools/rd-predictive/compare';
 	import Findings from '$lib/tools/rd-predictive/Findings.svelte';
+	import { rewriteTargets } from '$lib/tools/rd-predictive/links';
 	import {
 		formFor,
 		readAst,
@@ -234,23 +235,23 @@
 		if (!source.grammar) return [];
 		const plain = withoutMarker(form.input);
 		const state = plain ? { grammar: form.grammar, input: plain } : { grammar: form.grammar };
-		return (['rd-backtracking', 'grammar'] as const).flatMap((slug) => {
+		return (['rd-backtracking', 'grammar', 'll1'] as const).flatMap((slug) => {
 			const title = toolBySlug(slug)?.title;
 			const href = toolLink(slug, state);
 			return title && href ? [{ title, href }] : [];
 		});
 	});
-	// A result without brackets is a plain grammar, which the backtracking parser can take.
+	// The result opens in the backtracking parser when it is a plain grammar (no brackets), and
+	// in the LL(1) table written in BNF.
 	const rewriteLinks = $derived.by(() => {
-		const rewrite = source.rewrite;
-		if (!rewrite || rewrite.brackets || rewrite.changes.length === 0) return [];
-		const title = toolBySlug('rd-backtracking')?.title;
+		if (!source.rewrite) return [];
 		const plain = withoutMarker(form.input);
-		const href = toolLink(
-			'rd-backtracking',
-			plain ? { grammar: rewrite.text, input: plain } : { grammar: rewrite.text }
-		);
-		return title && href ? [{ title: `Open the result in ${title}`, href }] : [];
+		return rewriteTargets(source.rewrite).flatMap(({ slug, grammar, converted }) => {
+			const title = toolBySlug(slug)?.title;
+			const href = toolLink(slug, plain ? { grammar, input: plain } : { grammar });
+			const what = converted ? 'the result in BNF' : 'the result';
+			return title && href ? [{ title: `Open ${what} in ${title}`, href }] : [];
+		});
 	});
 </script>
 
@@ -284,7 +285,7 @@
 					<p class="open-in">
 						Open in
 						{#each openIn as link, i (link.href)}
-							{i > 0 ? ' or ' : ''}
+							{i > 0 ? (i === openIn.length - 1 ? ' or ' : ', ') : ''}
 							<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -- toolLink resolves the path (toolHref) -->
 							<a href={link.href}>{link.title}</a>
 						{/each}

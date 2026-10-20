@@ -14,11 +14,12 @@
 		Updating,
 		WorkerTask
 	} from '$lib/components/ui';
-	import { CMINUS_BNF, type Compilation, type IdentifierMode } from '$lib/theory/cminus';
+	import type { Compilation, IdentifierMode } from '$lib/theory/cminus';
 	import type { Diagnostic } from '$lib/theory/diagnostics';
 	import { tool } from '$lib/tools/catalog/cminus';
 	import '$lib/tools/cminus/cminus.css';
 	import DiagnosticList from '$lib/tools/cminus/DiagnosticList.svelte';
+	import { grammarLinks as grammarLinksOf } from '$lib/tools/cminus/grammar-links';
 	import IrView from '$lib/tools/cminus/IrView.svelte';
 	import LanguageView from '$lib/tools/cminus/LanguageView.svelte';
 	import PhaseStrip from '$lib/tools/cminus/PhaseStrip.svelte';
@@ -325,7 +326,7 @@
 
 	// ---- Links -------------------------------------------------------------------
 
-	const grammarHref = toolLink('grammar', { grammar: CMINUS_BNF });
+	const grammarLinks = grammarLinksOf();
 	const machineHref = $derived.by(() => {
 		const input = model.input;
 		return (listing: string) => toolLink('tiny-vm', { program: listing, input });
@@ -449,7 +450,7 @@
 						{@const tab = id as TabId}
 						<div class={['cm-view', { 'stale-data': stale }]} aria-busy={stale}>
 							{#if tab === 'language'}
-								<LanguageView identifiers={model.identifiers} {grammarHref} />
+								<LanguageView identifiers={model.identifiers} {grammarLinks} />
 							{:else if !c}
 								<p class="cm-note">
 									{#if tooLarge}
@@ -483,7 +484,7 @@
 										onselect={select}
 									/>
 								{:else if tab === 'syntax'}
-									<SyntaxView {c} {marks} {selection} {selKey} {grammarHref} onselect={select} />
+									<SyntaxView {c} {marks} {selection} {selKey} {grammarLinks} onselect={select} />
 								{:else if tab === 'visitor'}
 									<VisitorView
 										{c}
