@@ -44,9 +44,16 @@ export interface LinkStates {
 	lr1: { grammar: string; input?: string };
 	/**
 	 * `precedence` holds bison declarations, one per line (`%left '+'`); a
-	 * later line binds tighter.
+	 * later line binds tighter. `choices` are the actions the other parse puts
+	 * in conflicting entries: [conflict, action], the conflict by its index in
+	 * the table's conflicts and the action 0 or 1 in the order of its items.
 	 */
-	conflicts: { grammar: string; input?: string; precedence?: string };
+	conflicts: {
+		grammar: string;
+		input?: string;
+		precedence?: string;
+		choices?: [number, 0 | 1][];
+	};
 	/** `source` is C- program text; `input` is the program's input numbers, space-separated. */
 	cminus: { source: string; input?: string };
 	/** `program` is TM assembly text; `input` is the input queue, space-separated. */

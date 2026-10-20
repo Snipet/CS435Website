@@ -2218,7 +2218,10 @@ other tools start to link to on a state gets a `LinkStates` entry.
 The parsing tools share one shape: `{ grammar, input? }`, where `grammar` is
 grammar text in lecture notation (§3.10) and `input` a space-separated token
 string. `conflicts` adds `precedence`, bison declarations one per line
-(`%left '+'`, later lines binding tighter, as in Bottom-up Parsing III).
+(`%left '+'`, later lines binding tighter, as in Bottom-up Parsing III), and
+`choices`, the actions the other parse puts in conflicting entries
+(`[conflict, action]`, as a preset's `choices`), so that a link opening one of
+its presets can show that preset's other parse.
 
 The parsing tools open each other on their grammar, and on their token string
 while it has no errors (an "Open in …" line under the grammar, or a link
