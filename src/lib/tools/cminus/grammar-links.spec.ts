@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { CMINUS_BNF } from '$lib/theory/cminus';
 import { parseGrammar, tokenizeInput } from '$lib/theory/grammar';
-import { presetFor as conflictsPresetFor } from '$lib/tools/conflicts/presets';
+import {
+	presetFor as conflictsPresetFor,
+	presetState as conflictsPresetState
+} from '$lib/tools/conflicts/presets';
 import { isConflictsHash, stateFromHash as conflictsState } from '$lib/tools/conflicts/state';
 import { isGrammarHash } from '$lib/tools/grammar/state';
-import { presetFor as lr1PresetFor, presets as lr1Presets } from '$lib/tools/lr1/presets';
+import {
+	presetFor as lr1PresetFor,
+	presets as lr1Presets,
+	presetState as lr1PresetState
+} from '$lib/tools/lr1/presets';
 import { isLr1Hash, stateFromHash as lr1State } from '$lib/tools/lr1/state';
 import { decode } from '$lib/url-state';
 import { CONFLICTS_INPUT, LR1_INPUT, grammarLinks } from './grammar-links';
@@ -41,6 +48,7 @@ describe('grammarLinks', () => {
 		const preset = lr1Presets.find((p) => p.value.grammar === CMINUS_BNF);
 		expect(preset?.value.input).toBe(LR1_INPUT);
 		expect(lr1PresetFor(state)?.id).toBe(preset!.id);
+		expect(state).toEqual(lr1PresetState(preset!));
 	});
 
 	it('opens Conflicts & Precedence on its C- preset', () => {
@@ -48,6 +56,8 @@ describe('grammarLinks', () => {
 		expect(isConflictsHash(value)).toBe(true);
 		const state = conflictsState(value as never);
 		expect(state).toMatchObject({ grammar: CMINUS_BNF, input: CONFLICTS_INPUT, precedence: '' });
-		expect(conflictsPresetFor(state)?.id).toBe('cminus');
+		const preset = conflictsPresetFor(state);
+		expect(preset?.id).toBe('cminus');
+		expect(state).toEqual(conflictsPresetState(preset!));
 	});
 });

@@ -422,14 +422,17 @@ const opens = <S extends ParsingTool>(
 	what
 });
 
+/** The token string of slide 12's trace, `int * int`: the LL(1) sections open the tool on it. */
+const ll1Input = ll1Trace[0].input.slice(0, -1).join(' ');
+
 /** The grammar of slides 18–21 of Bottom-up Parsing III. */
 const ambiguousGrammar = conflictExamples[0].grammar;
 
 /** The tool that runs the example of each section, and the state it opens on. */
 export const sectionTools: Record<ParsingSectionId, SectionTool> = {
-	'first-follow': opens('ll1', { grammar: ll1Grammar }, 'this grammar'),
-	'll1-tables': opens('ll1', { grammar: ll1Grammar }, 'this table’s grammar'),
-	'll1-traces': opens('ll1', { grammar: ll1Grammar, input: 'int * int' }, 'this trace'),
+	'first-follow': opens('ll1', { grammar: ll1Grammar, input: ll1Input }, 'this grammar'),
+	'll1-tables': opens('ll1', { grammar: ll1Grammar, input: ll1Input }, 'this table’s grammar'),
+	'll1-traces': opens('ll1', { grammar: ll1Grammar, input: ll1Input }, 'this trace'),
 	handles: opens(
 		'shift-reduce',
 		{ grammar: bottomUpGrammar, input: 'int + ( int )' },
@@ -450,9 +453,10 @@ export const sectionTools: Record<ParsingSectionId, SectionTool> = {
 		{ grammar: bottomUpGrammar, input: 'int + ( int ) + ( int )' },
 		'this table’s grammar'
 	),
+	// The preset of slides 18–21, with its other parse: reduce E → E * E on + (conflict 2).
 	conflicts: opens(
 		'conflicts',
-		{ grammar: ambiguousGrammar, input: 'int * int + int' },
+		{ grammar: ambiguousGrammar, input: 'int * int + int', choices: [[2, 1]] },
 		'the ambiguous expression grammar'
 	),
 	bison: opens(

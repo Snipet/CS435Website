@@ -76,6 +76,9 @@ src/
     midterm/+page.svelte      midterm review list; topics.ts holds the list and its links,
                               checklist.ts the line ids and views of its checklist
     <slug>/+page.svelte       one route per tool
+    <slug>/page.spec.ts       the page rendered on the server, opened on a link (linked-page.ts)
+    linked-page.ts            for those specs: loads a state into a page as a link does, and
+                              reads the links the page shows (not a route)
 docs/ARCHITECTURE.md          this file
 ```
 
@@ -146,7 +149,9 @@ logic. Tools never edit each other's folders. Anything two tools need goes into
 notation page ends each section of "LL(1) and bottom-up parsing" with a link
 that opens the section's example in the tool that runs it (`sectionTools` in
 `notation/parsing-notation.ts`, built with `toolLink` from `LinkStates` shapes
-only); its spec checks each state against the tool's validator. The
+only), with a token string of the grammar's language, so that each tool
+opens on a parse that succeeds; its spec checks each state against the tool's
+validator and parses the string. The
 midterm page links each topic of the review list to the tools and notation
 sections that cover it. To open a tool on one of that tool's own presets or
 views, `src/routes/midterm/topics.ts` imports from tool folders, read-only, and
@@ -2245,7 +2250,15 @@ beside the result it is about):
   opens on its preset (`cminus/grammar-links.ts`).
 
 The spec of each of these modules decodes its links and checks them with the
-target tool's hash validator.
+target tool's hash validator. A link that opens one of the target tool's
+presets opens it as the preset does: its spec compares the state the tool
+makes of the link with the preset's state, not only the preset's id. Each
+page decides when it shows a link and what the link carries (a grammar
+without errors, a token string without errors, declarations that have
+operators). The page specs (`src/routes/<slug>/page.spec.ts`) check those
+rules: they render the page on the server opened on a link and read the links
+it shows. `src/routes/linked-page.ts` stands in for `syncToHash` there and
+puts the state the tool makes of the link into the page.
 
 ### 5.2 Graph components (`$lib/components/graph/`)
 

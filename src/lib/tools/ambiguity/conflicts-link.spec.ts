@@ -4,7 +4,10 @@ import {
 	bisonSymbol as conflictsBisonSymbol,
 	readPrecedenceText
 } from '$lib/tools/conflicts/precedence';
-import { presetFor as conflictsPresetFor } from '$lib/tools/conflicts/presets';
+import {
+	presetFor as conflictsPresetFor,
+	presetState as conflictsPresetState
+} from '$lib/tools/conflicts/presets';
 import { isConflictsHash, stateFromHash as conflictsState } from '$lib/tools/conflicts/state';
 import { toolLink } from '$lib/tools/links';
 import { decode } from '$lib/url-state';
@@ -87,7 +90,9 @@ describe('conflictsState', () => {
 		const value = decode(href.split('#')[1]);
 		expect(isConflictsHash(value)).toBe(true);
 		const opened = conflictsState(value as never);
-		expect(conflictsPresetFor(opened)?.id).toBe('precedence');
+		const preset = conflictsPresetFor(opened);
+		expect(preset?.id).toBe('precedence');
+		expect(opened).toEqual(conflictsPresetState(preset!));
 	});
 
 	it.each(presets.map((p) => [p.id, p] as const))(

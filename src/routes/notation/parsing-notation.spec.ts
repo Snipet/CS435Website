@@ -17,6 +17,8 @@ import {
 	firstOfSequence,
 	firstSets,
 	followSets,
+	ll1Parse,
+	ll1Table as ll1TableOf,
 	makeGrammar,
 	parseGrammar,
 	parseTrees,
@@ -56,7 +58,10 @@ import {
 	type SectionTool,
 	type ShiftReduceRow
 } from './parsing-notation';
-import { presetFor as conflictsPresetFor } from '$lib/tools/conflicts/presets';
+import {
+	presetFor as conflictsPresetFor,
+	presetState as conflictsPresetState
+} from '$lib/tools/conflicts/presets';
 import { isConflictsHash, stateFromHash as conflictsState } from '$lib/tools/conflicts/state';
 import { isLL1Hash, stateFromHash as ll1State } from '$lib/tools/ll1/state';
 import { isLr1Hash, stateFromHash as lr1State } from '$lib/tools/lr1/state';
@@ -511,13 +516,19 @@ describe('section tools', () => {
 			expect(path, id).toBe(`/${slug}`);
 			const opened = opens[slug](decode(hash));
 			expect(opened, id).toMatchObject(state);
+			// A string of the grammar's language, so the tool lands on a parse that succeeds.
 			const g = grammar(opened!.grammar);
-			expect(tokenizeInput(opened!.input, g.terminals).diagnostics, id).toEqual([]);
+			const typed = tokenizeInput(opened!.input, g.terminals);
+			expect(typed.diagnostics, id).toEqual([]);
+			expect(typed.tokens.length, id).toBeGreaterThan(0);
+			expect(parseTrees(g, typed.tokens).trees.length, id).toBeGreaterThan(0);
+			if (slug === 'll1') expect(ll1Parse(ll1TableOf(g), typed.tokens).outcome, id).toBe('accept');
 		}
 	});
 
 	it('uses the grammars and strings of the sections', () => {
-		expect(sectionTools['ll1-traces'].state).toEqual({ grammar: ll1Grammar, input: 'int * int' });
+		for (const id of ['first-follow', 'll1-tables', 'll1-traces'] as const)
+			expect(sectionTools[id].state, id).toEqual({ grammar: ll1Grammar, input: 'int * int' });
 		expect(ll1Trace[0].input.join(' ')).toBe('int * int $');
 		expect(sectionTools.handles.state).toEqual({
 			grammar: bottomUpGrammar,
@@ -527,12 +538,19 @@ describe('section tools', () => {
 		expect(sectionTools.conflicts.state.grammar).toBe(conflictExamples[0].grammar);
 	});
 
-	it('opens the conflicts examples on the presets of the same slides', () => {
-		const presetOf = (id: ParsingSectionId) => {
+	it('opens the conflicts examples on the presets of the same slides, as the presets open', () => {
+		const expected: [ParsingSectionId, string][] = [
+			['conflicts', 'ambiguous'],
+			['bison', 'precedence']
+		];
+		for (const [id, presetId] of expected) {
 			const value = decode(sectionLink(id)!.href.split('#')[1]);
-			return conflictsPresetFor(conflictsState(value as never))?.id;
-		};
-		expect(presetOf('conflicts')).toBe('ambiguous');
-		expect(presetOf('bison')).toBe('precedence');
+			expect(isConflictsHash(value), id).toBe(true);
+			const opened = conflictsState(value as never);
+			const preset = conflictsPresetFor(opened);
+			expect(preset?.id, id).toBe(presetId);
+			// Including the other parse the preset's note describes.
+			expect(opened, id).toEqual(conflictsPresetState(preset!));
+		}
 	});
 });
