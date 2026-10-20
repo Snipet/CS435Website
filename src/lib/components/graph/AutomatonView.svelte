@@ -1504,7 +1504,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		fill: var(--epsilon);
 	}
 	.label.dead text {
-		fill: var(--dead);
+		fill: var(--dead-text);
 	}
 	.label.taken text {
 		fill: var(--active-text);
@@ -1577,7 +1577,7 @@ set, only a change of `viewKey` refits. `fit()` refits on demand.
 		stroke-dasharray: 4 3;
 	}
 	.state.trap .name {
-		fill: var(--dead);
+		fill: var(--dead-text);
 	}
 	.state.active .shape {
 		fill: var(--active-soft);

@@ -64,7 +64,7 @@
 		{/each}
 	</ol>
 
-	<aside class="aside">
+	<div class="aside">
 		<div class="try">
 			<p class="try-head">Try, e.g.,</p>
 			<code class="cmd">gcc -v Prog.c</code>
@@ -83,7 +83,7 @@
 				</p>
 			</Disclosure>
 		</div>
-	</aside>
+	</div>
 </div>
 
 <style>

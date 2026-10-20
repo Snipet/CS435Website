@@ -40,11 +40,12 @@
 	--duration: 160ms;
 
 	/*
-	 * Light palette. Contrast (WCAG AA): --text-3, --dead and every semantic and
-	 * token color used for text reach 4.5:1 on --bg, --surface, --surface-2 and
-	 * each -soft fill (--text-3 also on --surface-3), and so do the dark values
-	 * below. --active is for strokes and fills (3:1 on --bg, --surface and
-	 * --surface-2); text in the active color uses --active-text.
+	 * Light palette. Contrast (WCAG AA): --text-3, --dead-text and every semantic
+	 * and token color used for text reach 4.5:1 on --bg, --surface, --surface-2,
+	 * --surface-3 and each -soft fill, and so do the dark values below. --active
+	 * and --dead are for strokes and fills (3:1 on --bg, --surface and
+	 * --surface-2, --active also on --active-soft; --dead stays fainter than
+	 * --edge); text in those colors uses --active-text and --dead-text.
 	 * scripts/contrast-audit.mjs measures every page.
 	 */
 	--bg: #fbfaf8;
@@ -70,7 +71,7 @@
 	--active-text: #955900;
 	--accept: #07793e;
 	--accept-soft: #e2f3e8;
-	--reject: #bf3a26;
+	--reject: #bb3824;
 	--reject-soft: #fbe7e3;
 	--epsilon: #7556bc;
 	--epsilon-soft: #efe9fa;
@@ -79,7 +80,8 @@
 	--state-fill: #ffffff;
 	--state-stroke: #3a3d45;
 	--edge: #5b5f69;
-	--dead: #64696f;
+	--dead: #868b92;
+	--dead-text: #64696f;
 
 	/* Token palette: colors for rules/tokens in scanners (index mod 6) */
 	--tok-0: #2f64c4;
@@ -134,7 +136,8 @@
 		--state-fill: #1b1d22;
 		--state-stroke: #c9c7c1;
 		--edge: #9c9b96;
-		--dead: #979aa1;
+		--dead: #6c6f76;
+		--dead-text: #979aa1;
 		--tok-0: #86abf0;
 		--tok-0-soft: #1d2a45;
 		--tok-1: #5fcca3;
@@ -184,7 +187,8 @@
 	--state-fill: #1b1d22;
 	--state-stroke: #c9c7c1;
 	--edge: #9c9b96;
-	--dead: #979aa1;
+	--dead: #6c6f76;
+	--dead-text: #979aa1;
 	--tok-0: #86abf0;
 	--tok-0-soft: #1d2a45;
 	--tok-1: #5fcca3;

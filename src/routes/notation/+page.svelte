@@ -438,12 +438,12 @@
 	</details>
 
 	<div class="layout">
-		<aside class="toc-side">
+		<div class="toc-side">
 			<nav aria-label="On this page">
 				<p class="toc-title">On this page</p>
 				{@render toc()}
 			</nav>
-		</aside>
+		</div>
 
 		<div class="content">
 			<p class="group-label">{groups[0].title}</p>

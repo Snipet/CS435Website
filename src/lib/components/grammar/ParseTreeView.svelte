@@ -359,7 +359,7 @@
 			fill={c.fg}
 		/>
 	{/if}
-	<text class={['label', mark]} y={BASELINE} font-size={FONT_SIZE}
+	<text class={['label', mark, { dim: dimmed.has(n.id) }]} y={BASELINE} font-size={FONT_SIZE}
 		>{n.label.base}{#if n.label.sub}<tspan dy={SUB_DROP} font-size={FONT_SIZE * SUB_SCALE}
 				>{n.label.sub}</tspan
 			>{/if}</text
@@ -414,12 +414,11 @@
 		{#each layout.nodes as n (n.key)}
 			{@const p = frame.nodes[n.index]}
 			{@const w = boxWidth(n.width)}
-			{@const opacity = p.opacity * (dimmed.has(n.id) ? 0.4 : 1)}
 			{#if interactive && n.node}
 				<g
 					class="node button"
 					transform="translate({p.x} {p.y})"
-					{opacity}
+					opacity={p.opacity}
 					role="button"
 					tabindex={n.index === tabStop ? 0 : -1}
 					aria-label={nodeName(n)}
@@ -431,7 +430,7 @@
 					{@render body(n, w)}
 				</g>
 			{:else}
-				<g class="node" transform="translate({p.x} {p.y})" {opacity} aria-hidden="true">
+				<g class="node" transform="translate({p.x} {p.y})" opacity={p.opacity} aria-hidden="true">
 					{@render body(n, w)}
 				</g>
 			{/if}
@@ -494,6 +493,10 @@
 	}
 	.label.current {
 		font-weight: 700;
+	}
+	/* Dimmed nodes: a quieter color at full opacity (4.5:1); only their lines fade. */
+	.label.dim {
+		fill: var(--text-3);
 	}
 	.hit,
 	.ring {

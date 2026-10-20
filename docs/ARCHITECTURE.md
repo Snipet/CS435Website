@@ -150,7 +150,9 @@ differently.
 ### 3.5 Diagram conventions
 
 - State = circle (ellipse for long names); accepting = double outline; start =
-  arrow in from nowhere; trap = dashed outline.
+  arrow in from nowhere; trap = dashed outline. The trap state's outline and
+  the edges into it are drawn in `--dead` (fainter than `--edge`), its name
+  and their labels in `--dead-text`.
 - Edges curve; parallel symbols merge into one label joined by commas (`0,1`).
 - Self-loops above the state. ε-edges use the `--epsilon` color and label `ε`.
 - Machines read left to right.
@@ -2325,11 +2327,15 @@ $effect(() => task.run(request));
 - Contrast (WCAG AA) in both themes: text 4.5:1, large text and meaningful
   graphics 3:1. The color tokens are chosen for it (`ui/tokens.spec.ts`):
   `--text-3` and the semantic and token colors read as text on `--bg`,
-  `--surface`, `--surface-2` and every `-soft` fill; `--active` is for strokes
-  and fills, and text in the active color takes `--active-text` (`toneStyle`
-  sets `--tone-text` for text in a tone). Dim text with a quieter token, not
-  with `opacity`. With a build in `vite preview` on port 5193,
-  `node scripts/contrast-audit.mjs` measures every text node of every page, in
-  every tab, preset and step, in both themes.
+  `--surface`, `--surface-2`, `--surface-3` and every `-soft` fill; `--active`
+  and `--dead` are for strokes and fills (3:1), and text in those colors takes
+  `--active-text` and `--dead-text` (`toneStyle` sets `--tone-text` for text in
+  a tone). Dim text with a quieter token, not with `opacity`. With a build in
+  `vite preview` on port 5193, `node scripts/contrast-audit.mjs` measures every
+  text node of every page, in every tab, preset and step, in both themes, and
+  fails on a complementary landmark inside another landmark.
+- Landmarks: no `<aside>` (`tools/landmarks.spec.ts`). A note beside a tool's
+  input is a named group (`<div role="group" aria-label>`); a side table of
+  contents is a plain `<div>` around its `<nav>`.
 - Prerendering: every route must prerender (no `window` access at module top
   level; read the URL hash in `onMount`/`$effect`).

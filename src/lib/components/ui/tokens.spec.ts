@@ -1,7 +1,7 @@
 /**
  * Contrast of the color tokens in src/app.css (WCAG AA), in both themes:
  * text colors reach 4.5:1 on every surface and soft fill they are drawn on,
- * --active (strokes, fills, the ↑ pointer) 3:1 on the surfaces.
+ * --active and --dead (strokes, fills, the ↑ pointer) 3:1 on the surfaces.
  * scripts/contrast-audit.mjs checks the rendered pages.
  */
 import { readFileSync } from 'node:fs';
@@ -42,7 +42,7 @@ const TEXT_COLORS = [
 	'--reject',
 	'--epsilon',
 	'--info',
-	'--dead',
+	'--dead-text',
 	'--tok-0',
 	'--tok-1',
 	'--tok-2',
@@ -66,7 +66,16 @@ describe.each([
 		);
 
 	it('has every token the checks name', () => {
-		for (const k of [...TEXT_COLORS, ...SURFACES, '--surface-3', '--text', '--text-2', '--active'])
+		for (const k of [
+			...TEXT_COLORS,
+			...SURFACES,
+			'--surface-3',
+			'--text',
+			'--text-2',
+			'--active',
+			'--dead',
+			'--edge'
+		])
 			expect(p[k], k).toMatch(/^#/);
 		expect(fills.length).toBeGreaterThanOrEqual(11);
 	});
@@ -75,12 +84,25 @@ describe.each([
 		expect(below(['--text', '--text-2', ...TEXT_COLORS], [...SURFACES, ...fills], 4.5)).toEqual([]);
 	});
 
-	it('--text-3 reaches 4.5:1 on --surface-3 too', () => {
-		expect(below(['--text', '--text-2', '--text-3'], ['--surface-3'], 4.5)).toEqual([]);
+	// --surface-3 marks rows (e.g. lr1's "already there" items) whose text keeps its own color.
+	it('text colors reach 4.5:1 on --surface-3 too', () => {
+		expect(below(['--text', '--text-2', ...TEXT_COLORS], ['--surface-3'], 4.5)).toEqual([]);
 	});
 
-	it('--active reaches 3:1 on the surfaces (graphics)', () => {
-		expect(below(['--active'], SURFACES, 3)).toEqual([]);
+	it('--active reaches 3:1 on the surfaces and its soft fill (graphics)', () => {
+		expect(below(['--active'], [...SURFACES, '--active-soft'], 3)).toEqual([]);
+	});
+
+	it('--dead reaches 3:1 on the surfaces (trap outlines and edges)', () => {
+		expect(below(['--dead'], SURFACES, 3)).toEqual([]);
+	});
+
+	it('--dead stays visibly fainter than --edge, and --dead-text reads as text', () => {
+		for (const bg of SURFACES) {
+			expect(contrast(p['--edge'], p[bg]) / contrast(p['--dead'], p[bg]), bg).toBeGreaterThan(1.5);
+			expect(contrast(p['--dead-text'], p[bg]), bg).toBeGreaterThan(contrast(p['--dead'], p[bg]));
+		}
+		expect(contrast(p['--edge'], p['--dead'])).toBeGreaterThan(1.5);
 	});
 
 	it('--text-3 stays quieter than --text-2', () => {

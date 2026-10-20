@@ -4,23 +4,25 @@
  *
  * Loads every route of a running build in headless Chrome through the DevTools
  * protocol, in light and dark (the system setting and the site's theme toggle),
- * walks through each page's tabs, view switches, presets and step controls, and
- * measures the WCAG contrast ratio of every visible text node (HTML and SVG) and
- * form value against its effective background: backgrounds of the ancestors and,
+ * walks through each page's tabs, view switches and presets and through every
+ * step of its step controls, and measures the WCAG contrast ratio of every
+ * visible text node (HTML and SVG) and form value against its effective
+ * background: backgrounds of the ancestors and,
  * in SVG, the shapes painted under the text, composited with opacity. It also
  * lists complementary landmarks that sit inside another landmark.
  *
  *   npm run build && npx vite preview --port 5193 --strictPort &
  *   node scripts/contrast-audit.mjs [--base http://localhost:5193] [--routes ll1,lr1]
  *     [--themes light,dark,toggle-dark,toggle-light] [--json out.json] [--quick]
- *     [--concurrency 4] [--chrome <path>] [--port 5293]
+ *     [--concurrency 4] [--chrome <path>] [--port 5293] [--width 1300] [--max-steps 300]
  *
  * Thresholds: 4.5:1 for text, 3:1 for large text (24 px, or 18.66 px bold) and
  * for arrow or shape glyphs hidden from assistive technology (graphics). Text of
  * disabled controls (WCAG exempts it) and text drawn under 20% opacity (faint
  * placeholders, such as steps still to come) are listed apart. Hover and focus styles
  * and results dimmed while they are recomputed (.stale-data) are not measured.
- * Exits with 1 when any text fails.
+ * Exits with 1 when any text fails or a complementary landmark sits inside another
+ * landmark.
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -39,6 +41,7 @@ const { values: args } = parseArgs({
 		chrome: { type: 'string' },
 		port: { type: 'string', default: '5293' },
 		width: { type: 'string', default: '1300' },
+		'max-steps': { type: 'string', default: '300' },
 		verbose: { type: 'boolean', default: false }
 	}
 });
@@ -63,6 +66,10 @@ const allRoutes = [
 ];
 const routes = args.routes ? args.routes.split(',').map((r) => (r === 'home' ? '' : r)) : allRoutes;
 const themes = args.themes.split(',');
+/** Step walks stop here (then show the last step): a safety net for very long runs. */
+const maxSteps = Number(args['max-steps']);
+/** Walks that reached maxSteps, as "route state". */
+const capped = new Set();
 for (const t of themes) if (!THEMES[t]) throw new Error(`Unknown theme ${t}`);
 
 /* ------------------------------------------------------------------ */
@@ -228,14 +235,16 @@ function auditInPage() {
 		return { text: unpremul(over(T, white)), bg: unpremul(over(B, white)) };
 	}
 
-	/** Fills painted under an SVG text element at (x, y), bottom to top. */
-	function svgLayers(textEl, x, y) {
-		let svg = textEl.closest('svg');
-		while (svg?.parentElement?.closest('svg')) svg = svg.parentElement.closest('svg');
-		const layers = [];
-		if (!svg) return { svg, layers };
+	/**
+	 * The filled shapes of an outermost svg, in document order, with their box on
+	 * screen (measured once per svg: large drawings have thousands of shapes).
+	 */
+	const shapeCache = new Map();
+	function filledShapes(svg) {
+		let list = shapeCache.get(svg);
+		if (list) return list;
+		list = [];
 		for (const sh of svg.querySelectorAll('rect, circle, ellipse, path, polygon')) {
-			if (!(textEl.compareDocumentPosition(sh) & Node.DOCUMENT_POSITION_PRECEDING)) continue;
 			if (sh.closest('defs, marker, clipPath, mask, pattern, symbol')) continue;
 			const s = cs(sh);
 			if (s.display === 'none' || s.visibility !== 'visible') continue;
@@ -244,6 +253,22 @@ function auditInPage() {
 			let a = fill[3] * parseFloat(s.fillOpacity);
 			for (let e = sh; e && e !== svg; e = e.parentElement) a *= parseFloat(cs(e).opacity);
 			if (a <= 0.01) continue;
+			list.push({ sh, box: sh.getBoundingClientRect(), fill, a });
+		}
+		shapeCache.set(svg, list);
+		return list;
+	}
+
+	/** Fills painted under an SVG text element at (x, y), bottom to top. */
+	function svgLayers(textEl, x, y) {
+		let svg = textEl.closest('svg');
+		while (svg?.parentElement?.closest('svg')) svg = svg.parentElement.closest('svg');
+		const layers = [];
+		if (!svg) return { svg, layers };
+		for (const { sh, box, fill, a } of filledShapes(svg)) {
+			// Cheap test first: the point must lie in the shape's box on screen.
+			if (x < box.left - 1 || x > box.right + 1 || y < box.top - 1 || y > box.bottom + 1) continue;
+			if (!(textEl.compareDocumentPosition(sh) & Node.DOCUMENT_POSITION_PRECEDING)) continue;
 			const ctm = sh.getScreenCTM();
 			if (!ctm) continue;
 			const pt = new DOMPoint(x, y).matrixTransform(ctm.inverse());
@@ -257,8 +282,11 @@ function auditInPage() {
 		return { svg, layers };
 	}
 
-	/** Arrows, bullets, shapes and marks: drawn as graphics when hidden from assistive technology. */
-	const GLYPH = /^[\u2190-\u21ff\u2022\u2026\u25a0-\u25ff\u2713\u2717\u00b7\u2212\u27e8\u27e9]+$/u;
+	/**
+	 * Arrows and geometric shapes (▶ ■ ●): drawn as graphics when hidden from assistive
+	 * technology. Text characters (… · − ⟨ ⟩ •) stay text: aria-hidden does not exempt them.
+	 */
+	const GLYPH = /^[\u2190-\u21ff\u25a0-\u25ff\u27f0-\u27ff\u2900-\u297f\u2b00-\u2bff]+$/u;
 	const fails = [];
 	const exempt = [];
 	let checked = 0;
@@ -463,15 +491,16 @@ async function presetInPage(index) {
 	return { count: options.length, label };
 }
 
-async function settleInPage() {
+/** Waits for fonts and for pending results; `step` waits less (a step recomputes nothing). */
+async function settleInPage(step) {
 	const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 	await document.fonts.ready;
-	await sleep(120);
+	await sleep(step ? 30 : 120);
 	for (let i = 0; i < 60; i++) {
 		if (!document.querySelector('[aria-busy="true"], .stale-data')) break;
 		await sleep(100);
 	}
-	await sleep(60);
+	await sleep(step ? 20 : 60);
 }
 
 /* ------------------------------------------------------------------ */
@@ -592,8 +621,8 @@ class Page {
 		await new Promise((r) => setTimeout(r, 250)); // hydration
 		await this.settle();
 	}
-	settle() {
-		return this.eval(settleInPage);
+	settle(step = false) {
+		return this.eval(settleInPage, step);
 	}
 	/** Complementary landmarks inside another landmark, as Chrome maps them. */
 	async nestedComplementary() {
@@ -644,22 +673,29 @@ async function auditRoute(page, route, themeName) {
 		states.push({ state, ...r });
 		if (args.verbose) console.log(`  ${route || 'home'} ${themeName} ${state}: ${r.fails.length}`);
 	};
+	/**
+	 * Every step of every visible step control, from the first (a control may start
+	 * anywhere); past --max-steps, the last step only.
+	 */
 	const steps = async (state) => {
 		if (args.quick) return;
-		// First, third and last step of every visible step control (a control may start anywhere).
 		if ((await page.eval(stepInPage, 'first')) > 0) {
 			await page.settle();
 			await audit(`${state} · first step`);
 		}
-		if ((await page.eval(stepInPage, 'next')) > 0) {
-			await page.settle();
-			await page.eval(stepInPage, 'next');
-			await page.settle();
-			await audit(`${state} · step 3`);
-		}
-		if ((await page.eval(stepInPage, 'last')) > 0) {
-			await page.settle();
-			await audit(`${state} · last step`);
+		let step = 1;
+		while ((await page.eval(stepInPage, 'next')) > 0) {
+			step++;
+			await page.settle(true);
+			await audit(`${state} · step ${step}`);
+			if (step >= maxSteps) {
+				if ((await page.eval(stepInPage, 'last')) > 0) {
+					await page.settle();
+					await audit(`${state} · last step`);
+				}
+				capped.add(`${route || 'home'} ${state}`);
+				break;
+			}
 		}
 	};
 
@@ -691,10 +727,7 @@ async function auditRoute(page, route, themeName) {
 				const { label } = await page.eval(presetInPage, i);
 				await page.settle();
 				await audit(`preset ${label}`);
-				if ((await page.eval(stepInPage, 'last')) > 0) {
-					await page.settle();
-					await audit(`preset ${label} · last step`);
-				}
+				await steps(`preset ${label}`);
 			}
 		}
 	}
@@ -893,11 +926,20 @@ if (landmarkIssues.size) {
 	console.log('\nComplementary landmarks inside another landmark\n');
 	for (const [l, r] of landmarkIssues) console.log(`  ${l}  [${[...r].join(' ')}]`);
 }
+if (capped.size) {
+	console.log(`\nStep walks cut at ${maxSteps} steps (then the last step)\n`);
+	for (const c of capped) console.log(`  ${c}`);
+}
 
 if (args.json) {
 	writeFileSync(args.json, JSON.stringify({ summary, results }, null, 1));
 	console.log(`\nDetails: ${args.json}`);
 }
 
-// Exit with 1 when any text fails, or a route could not be audited.
-if (Object.values(totals).some((n) => n > 0) || results.some((r) => r.error)) process.exitCode = 1;
+// Exit with 1 when any text fails, a landmark is nested, or a route could not be audited.
+if (
+	Object.values(totals).some((n) => n > 0) ||
+	landmarkIssues.size > 0 ||
+	results.some((r) => r.error)
+)
+	process.exitCode = 1;

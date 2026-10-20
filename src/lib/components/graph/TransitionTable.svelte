@@ -268,7 +268,7 @@ headed `other` and comes last.
 	}
 	tr.trap th,
 	tr.trap td {
-		color: var(--dead);
+		color: var(--dead-text);
 	}
 	tr.current th,
 	tr.current td {
