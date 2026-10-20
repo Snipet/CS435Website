@@ -20,7 +20,7 @@
 			>{:else if part.script === 'sup'}<sup>{part.text}</sup>{:else}{part.text}{/if}{/each}
 {/snippet}
 
-<aside class="note" aria-label="About this example">
+<div class="note" role="group" aria-label="About this example">
 	{#if preset.cite}<CitationTag cite={preset.cite} />{/if}
 	<p class="desc">{@render notation(preset.description ?? '')}</p>
 	{#if preset.formula?.length}
@@ -48,7 +48,7 @@
 			{/each}
 		</ul>
 	{/if}
-</aside>
+</div>
 
 <style>
 	.note {
