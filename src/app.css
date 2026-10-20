@@ -39,7 +39,14 @@
 	--ease: cubic-bezier(0.2, 0, 0, 1);
 	--duration: 160ms;
 
-	/* Light palette */
+	/*
+	 * Light palette. Contrast (WCAG AA): --text-3, --dead and every semantic and
+	 * token color used for text reach 4.5:1 on --bg, --surface, --surface-2 and
+	 * each -soft fill (--text-3 also on --surface-3), and so do the dark values
+	 * below. --active is for strokes and fills (3:1 on --bg, --surface and
+	 * --surface-2); text in the active color uses --active-text.
+	 * scripts/contrast-audit.mjs measures every page.
+	 */
 	--bg: #fbfaf8;
 	--surface: #ffffff;
 	--surface-2: #f4f2ee;
@@ -48,7 +55,7 @@
 	--border-strong: #cbc6bd;
 	--text: #1c1d21;
 	--text-2: #484b53;
-	--text-3: #767983;
+	--text-3: #646771;
 	--accent: #2d58b4;
 	--accent-hover: #234894;
 	--accent-soft: #e9effb;
@@ -58,27 +65,28 @@
 	--shadow: 0 1px 3px rgb(20 20 30 / 0.08), 0 4px 12px rgb(20 20 30 / 0.05);
 
 	/* Semantic colors used by the visualizations */
-	--active: #c98a00;
+	--active: #bb7d00;
 	--active-soft: #fdf1d2;
-	--accept: #1e8449;
+	--active-text: #955900;
+	--accept: #07793e;
 	--accept-soft: #e2f3e8;
 	--reject: #bf3a26;
 	--reject-soft: #fbe7e3;
-	--epsilon: #7a5cc2;
+	--epsilon: #7556bc;
 	--epsilon-soft: #efe9fa;
-	--info: #1f7a8c;
+	--info: #137384;
 	--info-soft: #e1f2f5;
 	--state-fill: #ffffff;
 	--state-stroke: #3a3d45;
 	--edge: #5b5f69;
-	--dead: #9aa0a6;
+	--dead: #64696f;
 
 	/* Token palette: colors for rules/tokens in scanners (index mod 6) */
 	--tok-0: #2f64c4;
 	--tok-0-soft: #e7eefb;
-	--tok-1: #15805a;
+	--tok-1: #017853;
 	--tok-1-soft: #dff2ea;
-	--tok-2: #b9540f;
+	--tok-2: #af4a00;
 	--tok-2-soft: #fcebdd;
 	--tok-3: #8248bd;
 	--tok-3-soft: #f1e9fa;
@@ -104,7 +112,7 @@
 		--border-strong: #41454f;
 		--text: #e9e7e2;
 		--text-2: #b8b6b0;
-		--text-3: #8a8983;
+		--text-3: #9b9a94;
 		--accent: #86a8ef;
 		--accent-hover: #a5bff4;
 		--accent-soft: #1e2a45;
@@ -114,6 +122,7 @@
 		--shadow: 0 1px 3px rgb(0 0 0 / 0.4), 0 6px 16px rgb(0 0 0 / 0.3);
 		--active: #f2c14e;
 		--active-soft: #3a3014;
+		--active-text: #f2c14e;
 		--accept: #5cc98c;
 		--accept-soft: #16301f;
 		--reject: #f08069;
@@ -125,7 +134,7 @@
 		--state-fill: #1b1d22;
 		--state-stroke: #c9c7c1;
 		--edge: #9c9b96;
-		--dead: #6b6e75;
+		--dead: #979aa1;
 		--tok-0: #86abf0;
 		--tok-0-soft: #1d2a45;
 		--tok-1: #5fcca3;
@@ -153,7 +162,7 @@
 	--border-strong: #41454f;
 	--text: #e9e7e2;
 	--text-2: #b8b6b0;
-	--text-3: #8a8983;
+	--text-3: #9b9a94;
 	--accent: #86a8ef;
 	--accent-hover: #a5bff4;
 	--accent-soft: #1e2a45;
@@ -163,6 +172,7 @@
 	--shadow: 0 1px 3px rgb(0 0 0 / 0.4), 0 6px 16px rgb(0 0 0 / 0.3);
 	--active: #f2c14e;
 	--active-soft: #3a3014;
+	--active-text: #f2c14e;
 	--accept: #5cc98c;
 	--accept-soft: #16301f;
 	--reject: #f08069;
@@ -174,7 +184,7 @@
 	--state-fill: #1b1d22;
 	--state-stroke: #c9c7c1;
 	--edge: #9c9b96;
-	--dead: #6b6e75;
+	--dead: #979aa1;
 	--tok-0: #86abf0;
 	--tok-0-soft: #1d2a45;
 	--tok-1: #5fcca3;
@@ -301,6 +311,12 @@ select,
 textarea {
 	font: inherit;
 	color: inherit;
+}
+
+/* The browsers' own placeholder grays fall short of 4.5:1 in the dark theme. */
+::placeholder {
+	color: var(--text-3);
+	opacity: 1;
 }
 
 :focus-visible {

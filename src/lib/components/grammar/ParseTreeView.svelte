@@ -220,7 +220,7 @@
 		});
 	});
 
-	const color = $derived(tone === undefined ? null : toneColors(tone).fg);
+	const color = $derived(tone === undefined ? null : toneColors(tone).text);
 
 	/** Where the marker stands, by the leaves around it. */
 	const markerText = $derived.by(() => {

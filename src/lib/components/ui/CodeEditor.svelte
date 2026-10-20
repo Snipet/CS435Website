@@ -324,13 +324,14 @@
 		user-select: none;
 		font-variant-numeric: tabular-nums;
 	}
+	/* Mixed toward --text: the plain colors fall short of 4.5:1 on the tinted gutter. */
 	.ln.sev-error {
-		color: var(--reject);
+		color: color-mix(in srgb, var(--reject) 85%, var(--text));
 		background: color-mix(in srgb, var(--reject) 12%, var(--gutter-bg));
 		font-weight: 600;
 	}
 	.ln.sev-warning {
-		color: var(--active);
+		color: color-mix(in srgb, var(--active-text) 85%, var(--text));
 		background: color-mix(in srgb, var(--active) 12%, var(--gutter-bg));
 	}
 	.ln.sev-info {
